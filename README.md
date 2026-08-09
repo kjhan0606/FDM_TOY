@@ -1,0 +1,130 @@
+# FDM SMBH Delay
+
+`fdm-smbh-delay` estimates the unresolved delay between a parsec-scale
+supermassive-black-hole (SMBH) binary and a separation of `0.01 pc` inside a
+fuzzy-dark-matter (FDM) soliton.
+
+It is the delay-model component of the working paper **Pulsar Timing Array in
+Fuzzy Dark Matter Model**, which connects SMBH coalescence delays, cosmological
+event populations, and PTA signals. The manuscript is maintained separately in
+the Overleaf repository recorded in
+[`docs/project_links.md`](docs/project_links.md).
+
+The package is a **parameterized toy model and unresolved inspiral
+prescription**, not a first-principles prediction of physical coalescence.
+Published separation curves provide comparison cases, but the adopted soliton
+profiles still require calibration against the corresponding simulations. In
+particular, a lagRamses sink merger is a resolution-scale numerical event and
+must not be called an SMBH coalescence.
+
+## v0.1 scope
+
+The first model integrates
+
+```text
+1 pc --(static soliton + analytic FDM wave drag)--> 0.01 pc
+```
+
+It does not yet predict the preceding numerical-radius-to-parsec inspiral. A
+Peters gravitational-wave time is available below the FDM interval. The orbit
+calculation returns a crossing time or a censored timeout, an orbital time
+series, energy and momentum transfer, and validity flags.
+
+The scientific design and lagRamses context are preserved in
+[`docs/HANDOFF.md`](docs/HANDOFF.md).
+Repository locations, including the Overleaf paper remote, are recorded in
+[`docs/project_links.md`](docs/project_links.md).
+
+## Install
+
+Python 3.11 or newer is required.
+
+```bash
+python -m pip install -e '.[dev]'
+pytest
+```
+
+The public configuration interface requires explicit units. Bare numeric
+values are rejected for dimensional quantities.
+
+## Run
+
+```bash
+fdm-smbh-delay configs/lagramses_m22_example.yaml --output results/m22_example
+```
+
+or, without installing the console script:
+
+```bash
+python scripts/run_case.py configs/lagramses_m22_example.yaml \
+  --output results/m22_example
+```
+
+The output directory contains:
+
+- `summary.json`: status, delay, energy error, validity flags, and provenance
+- `timeseries.csv`: orbit, energy, angular momentum, density, and drag metrics
+- `config.yaml`: exact input configuration used for the calculation
+
+`timeout` is a valid censored physical result, not a numerical failure.
+The transfer ledger is not yet a live wavefunction update; the coupling and
+double-counting rules are documented in
+[`docs/wave_energy_coupling.md`](docs/wave_energy_coupling.md).
+
+To combine a sink time with all three physical intervals, use:
+
+```bash
+fdm-smbh-compose \
+  --z-sink 1.0 \
+  --fdm-summary results/case/summary.json \
+  --kpc-to-pc-delay "100 Myr" \
+  --gw-delay "3 Myr"
+```
+
+The command returns no `true_merge_time_myr` if an interval is missing,
+invalid, or censored. Missing physics is never interpreted as zero delay.
+
+## Example configuration
+
+```yaml
+model:
+  name: wave_df_3d
+  alpha_df: 0.341
+  drag: true
+  fdm_bulk_velocity: ["0 km/s", "0 km/s", "0 km/s"]
+
+binary:
+  M1: "5.0e7 Msun"
+  M2: "5.0e7 Msun"
+  separation: "1 pc"
+  eccentricity: 0.0
+  orbit: circular
+
+fdm:
+  particle_mass: "1.0e-21 eV"
+  soliton_mass: "1.0e9 Msun"
+  mass_definition: total_profile
+  core_radius: "2 pc"
+  profile: schive_fit
+
+integration:
+  stop_separation: "0.01 pc"
+  max_time: "20 Myr"
+  output_samples: 1000
+  rtol: 1.0e-9
+  atol: 1.0e-12
+```
+
+The example core radius is a schema demonstration, not a validated literature
+fiducial value. Published comparisons require matching each paper's soliton
+mass and core-radius definitions.
+
+## Development status
+
+The repository currently implements the static-soliton three-dimensional orbit
+calculation, FDM energy and momentum transfer, Peters gravitational-wave
+times, conservative composition of the physical coalescence time, and a source
+study of the lagRamses sink-merger conditions. Koo and Boey separation curves
+are included as comparison cases. Calibration against their simulated density
+histories, the numerical-radius-to-parsec inspiral, an evolving FDM
+wavefunction, and the cosmological PTA population remain future work.

@@ -1,0 +1,28 @@
+metadata:
+  purpose: literature_trend_benchmark
+  source: "Koo et al. 2024, arXiv:2311.03412"
+  validated_profile_definition: false
+  warning: "Core radius is illustrative until the paper's mass definition is matched."
+model:
+  name: wave_df_3d
+  alpha_df: 0.424
+  drag: true
+  fdm_bulk_velocity: ["0 km/s", "0 km/s", "0 km/s"]
+binary:
+  M1: "1.0e8 Msun"
+  M2: "1.0e8 Msun"
+  separation: "0.8 pc"
+  eccentricity: 0.0
+  orbit: circular
+fdm:
+  particle_mass: "1.0e-21 eV"
+  soliton_mass: "1.0e9 Msun"
+  mass_definition: total_profile
+  core_radius: "2 pc"
+  profile: schive_fit
+integration:
+  stop_separation: "0.076 pc"
+  max_time: "20 Myr"
+  output_samples: 500
+  rtol: 1.0e-9
+  atol: 1.0e-12

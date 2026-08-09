@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fdm-smbh-delay"
+version = "0.1.0"
+description = "Calibrated toy model for unresolved SMBH pairing delays in FDM solitons"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{name = "K. J. Han"}]
+dependencies = [
+  "astropy>=6",
+  "numpy>=1.26",
+  "PyYAML>=6",
+  "scipy>=1.11",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+fdm-smbh-delay = "fdm_smbh_delay.cli:main"
+fdm-smbh-compose = "fdm_smbh_delay.true_time_cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
