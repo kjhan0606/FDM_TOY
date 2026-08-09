@@ -13,6 +13,7 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
+import matplotlib.patheffects as path_effects
 import numpy as np
 from astropy.cosmology import FlatLambdaCDM
 from matplotlib.lines import Line2D
@@ -66,6 +67,23 @@ DELAY_COLORS = (BLUE, VERMILLION, GREEN, PURPLE, ORANGE)
 DELAY_MARKERS = ("o", "s", "D", "^", "v")
 
 
+def _panel_label(axis: plt.Axes, label: str, x: float = 0.97) -> None:
+    text = axis.text(
+        x,
+        0.95,
+        label,
+        transform=axis.transAxes,
+        ha="right" if x > 0.5 else "left",
+        va="top",
+        color="black",
+        fontweight="bold",
+        zorder=20,
+    )
+    text.set_path_effects(
+        [path_effects.withStroke(linewidth=1.6, foreground="white")]
+    )
+
+
 def _style() -> None:
     plt.rcParams.update(
         {
@@ -76,7 +94,8 @@ def _style() -> None:
             "axes.labelsize": 10.0,
             "xtick.labelsize": 10.0,
             "ytick.labelsize": 10.0,
-            "legend.fontsize": 10.0,
+            "legend.fontsize": 8.0,
+            "legend.title_fontsize": 8.0,
             "xtick.direction": "in",
             "ytick.direction": "in",
             "xtick.top": True,
@@ -769,7 +788,7 @@ def _plot_figure_6(
     axis.set_xscale("log")
     axis.set_yscale("log")
     axis.set_xlim(0.18, 10.5)
-    axis.set_ylim(3.0e-16, 5.0e-11)
+    axis.set_ylim(1.0e-17, 5.0e-11)
     axis.set_xlabel("reference-event redshift")
     axis.set_ylabel(r"$\Phi$ [cMpc$^{-3}$ yr$^{-1}$]")
     axis.legend(
@@ -792,7 +811,7 @@ def _plot_rate_grid(
 ) -> None:
     figure, axes = plt.subplots(4, 1, figsize=(3.35, 5.35), sharex=True, gridspec_kw={"hspace": 0.04})
     fit_redshift = np.geomspace(0.16, 10.5, 500)
-    for axis, delay in zip(axes, delays):
+    for panel_number, (axis, delay) in enumerate(zip(axes, delays)):
         for threshold, color, marker, line_style in zip(
             (1.0e4, 1.0e5, 1.0e6),
             THRESHOLD_COLORS,
@@ -837,7 +856,13 @@ def _plot_rate_grid(
                     ls=line_style,
                     lw=1.0,
                 )
-        axis.text(0.08, 0.83, rf"$\Delta t_{{\rm ref}}={delay:g}\,$Gyr", transform=axis.transAxes)
+        axis.text(
+            0.08,
+            0.83,
+            rf"({chr(97 + panel_number)}) $\Delta t_{{\rm ref}}={delay:g}\,$Gyr",
+            transform=axis.transAxes,
+            fontweight="bold",
+        )
         axis.set_xscale("log")
         axis.set_yscale("log")
         axis.set_xlim(0.18, 10.5)
@@ -931,10 +956,14 @@ def _plot_fit_parameters(
     axes[0].set_ylabel(r"$\alpha$")
     axes[0].set_ylim(-8.0, 4.5)
     axes[1].set_ylabel(r"$z_*$")
+    axes[1].set_ylim(0.0, 4.5)
     axes[2].set_ylabel(r"$\beta$")
+    axes[2].set_ylim(0.0, 9.0)
     axes[3].set_ylabel(r"$\phi_*$")
     axes[3].set_yscale("log")
     axes[3].set_ylim(1.0e-15, 5.0e-11)
+    for axis, panel_label in zip(axes, ("(a)", "(b)", "(c)", "(d)")):
+        _panel_label(axis, panel_label, x=0.03)
     for axis in axes:
         axis.set_xscale("log")
         axis.set_xlim(8.0e3, 1.2e8)
@@ -1009,7 +1038,7 @@ def _plot_cumulative_grid(
     thresholds = (1.0e4, 1.0e5, 1.0e6, 1.0e7)
     colors = (BLUE, VERMILLION, GREEN, PURPLE)
     line_styles = ("-", "--", "-.", ":")
-    for axis, delay in zip(axes, delays):
+    for panel_number, (axis, delay) in enumerate(zip(axes, delays)):
         for threshold, color, line_style in zip(thresholds, colors, line_styles):
             fit = statistics[delay][threshold]["fit"]
             if not fit.success:
@@ -1025,7 +1054,13 @@ def _plot_cumulative_grid(
                 solid_angle_sr=4.0 * np.pi,
             )
             axis.plot(redshift, cumulative, color=color, ls=line_style, lw=1.0)
-        axis.text(0.08, 0.82, rf"$\Delta t_{{\rm ref}}={delay:g}\,$Gyr", transform=axis.transAxes)
+        axis.text(
+            0.08,
+            0.82,
+            rf"({chr(97 + panel_number)}) $\Delta t_{{\rm ref}}={delay:g}\,$Gyr",
+            transform=axis.transAxes,
+            fontweight="bold",
+        )
         axis.set_xscale("log")
         axis.set_yscale("log")
         axis.set_xlim(0.18, 10.0)

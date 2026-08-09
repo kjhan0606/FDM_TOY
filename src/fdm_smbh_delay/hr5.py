@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+from astropy import units as u
+from astropy.constants import G, M_sun, c
 from astropy.cosmology import FlatLambdaCDM
 from scipy.integrate import cumulative_trapezoid
 from scipy.optimize import least_squares
@@ -473,6 +475,45 @@ def cumulative_active_sources(
     shell_cmpc3_per_z = solid_angle_sr * distance**2 * speed_of_light_kms / hubble
     integrand = rate * (residence_time_yr / 1.0e9) * shell_cmpc3_per_z
     return np.r_[0.0, cumulative_trapezoid(integrand, z)]
+
+
+def circular_gw_background_contributions(
+    chirp_mass_msun: np.ndarray,
+    redshift: np.ndarray,
+    volume_cmpc3: float,
+    observed_frequency_hz: float,
+) -> np.ndarray:
+    r"""Return each event's contribution to :math:`h_c^2(f)`.
+
+    The expression applies the discrete form of the Phinney theorem to a
+    circular population whose frequency evolution is driven only by
+    gravitational radiation.  The input events must represent one comoving
+    volume over the sampled cosmic history.
+    """
+
+    mass = np.asarray(chirp_mass_msun, dtype=np.float64)
+    event_redshift = np.asarray(redshift, dtype=np.float64)
+    if mass.shape != event_redshift.shape:
+        raise ValueError("chirp_mass_msun and redshift must have matching shapes")
+    if np.any(~np.isfinite(mass)) or np.any(mass <= 0.0):
+        raise ValueError("chirp masses must be finite and positive")
+    if np.any(~np.isfinite(event_redshift)) or np.any(event_redshift < 0.0):
+        raise ValueError("redshifts must be finite and non-negative")
+    if not np.isfinite(volume_cmpc3) or volume_cmpc3 <= 0.0:
+        raise ValueError("volume_cmpc3 must be finite and positive")
+    if not np.isfinite(observed_frequency_hz) or observed_frequency_hz <= 0.0:
+        raise ValueError("observed_frequency_hz must be finite and positive")
+
+    mass_kg = mass * M_sun.value
+    volume_m3 = volume_cmpc3 * u.Mpc.to(u.m) ** 3
+    coefficient = (
+        4.0
+        * G.value ** (5.0 / 3.0)
+        / (3.0 * np.pi ** (1.0 / 3.0) * c.value**2)
+        * observed_frequency_hz ** (-4.0 / 3.0)
+        / volume_m3
+    )
+    return coefficient * mass_kg ** (5.0 / 3.0) / (1.0 + event_redshift) ** (1.0 / 3.0)
 
 
 def histogram_quantiles(

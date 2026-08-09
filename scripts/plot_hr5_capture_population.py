@@ -12,12 +12,30 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
+import matplotlib.patheffects as path_effects
 import numpy as np
 from matplotlib.colors import LogNorm
 
 
 COLORS = ("#000000", "#0072B2", "#D55E00", "#009E73")
 LINE_STYLES = ("-", "--", "-.", ":")
+
+
+def _panel_label(axis: plt.Axes, label: str) -> None:
+    text = axis.text(
+        0.97,
+        0.95,
+        label,
+        transform=axis.transAxes,
+        ha="right",
+        va="top",
+        color="black",
+        fontweight="bold",
+        zorder=20,
+    )
+    text.set_path_effects(
+        [path_effects.withStroke(linewidth=1.6, foreground="white")]
+    )
 
 
 def _read_history(path: Path) -> dict[str, np.ndarray]:
@@ -81,7 +99,8 @@ def make_figure(
             "axes.labelsize": 10.0,
             "xtick.labelsize": 10.0,
             "ytick.labelsize": 10.0,
-            "legend.fontsize": 10.0,
+            "legend.fontsize": 8.0,
+            "legend.title_fontsize": 8.0,
             "xtick.direction": "in",
             "ytick.direction": "in",
             "xtick.top": True,
@@ -114,7 +133,7 @@ def make_figure(
         )
     axes[0].set_yscale("log")
     axes[0].set_xlim(*coordinate_limits)
-    axes[0].set_ylim(1.0e-6, 1.0e-1)
+    axes[0].set_ylim(1.0e-6, 3.0e-1)
     axes[0].set_xlabel(r"$\log_{10}(1+z_{\rm cap})$")
     axes[0].set_ylabel(r"$\mathcal{R}_\mathrm{cap}$ [cMpc$^{-3}$ Gyr$^{-1}$]")
     axes[0].legend(
@@ -127,15 +146,7 @@ def make_figure(
         ncol=2,
         loc="upper left",
     )
-    axes[0].text(
-        0.97,
-        0.95,
-        "(a)",
-        transform=axes[0].transAxes,
-        ha="right",
-        va="top",
-        fontweight="bold",
-    )
+    _panel_label(axes[0], "(a)")
 
     redshift_coordinate_edges = np.linspace(
         np.log10(1.0 + 0.6), np.log10(1.0 + 10.0), 48
@@ -161,7 +172,7 @@ def make_figure(
     axes[1].set_ylim(3.8, 9.8)
     axes[1].set_xlabel(r"$\log_{10}(1+z_{\rm cap})$")
     axes[1].set_ylabel(r"$\log_{10}(\mathcal{M}_\mathrm{c}/M_\odot)$")
-    axes[1].text(0.03, 0.95, "(b)", transform=axes[1].transAxes, va="top", color="white", fontweight="bold")
+    _panel_label(axes[1], "(b)")
     colorbar = figure.colorbar(mesh, ax=axes[1], pad=0.02, fraction=0.05)
     colorbar.set_label(r"$N$", fontsize=10, labelpad=2)
     colorbar.ax.tick_params(labelsize=10)

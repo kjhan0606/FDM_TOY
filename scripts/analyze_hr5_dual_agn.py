@@ -13,6 +13,7 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
+import matplotlib.patheffects as path_effects
 import numpy as np
 from matplotlib.colors import LogNorm
 from matplotlib.lines import Line2D
@@ -26,6 +27,23 @@ DEFAULT_AGN_DIRECTORY = Path(
 )
 COLORS = ("#D55E00", "#0072B2", "#009E73")
 MARKERS = ("o", "s", "D")
+
+
+def _panel_label(axis: plt.Axes, label: str) -> None:
+    text = axis.text(
+        0.97,
+        0.95,
+        label,
+        transform=axis.transAxes,
+        ha="right",
+        va="top",
+        color="black",
+        fontweight="bold",
+        zorder=20,
+    )
+    text.set_path_effects(
+        [path_effects.withStroke(linewidth=1.6, foreground="white")]
+    )
 
 
 def _read_history(path: Path) -> dict[str, np.ndarray]:
@@ -128,7 +146,8 @@ def _plot(
             "axes.labelsize": 10.0,
             "xtick.labelsize": 10.0,
             "ytick.labelsize": 10.0,
-            "legend.fontsize": 10.0,
+            "legend.fontsize": 8.0,
+            "legend.title_fontsize": 8.0,
             "xtick.direction": "in",
             "ytick.direction": "in",
             "xtick.top": True,
@@ -212,15 +231,7 @@ def _plot(
         handletextpad=0.3,
         borderaxespad=0.3,
     )
-    axes[0].text(
-        0.96,
-        0.96,
-        "(a)",
-        transform=axes[0].transAxes,
-        ha="right",
-        va="top",
-        fontweight="bold",
-    )
+    _panel_label(axes[0], "(a)")
 
     for (output_number, threshold_data), color, marker in zip(pair_sets.items(), COLORS, MARKERS):
         pair = threshold_data[1.0e43]
@@ -258,7 +269,7 @@ def _plot(
     axes[1].set_ylim(0.0, 1.05)
     axes[1].set_xlabel(r"$r_{\rm 3D}$ [pkpc]")
     axes[1].set_ylabel(r"$P(\Delta t_{\rm cap,upper}\leq1\,{\rm Gyr}\mid r)$")
-    axes[1].text(0.04, 0.06, "(b)", transform=axes[1].transAxes, va="bottom", fontweight="bold")
+    _panel_label(axes[1], "(b)")
 
     earliest_output = min(pair_sets)
     pair = pair_sets[earliest_output][1.0e43]
@@ -281,7 +292,7 @@ def _plot(
     axes[2].set_ylim(-4.0, 0.5)
     axes[2].set_xlabel(r"$\log_{10}\lambda_{\rm Edd,1}$")
     axes[2].set_ylabel(r"$\log_{10}\lambda_{\rm Edd,2}$")
-    axes[2].text(0.04, 0.96, "(c)", transform=axes[2].transAxes, va="top", color="white", fontweight="bold")
+    _panel_label(axes[2], "(c)")
     colorbar = figure.colorbar(mesh, ax=axes[2], pad=0.02, fraction=0.05)
     colorbar.set_label(r"$p(\log\lambda_1,\log\lambda_2)$", fontsize=10)
     colorbar.ax.tick_params(labelsize=10)

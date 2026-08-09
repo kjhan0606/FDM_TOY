@@ -9,6 +9,7 @@ from fdm_smbh_delay.hr5 import (
     binned_source_rate,
     bootstrap_binned_source_rate,
     bootstrap_redshift_rate,
+    circular_gw_background_contributions,
     cumulative_active_sources,
     delayed_redshift,
     fit_redshift_rate,
@@ -93,6 +94,35 @@ def test_source_rate_and_active_count_are_positive(cosmology: FlatLambdaCDM) -> 
     cumulative = cumulative_active_sources(z, np.full_like(z, 1.0e-12), 1.0e4, cosmology)
     assert cumulative[0] == 0.0
     assert np.all(np.diff(cumulative) >= 0.0)
+
+
+def test_circular_gw_background_contribution_scaling() -> None:
+    mass = np.array([1.0e8, 2.0e8])
+    redshift = np.array([1.0, 1.0])
+    reference_frequency = 1.0 / (365.25 * 86400.0)
+    contribution = circular_gw_background_contributions(
+        mass,
+        redshift,
+        volume_cmpc3=1.0e6,
+        observed_frequency_hz=reference_frequency,
+    )
+    assert np.all(contribution > 0.0)
+    assert contribution[1] / contribution[0] == pytest.approx(2.0 ** (5.0 / 3.0))
+
+    lower_frequency = circular_gw_background_contributions(
+        mass[:1],
+        redshift[:1],
+        volume_cmpc3=1.0e6,
+        observed_frequency_hz=reference_frequency / 2.0,
+    )
+    assert lower_frequency[0] / contribution[0] == pytest.approx(2.0 ** (4.0 / 3.0))
+
+
+def test_circular_gw_background_rejects_nonphysical_inputs() -> None:
+    with pytest.raises(ValueError, match="positive"):
+        circular_gw_background_contributions(
+            np.array([0.0]), np.array([1.0]), 1.0e6, 1.0e-8
+        )
 
 
 def test_histogram_quantiles() -> None:
