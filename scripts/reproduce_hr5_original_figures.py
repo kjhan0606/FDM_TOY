@@ -22,6 +22,7 @@ from fdm_smbh_delay.hr5 import (
     HEADER_DTYPE,
     SINK_DTYPE,
     binned_source_rate,
+    bootstrap_redshift_rate,
     cumulative_active_sources,
     delayed_redshift,
     fit_redshift_rate,
@@ -614,6 +615,8 @@ def _fixed_delay_statistics(
     events: dict[str, np.ndarray],
     cosmology: FlatLambdaCDM,
     volume_cmpc3: float,
+    fit_bootstrap_realizations: int,
+    rng: np.random.Generator,
 ) -> tuple[np.ndarray, np.ndarray, dict[float, dict[float, dict[str, object]]]]:
     output_to_index = {
         int(output): int(index) for index, output in enumerate(history["output_number"])
@@ -625,6 +628,8 @@ def _fixed_delay_statistics(
     valid_mass = np.isfinite(events["chirp_mass"]) & (events["chirp_mass"] > 0.0)
     redshift_edges = np.geomspace(0.18, 10.5, 19)
     redshift_center = np.sqrt(redshift_edges[:-1] * redshift_edges[1:])
+    age = np.asarray(cosmology.age(redshift_edges).value)
+    exposure_cmpc3_gyr = volume_cmpc3 * (age[:-1] - age[1:])
     delays = (0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.8, 1.0, 2.0, 3.0, 4.0)
     thresholds = (1.0e4, 1.0e5, 1.0e6, 1.0e7, 1.0e8)
     statistics: dict[float, dict[float, dict[str, object]]] = {}
@@ -637,11 +642,27 @@ def _fixed_delay_statistics(
                 event_redshift[selected], redshift_edges, volume_cmpc3, cosmology
             )
             fit = fit_redshift_rate(redshift_center, rate, count)
+            fit_bootstrap_samples = bootstrap_redshift_rate(
+                redshift_center,
+                count,
+                exposure_cmpc3_gyr,
+                fit_bootstrap_realizations,
+                rng,
+            )
+            if fit_bootstrap_samples.size:
+                fit_bootstrap_quantiles = np.quantile(
+                    fit_bootstrap_samples, (0.16, 0.5, 0.84), axis=0
+                )
+            else:
+                fit_bootstrap_quantiles = np.full((3, 4), np.nan)
             statistics[delay][threshold] = {
                 "count": count,
                 "rate": rate,
                 "error": error,
                 "fit": fit,
+                "fit_bootstrap_quantiles": fit_bootstrap_quantiles,
+                "fit_bootstrap_success_count": int(fit_bootstrap_samples.shape[0]),
+                "fit_bootstrap_realization_count": fit_bootstrap_realizations,
                 "n_event": int(np.count_nonzero(selected)),
                 "n_censored": int(np.count_nonzero(valid_mass & censored & (events["chirp_mass"] >= threshold))),
             }
@@ -754,18 +775,46 @@ def _plot_fit_parameters(
     line_styles = ("-", ":", "--", "-.", (0, (5, 2, 1, 2)))
     for delay, line_style in zip(delays, line_styles):
         fits = [statistics[delay][threshold]["fit"] for threshold in thresholds]
-        alpha = np.array([fit.alpha for fit in fits])
-        z_star = np.array([fit.z_star for fit in fits])
-        beta = np.array([fit.beta for fit in fits])
-        phi_star = np.array([fit.phi_star for fit in fits]) / 1.0e9
-        for axis, values in zip(axes, (alpha, z_star, beta, phi_star)):
+        direct_parameters = np.asarray(
+            [[fit.phi_star, fit.z_star, fit.alpha, fit.beta] for fit in fits]
+        )
+        quantiles = np.stack(
+            [
+                np.asarray(statistics[delay][threshold]["fit_bootstrap_quantiles"])
+                for threshold in thresholds
+            ]
+        )
+        parameter_indices = (2, 1, 3, 0)
+        for axis, parameter_index in zip(axes, parameter_indices):
+            scale = 1.0e9 if parameter_index == 0 else 1.0
+            direct = direct_parameters[:, parameter_index] / scale
+            lower, center, upper = (
+                quantiles[:, quantile_index, parameter_index] / scale
+                for quantile_index in range(3)
+            )
             axis.plot(
                 thresholds,
-                values,
+                direct,
                 color="0.2",
                 lw=0.9,
                 ls=line_style,
                 label=rf"$\Delta t_{{\rm ref}}={delay:g}\,$Gyr",
+            )
+            axis.errorbar(
+                thresholds,
+                center,
+                yerr=np.vstack((center - lower, upper - center)),
+                fmt="o",
+                ms=2.3,
+                mfc="white",
+                mec="0.2",
+                mew=0.55,
+                color="0.2",
+                ecolor="0.35",
+                elinewidth=0.55,
+                capsize=1.4,
+                capthick=0.55,
+                ls="none",
             )
     axes[0].set_ylabel(r"$\alpha$")
     axes[1].set_ylabel(r"$z_*$")
@@ -775,6 +824,7 @@ def _plot_fit_parameters(
     for axis in axes:
         axis.set_xscale("log")
         axis.set_xlim(8.0e3, 1.2e8)
+        axis.margins(y=0.08)
     axes[-1].set_xlabel(r"chirp-mass threshold $\mathcal{M}_{\rm c}$ [$M_\odot$]")
     axes[-1].legend(frameon=False, fontsize=5.0, loc="lower left")
     _save(figure, output, title)
@@ -1015,8 +1065,22 @@ def _write_fit_table(
                 "z_star",
                 "alpha",
                 "beta",
+                "phi_star_q16_cmpc3_gyr",
+                "phi_star_q50_cmpc3_gyr",
+                "phi_star_q84_cmpc3_gyr",
+                "z_star_q16",
+                "z_star_q50",
+                "z_star_q84",
+                "alpha_q16",
+                "alpha_q50",
+                "alpha_q84",
+                "beta_q16",
+                "beta_q50",
+                "beta_q84",
                 "fit_success",
                 "fit_bin_count",
+                "fit_bootstrap_success_count",
+                "fit_bootstrap_realization_count",
                 "event_count",
                 "future_censored_count",
             )
@@ -1024,6 +1088,7 @@ def _write_fit_table(
         for delay, threshold_data in statistics.items():
             for threshold, data in threshold_data.items():
                 fit = data["fit"]
+                quantiles = np.asarray(data["fit_bootstrap_quantiles"])
                 writer.writerow(
                     (
                         delay,
@@ -1032,8 +1097,22 @@ def _write_fit_table(
                         fit.z_star,
                         fit.alpha,
                         fit.beta,
+                        quantiles[0, 0],
+                        quantiles[1, 0],
+                        quantiles[2, 0],
+                        quantiles[0, 1],
+                        quantiles[1, 1],
+                        quantiles[2, 1],
+                        quantiles[0, 2],
+                        quantiles[1, 2],
+                        quantiles[2, 2],
+                        quantiles[0, 3],
+                        quantiles[1, 3],
+                        quantiles[2, 3],
                         fit.success,
                         fit.n_bin,
+                        data["fit_bootstrap_success_count"],
+                        data["fit_bootstrap_realization_count"],
                         data["n_event"],
                         data["n_censored"],
                     )
@@ -1050,6 +1129,7 @@ def reproduce(
     chunk_records: int,
     rebuild_cache: bool,
     seed: int,
+    fit_bootstrap_realizations: int,
 ) -> None:
     _style()
     history = _read_history(history_path)
@@ -1074,7 +1154,12 @@ def reproduce(
         snapshot_mass, snapshot_indices, history, events
     )
     redshift_edges, redshift_center, delay_statistics = _fixed_delay_statistics(
-        history, events, cosmology, volume_cmpc3
+        history,
+        events,
+        cosmology,
+        volume_cmpc3,
+        fit_bootstrap_realizations,
+        np.random.default_rng(seed + 10000),
     )
 
     _plot_figure_1(history, output_dir / "hr5_fig01_seed_birth_rate.pdf", volume_cmpc3)
@@ -1161,7 +1246,13 @@ def reproduce(
         "history": str(history_path),
         "catalog": str(catalog_path),
         "volume_cmpc3": volume_cmpc3,
-        "bootstrap_realizations": 100,
+        "mass_function_bootstrap_realizations": 100,
+        "fit_parameter_bootstrap": {
+            "method": "independent Poisson resampling of redshift-bin counts",
+            "realizations": fit_bootstrap_realizations,
+            "central_interval": [0.16, 0.84],
+            "seed": seed + 10000,
+        },
         "history_sampling_fraction": 0.02,
         "fixed_reference_delay_gyr": list(delay_statistics),
         "chirp_mass_threshold_msun": list(next(iter(delay_statistics.values()))),
@@ -1188,6 +1279,7 @@ def main() -> None:
     parser.add_argument("--volume-cmpc3", type=float, default=VOLUME_CMPC3)
     parser.add_argument("--chunk-records", type=int, default=2048)
     parser.add_argument("--seed", type=int, default=20260809)
+    parser.add_argument("--fit-bootstrap-realizations", type=int, default=200)
     parser.add_argument("--rebuild-cache", action="store_true")
     args = parser.parse_args()
     reproduce(
@@ -1200,6 +1292,7 @@ def main() -> None:
         args.chunk_records,
         args.rebuild_cache,
         args.seed,
+        args.fit_bootstrap_realizations,
     )
 
 

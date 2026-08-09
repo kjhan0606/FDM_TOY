@@ -79,6 +79,14 @@ retains that legacy normalization for comparison, but it is not used in the new
 PTA source counts. Counts for another solid angle follow
 `N(Omega)=N_all-sky Omega/(4 pi)`.
 
+Figures 10 and 11 show count-statistical uncertainties in the fitted redshift
+distribution. Each redshift-bin count is independently resampled from a
+Poisson distribution 200 times. The four distribution parameters are refitted
+for every realization. Symbols mark the bootstrap medians, and error bars span
+the 16th through 84th percentiles. The calculation does not include cosmic
+variance, output-time uncertainty, or ambiguity in the reconstructed capture
+receiver.
+
 ## Dual AGN selection and measurements
 
 The dual AGN sample uses the MkAGN snapshots at outputs 89, 117, and 296. Both

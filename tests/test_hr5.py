@@ -7,6 +7,7 @@ from astropy.cosmology import FlatLambdaCDM
 from fdm_smbh_delay.hr5 import (
     MKAGN_DTYPE,
     binned_source_rate,
+    bootstrap_redshift_rate,
     cumulative_active_sources,
     delayed_redshift,
     fit_redshift_rate,
@@ -33,6 +34,25 @@ def test_redshift_rate_fit_recovers_synthetic_curve() -> None:
     assert fit.z_star == pytest.approx(expected[1], rel=2.0e-4)
     assert fit.alpha == pytest.approx(expected[2], rel=2.0e-4)
     assert fit.beta == pytest.approx(expected[3], rel=2.0e-4)
+
+
+def test_redshift_rate_bootstrap_is_reproducible_and_ordered() -> None:
+    redshift = np.geomspace(0.2, 8.0, 24)
+    expected = (2.0e-7, 2.3, 1.0, 4.2)
+    exposure = np.full(redshift.size, 1.0e9)
+    count = np.rint(redshift_rate_model(redshift, *expected) * exposure).astype(int)
+    first = bootstrap_redshift_rate(
+        redshift, count, exposure, 40, np.random.default_rng(1729)
+    )
+    second = bootstrap_redshift_rate(
+        redshift, count, exposure, 40, np.random.default_rng(1729)
+    )
+    assert first.shape == (40, 4)
+    assert np.array_equal(first, second)
+    quantiles = np.quantile(first, (0.16, 0.5, 0.84), axis=0)
+    assert np.all(quantiles[0] <= quantiles[1])
+    assert np.all(quantiles[1] <= quantiles[2])
+    assert quantiles[1, 0] == pytest.approx(expected[0], rel=0.08)
 
 
 def test_fixed_delay_moves_events_to_lower_redshift(cosmology: FlatLambdaCDM) -> None:

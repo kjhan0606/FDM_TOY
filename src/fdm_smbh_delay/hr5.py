@@ -349,6 +349,43 @@ def fit_redshift_rate(
     )
 
 
+def bootstrap_redshift_rate(
+    redshift: np.ndarray,
+    count: np.ndarray,
+    exposure_cmpc3_gyr: np.ndarray,
+    realizations: int,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Refit the redshift-rate model after Poisson resampling bin counts.
+
+    Successful rows contain ``phi_star``, ``z_star``, ``alpha``, and ``beta``
+    in that order. Failed fits are omitted from the returned array.
+    """
+
+    z = np.asarray(redshift, dtype=np.float64)
+    observed_count = np.asarray(count, dtype=np.int64)
+    exposure = np.asarray(exposure_cmpc3_gyr, dtype=np.float64)
+    if z.shape != observed_count.shape or z.shape != exposure.shape:
+        raise ValueError("redshift, count, and exposure must have matching shapes")
+    if np.any(observed_count < 0):
+        raise ValueError("count must be non-negative")
+    if np.any(~np.isfinite(exposure)) or np.any(exposure <= 0.0):
+        raise ValueError("exposure must be finite and positive")
+    if realizations < 1:
+        raise ValueError("realizations must be positive")
+
+    samples: list[tuple[float, float, float, float]] = []
+    for _ in range(realizations):
+        resampled_count = rng.poisson(observed_count)
+        fit = fit_redshift_rate(z, resampled_count / exposure, resampled_count)
+        parameters = (fit.phi_star, fit.z_star, fit.alpha, fit.beta)
+        if fit.success and np.all(np.isfinite(parameters)):
+            samples.append(parameters)
+    if not samples:
+        return np.empty((0, 4), dtype=np.float64)
+    return np.asarray(samples, dtype=np.float64)
+
+
 def delayed_redshift(
     capture_time_gyr: np.ndarray,
     delay_gyr: float,
