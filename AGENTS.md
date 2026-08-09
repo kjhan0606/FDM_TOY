@@ -2,6 +2,10 @@
 
 - Before writing or editing paper prose, read `/home/kjhan/WRITING.md` in full
   and apply every rule in that document.
+- For the next manuscript revision, vary sentence length to maintain rhythm and
+  choose verbs that state each physical process and inference unambiguously.
+  This is a future prose-revision note and does not call for a manuscript rewrite
+  during HR5 data regeneration.
 - The working paper title is `Pulsar Timing Array in Fuzzy Dark Matter Model`.
 - Paper prose must use astronomy, cosmology, gravitational-wave physics, and
   numerical-physics terminology. Do not use computer-science metaphors or

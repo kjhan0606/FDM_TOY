@@ -128,3 +128,29 @@ study of the lagRamses sink-merger conditions. Koo and Boey separation curves
 are included as comparison cases. Calibration against their simulated density
 histories, the numerical-radius-to-parsec inspiral, an evolving FDM
 wavefunction, and the cosmological PTA population remain future work.
+
+## Horizon Run 5 comparison sample
+
+The legacy HR5 sink tree can be regenerated as an explicit interval catalog.
+The two output boundaries are retained because a disappearing sink is last
+resolved at output `i-1`, whereas its receiver is selected from the surviving
+population at output `i`.
+
+```bash
+python scripts/extract_hr5_capture_catalog.py \
+  '/home/kjhan/BACKUP/GalFinder/SRC(FoF_PSB_Free_Ver2_Dev)/SRC(AGN)/BinarySMBH/Sink_Merging_Tree.dat.Updated'
+
+python scripts/reproduce_hr5_original_figures.py --rebuild-cache
+python scripts/analyze_hr5_dual_agn.py
+```
+
+The first command produces 576,278 numerical-capture intervals from 1,688,677
+sink histories. The second command redraws Figures 1--13 of the earlier HR5
+draft from those data and writes numerical validation checks. The third command
+measures the dual AGN separation probability density, joint Eddington-ratio
+distribution, and subsequent direct sink-capture fraction.
+
+These are numerical sink captures. They are not physical SMBH coalescences.
+The event definitions, legacy light-cone normalization, dual AGN selection, and
+literature comparison are documented in
+[`docs/hr5_reproduction.md`](docs/hr5_reproduction.md).

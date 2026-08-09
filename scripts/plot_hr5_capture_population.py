@@ -31,11 +31,22 @@ def _read_history(path: Path) -> dict[str, np.ndarray]:
 
 
 def _read_events(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    with path.open(encoding="utf-8") as stream:
+        header = next(csv.reader(stream))
+    requested = (
+        "assigned_capture_output",
+        "assigned_capture_redshift",
+        "mass_ratio_last_resolved",
+        "chirp_mass_last_resolved_msun",
+    )
+    missing = sorted(set(requested) - set(header))
+    if missing:
+        raise ValueError(f"The HR5 capture catalog is missing columns: {missing}")
     data = np.loadtxt(
         path,
         delimiter=",",
         skiprows=1,
-        usecols=(2, 3, 6, 7),
+        usecols=tuple(header.index(name) for name in requested),
         dtype=np.float64,
     )
     return data[:, 0].astype(np.int64), data[:, 1], data[:, 2], data[:, 3]

@@ -11,44 +11,11 @@ from pathlib import Path
 import numpy as np
 from astropy.cosmology import FlatLambdaCDM
 
-
-NSTEP_MAX = 296
-HEADER_DTYPE = np.dtype(
-    [
-        ("redshift", "<f4", (NSTEP_MAX,)),
-        ("output_number", "<f4", (NSTEP_MAX,)),
-        ("omega_m", "<f4"),
-        ("omega_lambda", "<f4"),
-        ("h0", "<f4"),
-        ("nstep", "<i4"),
-        ("nsink", "<i4"),
-        ("legacy_pointer", "<u8"),
-    ],
-    align=True,
-)
-SINK_DTYPE = np.dtype(
-    [
-        ("sink_id", "<i4"),
-        ("state", "<f4", (NSTEP_MAX, 7)),
-        ("receiver_id", "<i4"),
-        ("capture_index", "<i4"),
-    ],
-    align=True,
-)
+from fdm_smbh_delay.hr5 import HEADER_DTYPE, SINK_DTYPE, read_tree_header
 
 
 def _read_header(path: Path) -> np.void:
-    header = np.fromfile(path, dtype=HEADER_DTYPE, count=1)
-    if header.size != 1:
-        raise ValueError(f"Could not read the HR5 header from {path}")
-    result = header[0]
-    expected_size = HEADER_DTYPE.itemsize + int(result["nsink"]) * SINK_DTYPE.itemsize
-    if path.stat().st_size != expected_size:
-        raise ValueError(
-            f"Unexpected file size for {path}. Expected {expected_size} bytes and found "
-            f"{path.stat().st_size} bytes."
-        )
-    return result
+    return read_tree_header(path)
 
 
 def _collect_sink_statistics(
@@ -121,7 +88,7 @@ def _read_receiver_masses(
     path: Path,
     header: np.void,
     receiver_id: np.ndarray,
-    capture_index: np.ndarray,
+    state_index: np.ndarray,
 ) -> np.ndarray:
     nsink = int(header["nsink"])
     receiver_index = receiver_id.astype(np.int64) - 1
@@ -142,7 +109,7 @@ def _read_receiver_masses(
             if receiver.size != 1:
                 raise ValueError(f"Could not read receiver sink record {sink_index + 1}")
             event_rows = order[begin:end]
-            steps = capture_index[event_rows].astype(np.int64) - 1
+            steps = state_index[event_rows].astype(np.int64)
             masses[event_rows] = receiver["state"][0, steps, 0]
             if group_number and group_number % 50000 == 0:
                 print(f"Read {group_number:,} distinct receiver histories", flush=True)
@@ -153,18 +120,26 @@ def _write_catalog(path: Path, events: dict[str, np.ndarray]) -> None:
     columns = (
         "sink_id",
         "receiver_id",
-        "capture_output",
-        "redshift",
-        "minor_mass_msun",
-        "major_mass_msun",
-        "mass_ratio",
-        "chirp_mass_msun",
-        "x_cmpc",
-        "y_cmpc",
-        "z_cmpc",
-        "vx_kms",
-        "vy_kms",
-        "vz_kms",
+        "last_resolved_history_index",
+        "assigned_capture_history_index",
+        "last_resolved_output",
+        "assigned_capture_output",
+        "last_resolved_redshift",
+        "assigned_capture_redshift",
+        "last_resolved_cosmic_time_gyr",
+        "assigned_capture_cosmic_time_gyr",
+        "capture_interval_gyr",
+        "minor_mass_last_resolved_msun",
+        "receiver_mass_last_resolved_msun",
+        "receiver_mass_assigned_output_msun",
+        "mass_ratio_last_resolved",
+        "chirp_mass_last_resolved_msun",
+        "minor_x_last_resolved_cmpc",
+        "minor_y_last_resolved_cmpc",
+        "minor_z_last_resolved_cmpc",
+        "minor_vx_last_resolved_kms",
+        "minor_vy_last_resolved_kms",
+        "minor_vz_last_resolved_kms",
     )
     with path.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.writer(stream)
@@ -187,27 +162,48 @@ def extract_catalog(tree: Path, output_dir: Path, volume_cmpc3: float, chunk_rec
     output_number = np.asarray(header["output_number"][:nstep], dtype=np.int64)
 
     statistics, events = _collect_sink_statistics(tree, header, chunk_records)
-    events["major_mass_msun"] = _read_receiver_masses(
-        tree,
-        header,
-        events["receiver_id"],
-        events["capture_index"],
-    )
     event_index = events["capture_index"].astype(np.int64)
-    events["capture_output"] = output_number[event_index]
-    events["redshift"] = redshift[event_index]
-    events["minor_mass_msun"] = events.pop("minor_mass")
-    minimum_mass = np.minimum(events["minor_mass_msun"], events["major_mass_msun"])
-    maximum_mass = np.maximum(events["minor_mass_msun"], events["major_mass_msun"])
-    events["mass_ratio"] = minimum_mass / maximum_mass
-    events["chirp_mass_msun"] = (
-        events["minor_mass_msun"] * events["major_mass_msun"]
+    last_resolved_index = event_index - 1
+    events["receiver_mass_last_resolved_msun"] = _read_receiver_masses(
+        tree, header, events["receiver_id"], last_resolved_index
+    )
+    events["receiver_mass_assigned_output_msun"] = _read_receiver_masses(
+        tree, header, events["receiver_id"], event_index
+    )
+    events["assigned_capture_output"] = output_number[event_index]
+    events["assigned_capture_redshift"] = redshift[event_index]
+    events["last_resolved_output"] = output_number[last_resolved_index]
+    events["last_resolved_redshift"] = redshift[last_resolved_index]
+    events["last_resolved_history_index"] = last_resolved_index
+    events["assigned_capture_history_index"] = event_index
+    events["minor_mass_last_resolved_msun"] = events.pop("minor_mass")
+    minimum_mass = np.minimum(
+        events["minor_mass_last_resolved_msun"],
+        events["receiver_mass_last_resolved_msun"],
+    )
+    maximum_mass = np.maximum(
+        events["minor_mass_last_resolved_msun"],
+        events["receiver_mass_last_resolved_msun"],
+    )
+    events["mass_ratio_last_resolved"] = minimum_mass / maximum_mass
+    events["chirp_mass_last_resolved_msun"] = (
+        events["minor_mass_last_resolved_msun"]
+        * events["receiver_mass_last_resolved_msun"]
     ) ** (3.0 / 5.0) / (
-        events["minor_mass_msun"] + events["major_mass_msun"]
+        events["minor_mass_last_resolved_msun"]
+        + events["receiver_mass_last_resolved_msun"]
     ) ** (1.0 / 5.0)
-    for source, target in (("x", "x_cmpc"), ("y", "y_cmpc"), ("z", "z_cmpc")):
+    for source, target in (
+        ("x", "minor_x_last_resolved_cmpc"),
+        ("y", "minor_y_last_resolved_cmpc"),
+        ("z", "minor_z_last_resolved_cmpc"),
+    ):
         events[target] = events.pop(source)
-    for source, target in (("vx", "vx_kms"), ("vy", "vy_kms"), ("vz", "vz_kms")):
+    for source, target in (
+        ("vx", "minor_vx_last_resolved_kms"),
+        ("vy", "minor_vy_last_resolved_kms"),
+        ("vz", "minor_vz_last_resolved_kms"),
+    ):
         events[target] = events.pop(source)
 
     cosmology = FlatLambdaCDM(
@@ -216,6 +212,12 @@ def extract_catalog(tree: Path, output_dir: Path, volume_cmpc3: float, chunk_rec
         Tcmb0=2.7255,
     )
     cosmic_time_gyr = np.asarray(cosmology.age(redshift).value)
+    events["last_resolved_cosmic_time_gyr"] = cosmic_time_gyr[last_resolved_index]
+    events["assigned_capture_cosmic_time_gyr"] = cosmic_time_gyr[event_index]
+    events["capture_interval_gyr"] = (
+        events["assigned_capture_cosmic_time_gyr"]
+        - events["last_resolved_cosmic_time_gyr"]
+    )
     interval_gyr = np.full(nstep, np.nan)
     interval_gyr[1:] = cosmic_time_gyr[1:] - cosmic_time_gyr[:-1]
     capture_count = np.bincount(event_index, minlength=nstep)
@@ -254,7 +256,10 @@ def extract_catalog(tree: Path, output_dir: Path, volume_cmpc3: float, chunk_rec
         )
 
     _write_catalog(output_dir / "hr5_capture_catalog.csv", events)
-    valid_mass = (events["minor_mass_msun"] > 0.0) & (events["major_mass_msun"] > 0.0)
+    valid_mass = (
+        (events["minor_mass_last_resolved_msun"] > 0.0)
+        & (events["receiver_mass_last_resolved_msun"] > 0.0)
+    )
     summary = {
         "source": str(tree),
         "source_size_bytes": tree.stat().st_size,
@@ -266,9 +271,9 @@ def extract_catalog(tree: Path, output_dir: Path, volume_cmpc3: float, chunk_rec
         "n_valid_binary_masses": int(np.count_nonzero(valid_mass)),
         "n_outputs_with_captures": int(np.count_nonzero(capture_count)),
         "redshift_range": [float(redshift[-1]), float(redshift[0])],
-        "capture_redshift_range": [
-            float(np.min(events["redshift"])),
-            float(np.max(events["redshift"])),
+        "assigned_capture_redshift_range": [
+            float(np.min(events["assigned_capture_redshift"])),
+            float(np.max(events["assigned_capture_redshift"])),
         ],
         "volume_cmpc3": volume_cmpc3,
         "cosmology": {
@@ -276,10 +281,28 @@ def extract_catalog(tree: Path, output_dir: Path, volume_cmpc3: float, chunk_rec
             "Omega_m": float(header["omega_m"]),
             "Omega_lambda": float(header["omega_lambda"]),
         },
-        "minor_mass_msun": _quantiles(events["minor_mass_msun"][valid_mass]),
-        "major_mass_msun": _quantiles(events["major_mass_msun"][valid_mass]),
-        "mass_ratio": _quantiles(events["mass_ratio"][valid_mass]),
-        "chirp_mass_msun": _quantiles(events["chirp_mass_msun"][valid_mass]),
+        "event_time_convention": {
+            "progenitor_state": "last resolved output i-1",
+            "receiver_selection": "first output without the minor sink i",
+            "assigned_capture_time": "cosmic time of output i, the interval upper bound",
+            "binary_masses": "minor and receiver masses at the last resolved output i-1",
+            "receiver_mass_at_i": "stored separately and not used for the binary chirp mass",
+        },
+        "minor_mass_last_resolved_msun": _quantiles(
+            events["minor_mass_last_resolved_msun"][valid_mass]
+        ),
+        "receiver_mass_last_resolved_msun": _quantiles(
+            events["receiver_mass_last_resolved_msun"][valid_mass]
+        ),
+        "receiver_mass_assigned_output_msun": _quantiles(
+            events["receiver_mass_assigned_output_msun"][valid_mass]
+        ),
+        "mass_ratio_last_resolved": _quantiles(
+            events["mass_ratio_last_resolved"][valid_mass]
+        ),
+        "chirp_mass_last_resolved_msun": _quantiles(
+            events["chirp_mass_last_resolved_msun"][valid_mass]
+        ),
     }
     (output_dir / "hr5_capture_summary.json").write_text(
         json.dumps(summary, indent=2) + "\n",
