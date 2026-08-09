@@ -21,9 +21,12 @@ from fdm_smbh_delay.hr5 import (
     fibonacci_sightlines,
     find_agn_pair_population,
     interval_censored_cumulative_bounds,
+    match_population_by_properties,
     pair_component_multiplicity,
+    pair_component_labels,
     project_pair_observables,
     read_mkagn_snapshot,
+    spatial_jackknife_pair_statistics,
 )
 
 
@@ -149,6 +152,14 @@ def _attach_capture_history(
 
 
 def _add_dual_system_information(pairs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    pair_label, pair_system_multiplicity, _, _ = pair_component_labels(
+        pairs["id_1"], pairs["id_2"]
+    )
+    pairs["pair_system_label"] = pair_label
+    pairs["pair_system_multiplicity"] = pair_system_multiplicity
+    pairs["relative_speed_kms"] = np.linalg.norm(
+        pairs["velocity_2_kms"] - pairs["velocity_1_kms"], axis=1
+    )
     dual = pairs["is_dual"]
     pair_multiplicity, member, member_multiplicity = pair_component_multiplicity(
         pairs["id_1"][dual], pairs["id_2"][dual]
@@ -244,6 +255,8 @@ def _add_obscuration_information(
 def _selection_statistics(
     pairs: dict[str, np.ndarray],
     volume_cmpc3: float,
+    box_size_cmpc_over_h: float,
+    spatial_region_count: int = 8,
 ) -> dict[str, float | int]:
     dual = pairs["is_dual"]
     offset = pairs["is_offset"]
@@ -253,12 +266,34 @@ def _selection_statistics(
     member_multiplicity = pairs["dual_member_multiplicity"]
     pure_member_count = int(np.count_nonzero(member_multiplicity == 2))
     multiple_member_count = int(np.count_nonzero(member_multiplicity > 2))
+    spatial = spatial_jackknife_pair_statistics(
+        pairs["active_position_x_cmpc_over_h"],
+        pairs["position_1_cmpc_over_h"][:, 0],
+        pairs["position_2_cmpc_over_h"][:, 0],
+        dual,
+        volume_cmpc3,
+        box_size_cmpc_over_h,
+        region_count=spatial_region_count,
+    )
     return {
         "active_agn_count": active_count,
         "dual_pair_count": dual_count,
         "offset_pair_count": int(np.count_nonzero(offset)),
-        "dual_pair_number_density_cmpc3": dual_count / volume_cmpc3,
-        "dual_pair_fraction": dual_count / active_count if active_count else np.nan,
+        "dual_pair_number_density_cmpc3": spatial["number_density"],
+        "dual_pair_number_density_jackknife_error_cmpc3": spatial[
+            "number_density_jackknife_error"
+        ],
+        "dual_pair_fraction": spatial["pair_fraction"],
+        "dual_pair_fraction_jackknife_error": spatial[
+            "pair_fraction_jackknife_error"
+        ],
+        "spatial_jackknife_region_count": spatial["region_count"],
+        "pure_two_member_dual_pair_count": int(
+            np.count_nonzero(dual & (pairs["pair_system_multiplicity"] == 2))
+        ),
+        "pure_two_member_offset_pair_count": int(
+            np.count_nonzero(offset & (pairs["pair_system_multiplicity"] == 2))
+        ),
         "dual_member_count": int(member.size),
         "dual_member_fraction": member.size / active_count if active_count else np.nan,
         "pure_dual_member_count": pure_member_count,
@@ -374,6 +409,125 @@ def _bootstrap_capture_bounds(
     return lower_quantile[0], lower_quantile[1], upper_quantile[0], upper_quantile[1]
 
 
+def _standardized_mean_difference(
+    first: np.ndarray,
+    second: np.ndarray,
+) -> np.ndarray:
+    numerator = np.mean(first, axis=0) - np.mean(second, axis=0)
+    denominator = np.sqrt(
+        0.5 * (np.var(first, axis=0, ddof=1) + np.var(second, axis=0, ddof=1))
+    )
+    return np.divide(
+        numerator,
+        denominator,
+        out=np.zeros_like(numerator),
+        where=denominator > 0.0,
+    )
+
+
+def _matched_capture_comparison(
+    pairs: dict[str, np.ndarray],
+    followup_gyr: float,
+    rng: np.random.Generator,
+    realizations: int,
+) -> tuple[dict[str, object], dict[str, np.ndarray]]:
+    pure = pairs["pair_system_multiplicity"] == 2
+    dual_index = np.flatnonzero(pure & pairs["is_dual"])
+    offset_index = np.flatnonzero(pure & pairs["is_offset"])
+    feature_names = (
+        "log10_primary_mass_msun",
+        "log10_mass_ratio",
+        "log10_separation_pkpc",
+        "log10_relative_speed_plus_10_kms",
+    )
+
+    def properties(index: np.ndarray) -> np.ndarray:
+        return np.column_stack(
+            (
+                np.log10(pairs["mass_1_msun"][index]),
+                np.log10(pairs["mass_2_msun"][index] / pairs["mass_1_msun"][index]),
+                np.log10(pairs["separation_pkpc"][index]),
+                np.log10(pairs["relative_speed_kms"][index] + 10.0),
+            )
+        )
+
+    dual_properties = properties(dual_index)
+    offset_properties = properties(offset_index)
+    dual_match, offset_match, match_distance = match_population_by_properties(
+        dual_properties, offset_properties
+    )
+    matched_dual_index = dual_index[dual_match]
+    matched_offset_index = offset_index[offset_match]
+    evaluation_time = min(1.0, followup_gyr)
+
+    def outcomes(index: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        lower = pairs["capture_delay_lower_gyr"][index]
+        upper = pairs["capture_delay_upper_gyr"][index]
+        certain = np.isfinite(upper) & (upper <= evaluation_time)
+        possible = np.isfinite(lower) & (lower <= evaluation_time)
+        return certain.astype(np.float64), possible.astype(np.float64)
+
+    dual_certain, dual_possible = outcomes(matched_dual_index)
+    offset_certain, offset_possible = outcomes(matched_offset_index)
+    difference_lower = dual_certain - offset_possible
+    difference_upper = dual_possible - offset_certain
+    difference_midpoint = 0.5 * (difference_lower + difference_upper)
+    bootstrap_midpoint = np.empty(realizations)
+    for realization in range(realizations):
+        index = rng.integers(0, difference_midpoint.size, size=difference_midpoint.size)
+        bootstrap_midpoint[realization] = np.mean(difference_midpoint[index])
+
+    matched_dual_properties = dual_properties[dual_match]
+    matched_offset_properties = offset_properties[offset_match]
+    pre_match_smd = _standardized_mean_difference(dual_properties, offset_properties)
+    post_match_smd = _standardized_mean_difference(
+        matched_dual_properties, matched_offset_properties
+    )
+    summary: dict[str, object] = {
+        "feature_names": feature_names,
+        "pure_dual_pair_count": int(dual_index.size),
+        "pure_offset_pair_count": int(offset_index.size),
+        "matched_pair_count": int(matched_dual_index.size),
+        "match_distance_quantiles": {
+            name: float(np.quantile(match_distance, level))
+            for name, level in (("q16", 0.16), ("q50", 0.50), ("q84", 0.84))
+        },
+        "absolute_standardized_mean_difference_before": np.abs(pre_match_smd).tolist(),
+        "absolute_standardized_mean_difference_after": np.abs(post_match_smd).tolist(),
+        "evaluation_time_gyr": evaluation_time,
+        "matched_dual_capture_fraction_certain": float(np.mean(dual_certain)),
+        "matched_dual_capture_fraction_possible": float(np.mean(dual_possible)),
+        "matched_offset_capture_fraction_certain": float(np.mean(offset_certain)),
+        "matched_offset_capture_fraction_possible": float(np.mean(offset_possible)),
+        "dual_minus_offset_capture_fraction_lower_bound": float(
+            np.mean(difference_lower)
+        ),
+        "dual_minus_offset_capture_fraction_upper_bound": float(
+            np.mean(difference_upper)
+        ),
+        "dual_minus_offset_midpoint": float(np.mean(difference_midpoint)),
+        "dual_minus_offset_midpoint_bootstrap_16": float(
+            np.quantile(bootstrap_midpoint, 0.16)
+        ),
+        "dual_minus_offset_midpoint_bootstrap_84": float(
+            np.quantile(bootstrap_midpoint, 0.84)
+        ),
+    }
+    matched = {
+        "dual_pair_index": matched_dual_index,
+        "offset_pair_index": matched_offset_index,
+        "match_distance": match_distance,
+        "dual_certain": dual_certain,
+        "dual_possible": dual_possible,
+        "offset_certain": offset_certain,
+        "offset_possible": offset_possible,
+        "difference_lower": difference_lower,
+        "difference_upper": difference_upper,
+        "difference_midpoint": difference_midpoint,
+    }
+    return summary, matched
+
+
 def _plot_demographics(
     output: Path,
     data: dict[int, dict[str, object]],
@@ -403,7 +557,14 @@ def _plot_demographics(
         axes[0].errorbar(
             redshift,
             density,
-            yerr=np.sqrt(count) / volume_cmpc3,
+            yerr=np.asarray(
+                [
+                    data[number]["selection"][key]["statistics"][
+                        "dual_pair_number_density_jackknife_error_cmpc3"
+                    ]
+                    for number in output_numbers
+                ]
+            ),
             color=color,
             marker=marker,
             mfc="white",
@@ -433,10 +594,21 @@ def _plot_demographics(
             [data[number]["selection"]["bol43"]["statistics"][field] for number in output_numbers]
         )
         fraction = numerator / active_count
+        if field == "dual_pair_count":
+            fraction_error = np.asarray(
+                [
+                    data[number]["selection"]["bol43"]["statistics"][
+                        "dual_pair_fraction_jackknife_error"
+                    ]
+                    for number in output_numbers
+                ]
+            )
+        else:
+            fraction_error = np.sqrt(numerator) / active_count
         axes[1].errorbar(
             redshift,
             fraction,
-            yerr=np.sqrt(numerator) / active_count,
+            yerr=fraction_error,
             color=color,
             marker=marker,
             mfc="white",
@@ -448,7 +620,7 @@ def _plot_demographics(
         )
     axes[1].set_yscale("log")
     axes[1].set_xlabel(r"$z$")
-    axes[1].set_ylabel(r"dual AGN fraction")
+    axes[1].set_ylabel(r"active-pair fraction")
     axes[1].legend(frameon=False, loc="lower right", handlelength=1.5)
     _panel_label(axes[1], "(b)", x=0.04, horizontal_alignment="left")
 
@@ -461,7 +633,7 @@ def _plot_demographics(
             numerator = statistics["dual_pair_count"]
             denominator = statistics["active_agn_count"]
             fractions.append(numerator / denominator)
-            errors.append(np.sqrt(numerator) / denominator)
+            errors.append(statistics["dual_pair_fraction_jackknife_error"])
         axes[2].errorbar(
             mass_threshold,
             fractions,
@@ -487,8 +659,8 @@ def _plot_demographics(
     for number, color, marker in zip(sorted(data)[:2], COLORS, MARKERS):
         pairs = data[number]["mass_selection"]["m6"]["pairs"]
         for selected, line_style, population_label in (
-            (pairs["is_dual"], "-", "dual"),
-            (pairs["is_offset"], "--", "offset"),
+            (pairs["is_dual"], "-", "dual-active"),
+            (pairs["is_offset"], "--", "single-active"),
         ):
             density, error = _density_per_log_separation(
                 pairs["separation_pkpc"][selected], int(pairs["active_count"]), log_edges
@@ -525,6 +697,7 @@ def _plot_precursors(
     output: Path,
     data: dict[int, dict[str, object]],
     capture_curves: dict[tuple[int, str], dict[str, np.ndarray]],
+    matched_comparisons: dict[int, dict[str, object]],
     rng: np.random.Generator,
 ) -> None:
     _plot_settings()
@@ -541,7 +714,7 @@ def _plot_precursors(
     curve_outputs = sorted({number for number, _ in capture_curves})
     for number, color, marker in zip(curve_outputs, COLORS, MARKERS):
         pairs = data[number]["selection"]["bol43"]["pairs"]
-        selected = pairs["is_dual"]
+        selected = pairs["is_dual"] & (pairs["pair_system_multiplicity"] == 2)
         coordinate = np.log10(pairs["separation_pkpc"][selected])
         for field, line_style, velocity_limit in (
             ("projected_selection_probability_dv300", "--", 300),
@@ -582,8 +755,16 @@ def _plot_precursors(
         pairs = data[number]["mass_selection"]["m6"]["pairs"]
         mass_ratio = pairs["mass_2_msun"] / pairs["mass_1_msun"]
         for selected, line_style, population_label in (
-            (pairs["is_dual"], "-", "dual"),
-            (pairs["is_offset"], "--", "offset"),
+            (
+                pairs["is_dual"] & (pairs["pair_system_multiplicity"] == 2),
+                "-",
+                "dual-active",
+            ),
+            (
+                pairs["is_offset"] & (pairs["pair_system_multiplicity"] == 2),
+                "--",
+                "single-active",
+            ),
         ):
             count, _ = np.histogram(np.log10(mass_ratio[selected]), bins=ratio_edges)
             density = count / (np.sum(count) * np.diff(ratio_edges))
@@ -607,8 +788,8 @@ def _plot_precursors(
 
     for number, color in zip(curve_outputs, COLORS):
         for population, line_style, population_label in (
-            ("mass_limited_dual", "-", "dual"),
-            ("mass_limited_offset", "--", "offset"),
+            ("mass_limited_dual", "-", "dual-active"),
+            ("mass_limited_offset", "--", "single-active"),
         ):
             curve = capture_curves[(number, population)]
             time = curve["time_gyr"]
@@ -638,45 +819,76 @@ def _plot_precursors(
             )
     axes[2].set_xlim(0.0, 3.0)
     axes[2].set_ylim(0.0, 1.05)
-    axes[2].set_xlabel(r"time since dual-AGN selection [Gyr]")
-    axes[2].set_ylabel(r"cumulative numerical-capture fraction")
+    axes[2].set_xlabel(r"time since active-pair selection [Gyr]")
+    axes[2].set_ylabel(r"cumulative receiver-link fraction")
     axes[2].legend(frameon=False, loc="lower right")
     _panel_label(axes[2], "(c)")
 
-    number = min(data)
-    pairs = data[number]["mass_selection"]["m6"]["pairs"]
-    coordinate = np.log10(pairs["separation_pkpc"])
-    for selected, field, color, marker, line_style, label in (
-        (pairs["is_dual"], "active_sightline_fraction_nhi_ge_1e23", COLORS[0], MARKERS[0], "-", "dual, $10^{23}$"),
-        (pairs["is_offset"], "active_sightline_fraction_nhi_ge_1e23", COLORS[1], MARKERS[1], "-", "offset, $10^{23}$"),
-        (pairs["is_dual"], "active_sightline_fraction_nhi_ge_1e24", COLORS[0], MARKERS[0], "--", "dual, $10^{24}$"),
-        (pairs["is_offset"], "active_sightline_fraction_nhi_ge_1e24", COLORS[1], MARKERS[1], "--", "offset, $10^{24}$"),
-    ):
-        count, mean, lower, upper = _binned_mean_interval(
-            coordinate[selected], pairs[field][selected], log_edges, rng
-        )
-        visible = count >= 5
-        axes[3].errorbar(
-            center[visible],
-            mean[visible],
-            yerr=np.vstack((mean[visible] - lower[visible], upper[visible] - mean[visible])),
-            color=color,
-            marker=marker,
-            mfc="white",
-            mec=color,
-            ms=3.6,
-            lw=0.9,
-            ls=line_style,
-            capsize=1.2,
-            label=label,
-        )
-    axes[3].set_xscale("log")
-    axes[3].set_xlim(0.5, 30.0)
-    axes[3].set_ylim(0.0, 1.05)
-    axes[3].set_xlabel(r"$r_{\rm 3D}$ [pkpc]")
-    axes[3].set_ylabel(r"active sightlines above $N_{\rm H}$")
-    axes[3].legend(frameon=False, loc="center left", handlelength=1.5)
-    _panel_label(axes[3], "(d)", y=0.08)
+    matched_outputs = sorted(matched_comparisons)
+    matched_redshift = np.asarray(
+        [float(data[number]["redshift"]) for number in matched_outputs]
+    )
+    midpoint = np.asarray(
+        [
+            matched_comparisons[number]["dual_minus_offset_midpoint"]
+            for number in matched_outputs
+        ]
+    )
+    bootstrap_lower = np.asarray(
+        [
+            matched_comparisons[number]["dual_minus_offset_midpoint_bootstrap_16"]
+            for number in matched_outputs
+        ]
+    )
+    bootstrap_upper = np.asarray(
+        [
+            matched_comparisons[number]["dual_minus_offset_midpoint_bootstrap_84"]
+            for number in matched_outputs
+        ]
+    )
+    censoring_lower = np.asarray(
+        [
+            matched_comparisons[number][
+                "dual_minus_offset_capture_fraction_lower_bound"
+            ]
+            for number in matched_outputs
+        ]
+    )
+    censoring_upper = np.asarray(
+        [
+            matched_comparisons[number][
+                "dual_minus_offset_capture_fraction_upper_bound"
+            ]
+            for number in matched_outputs
+        ]
+    )
+    axes[3].vlines(
+        matched_redshift,
+        censoring_lower,
+        censoring_upper,
+        color=COLORS[3],
+        lw=3.2,
+        alpha=0.35,
+        label="censoring bounds",
+    )
+    axes[3].errorbar(
+        matched_redshift,
+        midpoint,
+        yerr=np.vstack((midpoint - bootstrap_lower, bootstrap_upper - midpoint)),
+        color=COLORS[3],
+        marker=MARKERS[3],
+        mfc="white",
+        mec=COLORS[3],
+        ms=4.5,
+        lw=1.0,
+        capsize=1.5,
+        label="midpoint bootstrap",
+    )
+    axes[3].axhline(0.0, color="black", lw=0.8, ls=":")
+    axes[3].set_xlabel(r"$z$")
+    axes[3].set_ylabel(r"matched $f_{\rm link,dual}-f_{\rm link,single}$")
+    axes[3].legend(frameon=False, loc="lower right", handlelength=1.5)
+    _panel_label(axes[3], "(d)", x=0.04, horizontal_alignment="left")
 
     output.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(output, bbox_inches="tight", pad_inches=0.035)
@@ -705,6 +917,8 @@ def _write_pair_catalog(path: Path, data: dict[int, dict[str, object]], mass_key
                 "primary_eddington_ratio",
                 "secondary_eddington_ratio",
                 "dual_system_multiplicity",
+                "pair_system_multiplicity",
+                "relative_speed_kms",
                 "projected_selection_probability_dv300",
                 "projected_selection_probability_dv600",
                 "active_sightline_fraction_nhi_ge_1e23",
@@ -741,6 +955,8 @@ def _write_pair_catalog(path: Path, data: dict[int, dict[str, object]], mass_key
                         pairs["eddington_ratio_1"][pair_number],
                         pairs["eddington_ratio_2"][pair_number],
                         int(pairs["dual_system_multiplicity"][pair_number]),
+                        int(pairs["pair_system_multiplicity"][pair_number]),
+                        pairs["relative_speed_kms"][pair_number],
                         pairs["projected_selection_probability_dv300"][pair_number],
                         pairs["projected_selection_probability_dv600"][pair_number],
                         pairs.get("active_sightline_fraction_nhi_ge_1e23", np.full(selected.size, np.nan))[pair_number],
@@ -748,6 +964,53 @@ def _write_pair_catalog(path: Path, data: dict[int, dict[str, object]], mass_key
                         int(pairs["assigned_capture_output"][pair_number]),
                         pairs["capture_delay_lower_gyr"][pair_number],
                         pairs["capture_delay_upper_gyr"][pair_number],
+                    )
+                )
+
+
+def _write_matched_catalog(
+    path: Path,
+    data: dict[int, dict[str, object]],
+    matched_data: dict[int, dict[str, np.ndarray]],
+) -> None:
+    with path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(
+            (
+                "output_number",
+                "redshift",
+                "dual_primary_sink_id",
+                "dual_secondary_sink_id",
+                "offset_primary_sink_id",
+                "offset_secondary_sink_id",
+                "standardized_match_distance",
+                "dual_certain_by_1_gyr",
+                "dual_possible_by_1_gyr",
+                "offset_certain_by_1_gyr",
+                "offset_possible_by_1_gyr",
+            )
+        )
+        for output_number in sorted(matched_data):
+            pairs = data[output_number]["mass_selection"]["m6"]["pairs"]
+            matched = matched_data[output_number]
+            dual_index = matched["dual_pair_index"]
+            offset_index = matched["offset_pair_index"]
+            for row in range(dual_index.size):
+                dual_pair = dual_index[row]
+                offset_pair = offset_index[row]
+                writer.writerow(
+                    (
+                        output_number,
+                        data[output_number]["redshift"],
+                        int(pairs["id_1"][dual_pair]),
+                        int(pairs["id_2"][dual_pair]),
+                        int(pairs["id_1"][offset_pair]),
+                        int(pairs["id_2"][offset_pair]),
+                        matched["match_distance"][row],
+                        int(matched["dual_certain"][row]),
+                        int(matched["dual_possible"][row]),
+                        int(matched["offset_certain"][row]),
+                        int(matched["offset_possible"][row]),
                     )
                 )
 
@@ -796,9 +1059,18 @@ def analyze(
                 "N_unique_dual_member/N_active_AGN",
                 "N_pure_dual_member/N_active_AGN",
             ],
-            "host_association": "unavailable in the local MkAGN products",
-            "capture_link": "direct legacy receiver assignment",
+            "host_association": (
+                "The local MkAGN records contain zero host masses and the legacy "
+                "galaxy catalogs point to unavailable scratch storage. The selected "
+                "pairs are spatially associated active SMBHs rather than confirmed "
+                "distinct-host dual AGNs."
+            ),
+            "capture_link": (
+                "legacy mkmerging.c distance-and-mass receiver association, not a "
+                "direct RAMSES merger-partner record"
+            ),
             "capture_time": "interval between the last resolved and assigned capture outputs",
+            "spatial_jackknife_regions": 8,
         },
         "volume_cmpc3": volume_cmpc3,
         "snapshots": {},
@@ -850,7 +1122,9 @@ def analyze(
             )
             snapshot["selection"][key] = {
                 "pairs": pairs,
-                "statistics": _selection_statistics(pairs, volume_cmpc3),
+                "statistics": _selection_statistics(
+                    pairs, volume_cmpc3, box_size_cmpc_over_h
+                ),
             }
         for key, minimum_mass in mass_specs.items():
             pairs = find_agn_pair_population(
@@ -883,7 +1157,9 @@ def analyze(
             )
             snapshot["mass_selection"][key] = {
                 "pairs": pairs,
-                "statistics": _selection_statistics(pairs, volume_cmpc3),
+                "statistics": _selection_statistics(
+                    pairs, volume_cmpc3, box_size_cmpc_over_h
+                ),
             }
 
         nhi_path = agn_directory / f"agn.{output_number:05d}.NHI.dat"
@@ -927,6 +1203,8 @@ def analyze(
         )
 
     capture_curves: dict[tuple[int, str], dict[str, np.ndarray]] = {}
+    matched_comparisons: dict[int, dict[str, object]] = {}
+    matched_data: dict[int, dict[str, np.ndarray]] = {}
     capture_rows: list[tuple[object, ...]] = []
     final_time = float(history["time"][-1])
     for output_number in outputs:
@@ -939,10 +1217,18 @@ def analyze(
             "pure_dual": (
                 fiducial_pairs,
                 fiducial_pairs["is_dual"]
-                & (fiducial_pairs["dual_system_multiplicity"] == 2),
+                & (fiducial_pairs["pair_system_multiplicity"] == 2),
             ),
-            "mass_limited_dual": (mass_limited_pairs, mass_limited_pairs["is_dual"]),
-            "mass_limited_offset": (mass_limited_pairs, mass_limited_pairs["is_offset"]),
+            "mass_limited_dual": (
+                mass_limited_pairs,
+                mass_limited_pairs["is_dual"]
+                & (mass_limited_pairs["pair_system_multiplicity"] == 2),
+            ),
+            "mass_limited_offset": (
+                mass_limited_pairs,
+                mass_limited_pairs["is_offset"]
+                & (mass_limited_pairs["pair_system_multiplicity"] == 2),
+            ),
         }
         population_summary = {}
         for population_name, (pairs, selected) in populations.items():
@@ -1000,11 +1286,25 @@ def analyze(
                 ),
             }
         summary["snapshots"][str(output_number)]["capture_by_population"] = population_summary
+        matched_summary, matched = _matched_capture_comparison(
+            mass_limited_pairs,
+            followup,
+            rng,
+            bootstrap_realizations,
+        )
+        matched_comparisons[output_number] = matched_summary
+        matched_data[output_number] = matched
+        summary["snapshots"][str(output_number)][
+            "matched_dual_offset_capture_comparison"
+        ] = matched_summary
 
     output_directory.mkdir(parents=True, exist_ok=True)
     _write_pair_catalog(output_directory / "hr5_dual_agn_pairs.csv", data, None)
     _write_pair_catalog(
         output_directory / "hr5_dual_offset_pairs_mbh_ge_1e6.csv", data, "m6"
+    )
+    _write_matched_catalog(
+        output_directory / "hr5_dual_offset_matched_pairs.csv", data, matched_data
     )
     with (output_directory / "hr5_dual_agn_capture_cdf.csv").open(
         "w", newline="", encoding="utf-8"
@@ -1033,7 +1333,11 @@ def analyze(
         output_directory / "hr5_dual_agn_demographics.pdf", data, volume_cmpc3
     )
     _plot_precursors(
-        output_directory / "hr5_dual_agn_precursors.pdf", data, capture_curves, rng
+        output_directory / "hr5_dual_agn_precursors.pdf",
+        data,
+        capture_curves,
+        matched_comparisons,
+        rng,
     )
 
 

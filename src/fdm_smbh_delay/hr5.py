@@ -10,7 +10,7 @@ from astropy import units as u
 from astropy.constants import G, M_sun, c
 from astropy.cosmology import FlatLambdaCDM
 from scipy.integrate import cumulative_trapezoid
-from scipy.optimize import least_squares
+from scipy.optimize import least_squares, linear_sum_assignment
 from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import cKDTree
@@ -351,6 +351,9 @@ def find_agn_pair_population(
 
     empty = {
         "active_count": np.array(np.count_nonzero(active), dtype=np.int64),
+        "active_position_x_cmpc_over_h": np.asarray(
+            population["x"][active], dtype=np.float64
+        ),
         "id_1": np.empty(0, dtype=np.int64),
         "id_2": np.empty(0, dtype=np.int64),
         "position_1_cmpc_over_h": np.empty((0, 3)),
@@ -413,6 +416,9 @@ def find_agn_pair_population(
     eddington_coefficient = 1.26e38
     result = {
         "active_count": np.array(np.count_nonzero(active), dtype=np.int64),
+        "active_position_x_cmpc_over_h": np.asarray(
+            population["x"][active], dtype=np.float64
+        ),
         "id_1": primary_record["sink_id"].astype(np.int64),
         "id_2": secondary_record["sink_id"].astype(np.int64),
         "position_1_cmpc_over_h": np.column_stack(
@@ -458,12 +464,25 @@ def pair_component_multiplicity(
     multiplicity of the connected system that contains each member.
     """
 
+    _, pair_multiplicity, member, member_multiplicity = pair_component_labels(
+        first_id, second_id
+    )
+    return pair_multiplicity, member, member_multiplicity
+
+
+def pair_component_labels(
+    first_id: np.ndarray,
+    second_id: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Label connected SMBH systems and return their member multiplicities."""
+
     first = np.asarray(first_id, dtype=np.int64)
     second = np.asarray(second_id, dtype=np.int64)
     if first.shape != second.shape or first.ndim != 1:
         raise ValueError("Pair identifiers must be matching one-dimensional arrays")
     if first.size == 0:
-        return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64)
+        empty = np.empty(0, dtype=np.int64)
+        return empty, empty, empty, empty
     member, inverse = np.unique(np.r_[first, second], return_inverse=True)
     edge = inverse.reshape(2, first.size).T
     row = np.r_[edge[:, 0], edge[:, 1]]
@@ -475,8 +494,110 @@ def pair_component_multiplicity(
     _, label = connected_components(graph, directed=False)
     size = np.bincount(label)
     member_multiplicity = size[label]
+    pair_label = label[edge[:, 0]]
     pair_multiplicity = member_multiplicity[edge[:, 0]]
-    return pair_multiplicity.astype(np.int64), member, member_multiplicity.astype(np.int64)
+    return (
+        pair_label.astype(np.int64),
+        pair_multiplicity.astype(np.int64),
+        member,
+        member_multiplicity.astype(np.int64),
+    )
+
+
+def match_population_by_properties(
+    first_properties: np.ndarray,
+    second_properties: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Find unique minimum-distance matches after standardizing pair properties."""
+
+    first = np.asarray(first_properties, dtype=np.float64)
+    second = np.asarray(second_properties, dtype=np.float64)
+    if first.ndim != 2 or second.ndim != 2 or first.shape[1] != second.shape[1]:
+        raise ValueError("Property arrays must be two-dimensional with matching columns")
+    if first.size == 0 or second.size == 0:
+        empty_index = np.empty(0, dtype=np.int64)
+        return empty_index, empty_index, np.empty(0)
+    if np.any(~np.isfinite(first)) or np.any(~np.isfinite(second)):
+        raise ValueError("Matching properties must be finite")
+    pooled = np.vstack((first, second))
+    scale = np.std(pooled, axis=0, ddof=1)
+    scale[(~np.isfinite(scale)) | (scale == 0.0)] = 1.0
+    center = np.mean(pooled, axis=0)
+    standardized_first = (first - center) / scale
+    standardized_second = (second - center) / scale
+    difference = standardized_first[:, None, :] - standardized_second[None, :, :]
+    distance = np.sqrt(np.sum(difference**2, axis=2))
+    first_index, second_index = linear_sum_assignment(distance)
+    order = np.argsort(first_index, kind="stable")
+    first_index = first_index[order]
+    second_index = second_index[order]
+    return (
+        first_index.astype(np.int64),
+        second_index.astype(np.int64),
+        distance[first_index, second_index],
+    )
+
+
+def spatial_jackknife_pair_statistics(
+    active_position_x: np.ndarray,
+    pair_position_1_x: np.ndarray,
+    pair_position_2_x: np.ndarray,
+    selected_pair: np.ndarray,
+    volume_cmpc3: float,
+    box_size: float,
+    region_count: int = 8,
+) -> dict[str, float]:
+    """Estimate spatial variance by omitting equal slabs along the long HR5 axis."""
+
+    active_x = np.mod(np.asarray(active_position_x, dtype=np.float64), box_size)
+    first_x = np.asarray(pair_position_1_x, dtype=np.float64)
+    second_x = np.asarray(pair_position_2_x, dtype=np.float64)
+    selected = np.asarray(selected_pair, dtype=bool)
+    if first_x.shape != second_x.shape or first_x.shape != selected.shape:
+        raise ValueError("Pair positions and selection must have matching shapes")
+    if active_x.ndim != 1 or first_x.ndim != 1:
+        raise ValueError("Spatial jackknife positions must be one-dimensional")
+    if volume_cmpc3 <= 0.0 or box_size <= 0.0 or region_count < 2:
+        raise ValueError("Volume, box size, and region count must be positive")
+
+    delta_x = second_x - first_x
+    delta_x -= box_size * np.rint(delta_x / box_size)
+    pair_midpoint_x = np.mod(first_x + 0.5 * delta_x, box_size)
+    active_region = np.minimum(
+        (active_x * region_count / box_size).astype(np.int64), region_count - 1
+    )
+    pair_region = np.minimum(
+        (pair_midpoint_x * region_count / box_size).astype(np.int64), region_count - 1
+    )
+    active_count_by_region = np.bincount(active_region, minlength=region_count)
+    pair_count_by_region = np.bincount(pair_region[selected], minlength=region_count)
+    total_active = int(active_x.size)
+    total_pair = int(np.count_nonzero(selected))
+    retained_volume = volume_cmpc3 * (region_count - 1.0) / region_count
+    density_sample = (total_pair - pair_count_by_region) / retained_volume
+    retained_active = total_active - active_count_by_region
+    fraction_sample = np.divide(
+        total_pair - pair_count_by_region,
+        retained_active,
+        out=np.full(region_count, np.nan),
+        where=retained_active > 0,
+    )
+
+    def error(sample: np.ndarray) -> float:
+        finite = sample[np.isfinite(sample)]
+        if finite.size < 2:
+            return float("nan")
+        return float(
+            np.sqrt((finite.size - 1.0) / finite.size * np.sum((finite - np.mean(finite)) ** 2))
+        )
+
+    return {
+        "region_count": int(region_count),
+        "number_density": total_pair / volume_cmpc3,
+        "number_density_jackknife_error": error(density_sample),
+        "pair_fraction": total_pair / total_active if total_active else float("nan"),
+        "pair_fraction_jackknife_error": error(fraction_sample),
+    }
 
 
 def fibonacci_sightlines(count: int) -> np.ndarray:

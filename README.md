@@ -141,18 +141,21 @@ python scripts/extract_hr5_capture_catalog.py \
   '/home/kjhan/BACKUP/GalFinder/SRC(FoF_PSB_Free_Ver2_Dev)/SRC(AGN)/BinarySMBH/Sink_Merging_Tree.dat.Updated'
 
 python scripts/reproduce_hr5_original_figures.py --rebuild-cache
+python scripts/validate_hr5_capture_receivers.py
 python scripts/analyze_hr5_dual_agn.py
 ```
 
-The first command produces 576,278 numerical-capture intervals from 1,688,677
-sink histories. The second command redraws Figures 1--13 of the earlier HR5
-draft from those data and writes numerical validation checks. The third command
-measures dual and offset AGN number densities, distinguishes three commonly
-used dual-fraction denominators, applies projected-separation and line-of-sight
-velocity selections over 128 viewing directions, and retains interval and
-right censoring in the subsequent direct sink-capture distribution.
+The first command produces 576,278 sink-removal intervals from 1,688,677 sink
+histories. The second command redraws Figures 1--13 of the earlier HR5 draft.
+The third command tests the legacy receiver links against last-resolved
+phase-space states and consecutive MkAGN outputs. The fourth command measures
+spatially selected dual-active and single-active SMBH pairs, estimates spatial
+variance with an eight-region jackknife, and constructs matched pure
+two-member comparisons with interval and right censoring.
 
-These are numerical sink captures. They are not physical SMBH coalescences.
-The event definitions, legacy light-cone normalization, dual AGN selection, and
-literature comparison are documented in
+The disappearing sinks are measured directly, but the assigned receivers are
+legacy distance-and-mass associations rather than direct merger-partner
+records. These associations are not physical SMBH coalescences. The event
+definitions, receiver validation, active-pair selection, and literature
+comparison are documented in
 [`docs/hr5_reproduction.md`](docs/hr5_reproduction.md).

@@ -19,10 +19,13 @@ from fdm_smbh_delay.hr5 import (
     histogram_quantiles,
     infer_capture_receivers,
     interval_censored_cumulative_bounds,
+    match_population_by_properties,
+    pair_component_labels,
     pair_component_multiplicity,
     project_pair_observables,
     read_mkagn_snapshot,
     redshift_rate_model,
+    spatial_jackknife_pair_statistics,
 )
 
 
@@ -223,6 +226,43 @@ def test_pair_component_multiplicity_identifies_multiple_system() -> None:
         8: 2,
         9: 2,
     }
+
+
+def test_pair_component_labels_are_shared_within_each_system() -> None:
+    label, pair_size, member, member_size = pair_component_labels(
+        np.array([1, 2, 8]), np.array([2, 3, 9])
+    )
+    assert label[0] == label[1]
+    assert label[0] != label[2]
+    assert pair_size.tolist() == [3, 3, 2]
+    assert member.tolist() == [1, 2, 3, 8, 9]
+    assert member_size.tolist() == [3, 3, 3, 2, 2]
+
+
+def test_property_matching_uses_each_comparison_object_once() -> None:
+    first = np.array([[0.0, 0.0], [2.0, 2.0]])
+    second = np.array([[2.1, 1.9], [8.0, 8.0], [0.1, -0.1]])
+    first_index, second_index, distance = match_population_by_properties(first, second)
+    assert first_index.tolist() == [0, 1]
+    assert len(np.unique(second_index)) == 2
+    assert second_index.tolist() == [2, 0]
+    assert np.all(distance < 0.2)
+
+
+def test_spatial_jackknife_returns_finite_pair_uncertainties() -> None:
+    statistics = spatial_jackknife_pair_statistics(
+        active_position_x=np.arange(8.0) + 0.25,
+        pair_position_1_x=np.array([0.2, 2.2, 4.2, 6.2]),
+        pair_position_2_x=np.array([0.3, 2.3, 4.3, 6.3]),
+        selected_pair=np.array([True, True, True, True]),
+        volume_cmpc3=80.0,
+        box_size=8.0,
+        region_count=4,
+    )
+    assert statistics["number_density"] == pytest.approx(0.05)
+    assert statistics["pair_fraction"] == pytest.approx(0.5)
+    assert np.isfinite(statistics["number_density_jackknife_error"])
+    assert np.isfinite(statistics["pair_fraction_jackknife_error"])
 
 
 def test_project_pair_observables_includes_hubble_flow() -> None:

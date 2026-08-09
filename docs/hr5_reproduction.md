@@ -1,4 +1,4 @@
-# Horizon Run 5 SMBH capture and dual AGN analysis
+# Horizon Run 5 sink-removal and active SMBH pair analysis
 
 ## Data provenance
 
@@ -39,6 +39,36 @@ times, and the interval width. A later delay condition such as capture within
 1 Gyr boundary falls inside the output interval, the case is recorded
 separately.
 
+## Receiver validation
+
+`scripts/validate_hr5_capture_receivers.py` reads the assigned receiver at both
+interval boundaries and compares its last-resolved state with the disappearing
+sink. The two-body diagnostic uses
+
+```text
+v_escape = sqrt(2 G (M_disappearing + M_receiver) / separation)
+```
+
+All 576,278 associations satisfy the 0.5 cMpc search limit and the receiver
+mass factor of two because those conditions define the legacy selection. Of
+576,277 associations with finite last-resolved phase-space quantities, only 41
+have `v_relative <= v_escape`. The fraction is `7.1146e-5`. The median
+last-resolved separation is 4.614 pkpc, and the median relative speed is
+218.2 km/s. Also, 6.54 percent of the links share a receiver and output with at
+least one other disappearance.
+
+The locally available consecutive MkAGN outputs span 20 through 26. Only one
+sink disappears across those intervals. Reconstructing its receiver from the
+two adjacent MkAGN snapshots reproduces the legacy tree assignment exactly.
+This single event tests the implementation but does not independently validate
+the full association catalogue.
+
+The phase-space result separates two measurements. Sink disappearance and its
+output interval come directly from the histories. Receiver identity, pair
+mass, chirp mass, and relative orbit remain conditional on the legacy
+association until direct sink-merger records are restored. The validation
+products are written under `results/hr5/receiver_validation/`.
+
 ## Regeneration
 
 ```bash
@@ -46,6 +76,7 @@ python scripts/extract_hr5_capture_catalog.py \
   '/home/kjhan/BACKUP/GalFinder/SRC(FoF_PSB_Free_Ver2_Dev)/SRC(AGN)/BinarySMBH/Sink_Merging_Tree.dat.Updated'
 
 python scripts/reproduce_hr5_original_figures.py --rebuild-cache
+python scripts/validate_hr5_capture_receivers.py
 python scripts/analyze_hr5_dual_agn.py
 ```
 
@@ -105,15 +136,17 @@ a color-vision-deficiency-safe palette. Line styles duplicate the color
 encoding for grayscale reproduction. Legends remain inside the axes and occupy
 regions separated from the measured curves and uncertainty intervals.
 
-## Dual AGN selection and measurements
+## Active SMBH pair selection and measurements
 
-The dual AGN sample uses the MkAGN snapshots at outputs 89, 117, and 296. Both
-members satisfy the adopted bolometric-luminosity threshold, and their
-three-dimensional physical separation lies between 0.5 and 30 pkpc. Three
-fractional measures are retained because published measurements use different
-denominators. `N_pair/N_AGN` counts pair edges. `N_member/N_AGN` counts every
-unique active SMBH with an active companion. The pure-dual measure removes
-members of connected systems containing three or more active SMBHs.
+The active-pair sample uses the MkAGN snapshots at outputs 89, 117, and 296.
+Both members of a dual-active pair satisfy the adopted bolometric-luminosity
+threshold. Exactly one member of a single-active pair satisfies the threshold.
+Every pair has a three-dimensional physical separation between 0.5 and
+30 pkpc. Three fractional measures are retained because published measurements
+use different denominators. `N_pair/N_AGN` counts pair edges.
+`N_member/N_AGN` counts every unique active SMBH with an active companion. The
+pure-dual measure removes members of connected systems containing three or
+more active SMBHs.
 
 | redshift | active AGN | dual pairs | number density [cMpc^-3] | pair/AGN | member/AGN | pure member/AGN |
 |---:|---:|---:|---:|---:|---:|---:|
@@ -123,10 +156,12 @@ members of connected systems containing three or more active SMBHs.
 
 The table adopts `Lbol >= 1e43 erg s^-1`. The calculation also measures
 `Lbol >= 1e44 erg s^-1` and hard-X-ray `L(2-10 keV) >= 1e42 erg s^-1`
-selections. A separate comparison imposes `M_BH >= 1e6 Msun` on both members
-before classifying dual and offset AGN. At redshift 2.848 this comparison
-contains 387 dual and 574 offset pairs. At redshift 1.499 it contains 295 dual
-and 1,336 offset pairs.
+selections. Eight equal slabs along the long axis give spatial jackknife
+errors on the fiducial number densities of `1.743e-5`, `3.874e-6`, and
+`5.808e-7 cMpc^-3` at the three redshifts. A separate comparison imposes
+`M_BH >= 1e6 Msun` on both members. At redshift 2.848 it contains 387
+dual-active and 574 single-active pairs. At redshift 1.499 it contains 295
+dual-active and 1,336 single-active pairs.
 
 The projected-selection calculation follows each physically associated
 three-dimensional pair over 128 deterministic sightlines. It applies
@@ -138,15 +173,23 @@ measure the viewing-angle retention of three-dimensional pairs. They do not
 include unrelated foreground or background objects in an observational
 cylinder.
 
-The direct-capture distribution restricts the fiducial result to pure dual
-systems. At redshift 2.848, 1,938 of 2,182 pure duals have a later direct
-numerical capture. The interval-censored cumulative fraction at 1 Gyr lies
-between 0.832 and 0.841. At redshift 1.499, 270 of 322 pure duals have a later
-capture, and the 1 Gyr interval lies between 0.717 and 0.720. For the
-mass-limited comparison, the 1 Gyr bounds are 0.845--0.855 for duals and
-0.803--0.807 for offsets at redshift 2.848. They are 0.702--0.705 and
-0.597--0.603 at redshift 1.499. The output-296 population is right-censored at
-the selection time because no later HR5 output is present.
+The controlled receiver-link comparison retains pure two-member systems in
+the mass-limited population. It standardizes `log10(M_primary)`,
+`log10(mass ratio)`, `log10(separation)`, and
+`log10(relative speed + 10 km/s)`, then finds a unique minimum-distance
+assignment. At redshift 2.848, all 326 pure dual-active pairs are matched to
+326 of 470 pure single-active candidates. The maximum absolute standardized
+mean difference decreases from 0.328 to 0.088. The interval-censored 1 Gyr
+receiver-link fractions are 0.893--0.902 and 0.859--0.862. Their difference is
+bounded by 0.031--0.043.
+
+At redshift 1.499, all 243 pure dual-active pairs are matched to 243 of 1,135
+pure single-active candidates. The maximum absolute standardized mean
+difference decreases from 0.486 to 0.031. The corresponding receiver-link
+fractions are 0.749--0.753 and 0.683--0.695. Their difference is bounded by
+0.053--0.070. The output-296 population is right-censored at the selection time
+because no later HR5 output is present. These are later legacy receiver links,
+not direct sink-merger records or physical coalescences.
 
 Neutral-hydrogen columns are available along six cardinal sightlines at
 outputs 89 and 296. The analysis reports the fraction of active sightlines
@@ -163,7 +206,8 @@ retain this limitation.
 
 The output files are `hr5_dual_agn_summary.json`,
 `hr5_dual_agn_capture_cdf.csv`, `hr5_dual_agn_pairs.csv`, and
-`hr5_dual_offset_pairs_mbh_ge_1e6.csv`. The direct-capture columns describe the
+`hr5_dual_offset_pairs_mbh_ge_1e6.csv`. Matched systems are written to
+`hr5_dual_offset_matched_pairs.csv`. The receiver-link columns describe the
 reconstructed numerical association. They do not establish physical SMBH
 coalescence.
 
@@ -197,6 +241,15 @@ fraction. Direct numerical comparison therefore requires matched selections.
   cosmological simulations with a common selection and found that predicted
   dual fractions and number densities retain substantial inter-simulation
   variation.
+- [Saeedzadeh et al. 2024](https://arxiv.org/abs/2403.17076) followed
+  Romulus25 dual AGNs and found rapidly evolving, slowly evolving, and
+  nonmerging histories.
+- [Buttigieg et al. 2025](https://arxiv.org/abs/2504.17549) showed that
+  premature black hole mergers in FABLE can precede completion of the host
+  merger by several Gyr and can alter the predicted massive-binary population.
+- [Chen et al. 2025](https://arxiv.org/abs/2512.16844) applied observational
+  selection functions to ASTRID and found that roughly 30--70 percent of the
+  selected dual AGNs coalesce within about 1 Gyr.
 
 The HR5 values lie within the broad range of these studies. The common
 luminosity and separation cuts allow a selection-level comparison. The missing
