@@ -17,7 +17,7 @@ that is present at output `i-1` and absent at output `i` is matched to a sink at
 `i`. The search radius starts at the nearest-survivor distance, increases by
 0.002 cMpc, and stops at 0.5 cMpc. Within each radius, the most massive survivor
 with at least twice the disappearing sink mass is selected. The assigned
-surviving SMBH is therefore an inferred companion rather than the partner
+surviving SMBH is therefore an assigned companion rather than the partner
 recorded for the merger of two sink particles. The catalog keeps `receiver_id`
 as the historical field name.
 
@@ -29,7 +29,7 @@ Every event is an interval. No single column silently mixes the two boundaries.
 |---|---:|---|
 | disappearing sink mass, position, velocity | `i-1` | last resolved state |
 | mass of the assigned surviving SMBH used for mass ratio and chirp mass | `i-1` | two-object mass estimate before disappearance |
-| identifier of the surviving SMBH | selected at `i` | inferred from the surviving population |
+| identifier of the surviving SMBH | selected at `i` | assigned from the surviving population |
 | mass of the surviving SMBH at the assigned output | `i` | post-disappearance diagnostic, not used in chirp mass |
 | binary-capture time | between `i-1` and `i` | interval-censored event |
 | assigned capture time and redshift | `i` | upper boundary of the interval |
@@ -55,7 +55,7 @@ mass factor of two because those conditions define the legacy selection. Of
 576,277 associations with finite last-resolved phase-space quantities, only 41
 have `v_relative <= v_escape`. The fraction is `7.1146e-5`. The median
 separation at the last common output is 4.614 pkpc, and the median relative
-speed is 218.2 km/s. Also, 6.54 percent of the inferred captures assign the
+speed is 218.2 km/s. Also, 6.54 percent of the possible binary captures assign the
 same surviving SMBH to at least one other disappearance in the same output.
 
 The locally available consecutive MkAGN outputs span 20 through 26. Only one
@@ -192,7 +192,7 @@ single-AGN pairs. The maximum absolute standardized mean
 difference decreases from 0.486 to 0.031. The corresponding binary-capture
 fractions are 0.749--0.753 and 0.683--0.695. Their difference is bounded by
 0.053--0.070. The output-296 population is right-censored at the selection time
-because no later HR5 output is present. These are inferred binary captures,
+because no later HR5 output is present. These are possible binary captures,
 not direct records of the partner or physical coalescences.
 
 Neutral-hydrogen columns are available along six cardinal sightlines at

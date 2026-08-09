@@ -466,7 +466,7 @@ def _plot_figure_2(
     snapshot_redshifts: np.ndarray,
     output: Path,
 ) -> None:
-    figure, axis = plt.subplots(figsize=(3.35, 4.05))
+    figure, axis = plt.subplots(figsize=(3.35, 3.15))
     for number, (color, marker) in enumerate(zip(SNAPSHOT_COLORS[:4], SNAPSHOT_MARKERS[:4])):
         selected = np.isfinite(mean[number]) & (mean[number] > 0.0) & (count[number] >= 5)
         lower = np.minimum(scatter[number, selected], 0.85 * mean[number, selected])

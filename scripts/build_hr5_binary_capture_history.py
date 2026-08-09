@@ -180,7 +180,7 @@ def build_history(
         previous_records = records
         print(
             f"Wrote output {int(output):05d} at z={snapshot_redshift:.5f} with "
-            f"{capture_count[history_index]:,} inferred captures",
+            f"{capture_count[history_index]:,} possible captures",
             flush=True,
         )
     sink_map.flush()

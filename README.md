@@ -157,7 +157,7 @@ two-member comparisons with interval and right censoring.
 
 The disappearing sinks are measured directly, but the assigned surviving SMBHs
 come from distance and mass criteria rather than direct records of the capture
-partners. The inferred binary captures are not physical SMBH coalescences. The event
+partners. The possible binary captures are not physical SMBH coalescences. The event
 definitions, validation of assigned companions, active-pair selection, and literature
 comparison are documented in
 [`docs/hr5_reproduction.md`](docs/hr5_reproduction.md).

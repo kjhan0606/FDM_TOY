@@ -45,10 +45,10 @@ def _plot_settings() -> None:
             "font.size": 10.0,
             "mathtext.fontset": "stix",
             "axes.linewidth": 0.8,
-            "axes.labelsize": 6.0,
-            "xtick.labelsize": 6.0,
-            "ytick.labelsize": 6.0,
-            "legend.fontsize": 10.0,
+            "axes.labelsize": 7.0,
+            "xtick.labelsize": 7.0,
+            "ytick.labelsize": 7.0,
+            "legend.fontsize": 7.0,
             "xtick.direction": "in",
             "ytick.direction": "in",
             "xtick.top": True,
@@ -60,13 +60,19 @@ def _plot_settings() -> None:
     )
 
 
-def _panel_label(axis: plt.Axes, label: str, x: float = 0.96, y: float = 0.94) -> None:
+def _panel_label(
+    axis: plt.Axes,
+    label: str,
+    x: float = 0.96,
+    y: float = 0.94,
+    horizontal_alignment: str = "right",
+) -> None:
     label_text = axis.text(
         x,
         y,
         label,
         transform=axis.transAxes,
-        ha="right",
+        ha=horizontal_alignment,
         va="top",
         color="black",
         fontweight="bold",
@@ -263,7 +269,7 @@ def _plot_validation(path: Path, data: dict[str, np.ndarray]) -> None:
     axes = axes.ravel()
     separation_edges = np.logspace(-1, 4, 46)
     for selected, color, line_style, label in (
-        (np.ones(data["sink_id"].size, dtype=bool), COLORS[0], "-", "all inferred captures"),
+        (np.ones(data["sink_id"].size, dtype=bool), COLORS[0], "-", "possible binary captures"),
         (data["chirp_mass_last_resolved_msun"] >= 1.0e6, COLORS[1], "--", r"$\mathcal{M}_{\rm c}\geq10^6\,M_\odot$"),
     ):
         axes[0].hist(
@@ -280,8 +286,17 @@ def _plot_validation(path: Path, data: dict[str, np.ndarray]) -> None:
     axes[0].set_yscale("log")
     axes[0].set_xlabel(r"separation at last common output [pkpc]")
     axes[0].set_ylabel(r"probability density")
-    axes[0].legend(frameon=False, loc="lower left", fontsize=5.0)
-    _panel_label(axes[0], "(a)")
+    axes[0].legend(
+        frameon=False,
+        loc="upper right",
+        bbox_to_anchor=(0.98, 1.0),
+        borderaxespad=0.0,
+        fontsize=7.0,
+        handlelength=1.0,
+        handletextpad=0.35,
+        labelspacing=0.25,
+    )
+    _panel_label(axes[0], "(a)", x=0.04, horizontal_alignment="left")
 
     ratio = data["speed_to_escape_ratio_last_resolved"]
     ratio = ratio[np.isfinite(ratio) & (ratio > 0.0)]
@@ -315,7 +330,7 @@ def _plot_validation(path: Path, data: dict[str, np.ndarray]) -> None:
     axes[2].set_yscale("log")
     axes[2].set_xlabel(r"distance used to assign companion [cMpc]")
     axes[2].set_ylabel(r"probability density")
-    axes[2].legend(frameon=False, loc="upper left", fontsize=5.0)
+    axes[2].legend(frameon=False, loc="upper left", fontsize=7.0)
     _panel_label(axes[2], "(c)")
 
     multiplicity = data["simultaneous_assignment_multiplicity"].astype(np.int64)
