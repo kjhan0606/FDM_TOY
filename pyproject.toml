@@ -18,6 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+figures = ["matplotlib>=3.8"]
 
 [project.scripts]
 fdm-smbh-delay = "fdm_smbh_delay.cli:main"
