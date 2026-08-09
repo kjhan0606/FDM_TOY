@@ -280,7 +280,7 @@ def _plot_validation(path: Path, data: dict[str, np.ndarray]) -> None:
     axes[0].set_yscale("log")
     axes[0].set_xlabel(r"separation at last common output [pkpc]")
     axes[0].set_ylabel(r"probability density")
-    axes[0].legend(frameon=False, loc="lower left")
+    axes[0].legend(frameon=False, loc="lower left", fontsize=5.0)
     _panel_label(axes[0], "(a)")
 
     ratio = data["speed_to_escape_ratio_last_resolved"]
@@ -315,7 +315,7 @@ def _plot_validation(path: Path, data: dict[str, np.ndarray]) -> None:
     axes[2].set_yscale("log")
     axes[2].set_xlabel(r"distance used to assign companion [cMpc]")
     axes[2].set_ylabel(r"probability density")
-    axes[2].legend(frameon=False, loc="upper left")
+    axes[2].legend(frameon=False, loc="upper left", fontsize=5.0)
     _panel_label(axes[2], "(c)")
 
     multiplicity = data["simultaneous_assignment_multiplicity"].astype(np.int64)

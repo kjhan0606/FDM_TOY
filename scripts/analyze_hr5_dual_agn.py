@@ -716,6 +716,9 @@ def _plot_precursors(
     axes = axes.ravel()
     log_edges = np.linspace(np.log10(0.5), np.log10(30.0), 9)
     center = 10.0 ** (0.5 * (log_edges[:-1] + log_edges[1:]))
+    projection_x: list[np.ndarray] = []
+    projection_lower: list[np.ndarray] = []
+    projection_upper: list[np.ndarray] = []
 
     curve_outputs = sorted({number for number, _ in capture_curves})
     for number, color, marker in zip(curve_outputs, COLORS, MARKERS):
@@ -733,6 +736,9 @@ def _plot_precursors(
                 rng,
             )
             visible = count >= 5
+            projection_x.append(center[visible])
+            projection_lower.append(lower[visible])
+            projection_upper.append(upper[visible])
             axes[0].errorbar(
                 center[visible],
                 mean[visible],
@@ -748,8 +754,23 @@ def _plot_precursors(
                 label=rf"$z={float(data[number]['redshift']):.2f}$, {velocity_limit}",
             )
     axes[0].set_xscale("log")
-    axes[0].set_xlim(0.5, 30.0)
-    axes[0].set_ylim(0.0, 1.05)
+    visible_projection_x = np.concatenate(projection_x)
+    visible_projection_lower = np.concatenate(projection_lower)
+    visible_projection_upper = np.concatenate(projection_upper)
+    log_x_min = np.log10(np.min(visible_projection_x))
+    log_x_max = np.log10(np.max(visible_projection_x))
+    log_x_padding = 0.08 * (log_x_max - log_x_min)
+    axes[0].set_xlim(
+        10.0 ** (log_x_min - log_x_padding),
+        10.0 ** (log_x_max + log_x_padding),
+    )
+    probability_min = float(np.min(visible_projection_lower))
+    probability_max = float(np.max(visible_projection_upper))
+    probability_padding = 0.08 * (probability_max - probability_min)
+    axes[0].set_ylim(
+        max(0.0, probability_min - probability_padding),
+        min(1.01, probability_max + probability_padding),
+    )
     axes[0].set_xlabel(r"$r_{\rm 3D}$ [pkpc]")
     axes[0].set_ylabel(r"probability of passing projected selection")
     axes[0].legend(frameon=False, loc="lower right", handlelength=1.5)
@@ -757,6 +778,8 @@ def _plot_precursors(
 
     ratio_edges = np.linspace(-3.0, 0.0, 13)
     ratio_center = 0.5 * (ratio_edges[:-1] + ratio_edges[1:])
+    visible_ratio_x: list[np.ndarray] = []
+    visible_ratio_density: list[np.ndarray] = []
     for number, color, marker in zip(curve_outputs, COLORS, MARKERS):
         pairs = data[number]["mass_selection"]["m6"]["pairs"]
         mass_ratio = pairs["mass_2_msun"] / pairs["mass_1_msun"]
@@ -775,6 +798,8 @@ def _plot_precursors(
             count, _ = np.histogram(np.log10(mass_ratio[selected]), bins=ratio_edges)
             density = count / (np.sum(count) * np.diff(ratio_edges))
             visible = count > 0
+            visible_ratio_x.append(ratio_center[visible])
+            visible_ratio_density.append(density[visible])
             axes[1].plot(
                 ratio_center[visible],
                 density[visible],
@@ -789,9 +814,16 @@ def _plot_precursors(
             )
     axes[1].set_xlabel(r"$\log_{10}q_{\rm BH}$")
     axes[1].set_ylabel(r"$p(\log_{10}q_{\rm BH})$")
+    ratio_x = np.concatenate(visible_ratio_x)
+    ratio_density = np.concatenate(visible_ratio_density)
+    ratio_padding = 0.04 * (np.max(ratio_x) - np.min(ratio_x))
+    axes[1].set_xlim(np.min(ratio_x) - ratio_padding, np.max(ratio_x) + ratio_padding)
+    axes[1].set_ylim(0.0, 1.06 * np.max(ratio_density))
     axes[1].legend(frameon=False, loc="upper left", handlelength=1.5)
     _panel_label(axes[1], "(b)", y=0.08)
 
+    capture_window_upper = 1.25
+    visible_capture_values: list[np.ndarray] = []
     for number, color in zip(curve_outputs, COLORS):
         for population, line_style, population_label in (
             ("mass_limited_dual", "-", "dual AGN"),
@@ -799,6 +831,15 @@ def _plot_precursors(
         ):
             curve = capture_curves[(number, population)]
             time = curve["time_gyr"]
+            in_window = time <= capture_window_upper
+            visible_capture_values.extend(
+                [
+                    curve["lower_q16"][in_window],
+                    curve["upper_q84"][in_window],
+                    curve["certain"][in_window],
+                    curve["possible"][in_window],
+                ]
+            )
             axes[2].fill_between(
                 time,
                 curve["lower_q16"],
@@ -823,8 +864,15 @@ def _plot_precursors(
                 ls=line_style,
                 label=rf"$z={float(data[number]['redshift']):.2f}$ {population_label}",
             )
-    axes[2].set_xlim(0.0, 3.0)
-    axes[2].set_ylim(0.0, 1.05)
+    capture_values = np.concatenate(visible_capture_values)
+    capture_min = float(np.min(capture_values))
+    capture_max = float(np.max(capture_values))
+    capture_padding = 0.06 * (capture_max - capture_min)
+    axes[2].set_xlim(0.0, capture_window_upper)
+    axes[2].set_ylim(
+        max(0.0, capture_min - capture_padding),
+        min(1.0, capture_max + capture_padding),
+    )
     axes[2].set_xlabel(r"time after selection of active pair [Gyr]")
     axes[2].set_ylabel(r"cumulative binary-capture fraction")
     axes[2].legend(frameon=False, loc="lower right")
@@ -891,6 +939,13 @@ def _plot_precursors(
         label="midpoint and 68% interval",
     )
     axes[3].axhline(0.0, color="black", lw=0.8, ls=":")
+    redshift_padding = 0.08 * (np.max(matched_redshift) - np.min(matched_redshift))
+    axes[3].set_xlim(
+        np.min(matched_redshift) - redshift_padding,
+        np.max(matched_redshift) + redshift_padding,
+    )
+    matched_upper = float(np.max(np.r_[censoring_upper, bootstrap_upper]))
+    axes[3].set_ylim(0.0, 1.05 * matched_upper)
     axes[3].set_xlabel(r"$z$")
     axes[3].set_ylabel(r"matched $f_{\rm cap,dual}-f_{\rm cap,single}$")
     axes[3].legend(
