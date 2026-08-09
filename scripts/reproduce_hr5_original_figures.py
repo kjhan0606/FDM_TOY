@@ -22,6 +22,7 @@ from fdm_smbh_delay.hr5 import (
     HEADER_DTYPE,
     SINK_DTYPE,
     binned_source_rate,
+    bootstrap_binned_source_rate,
     bootstrap_redshift_rate,
     cumulative_active_sources,
     delayed_redshift,
@@ -49,43 +50,51 @@ GROWTH_MASS_BINS = np.array(
 TRACK_MASS_BINS = np.array([[1.0e4, 1.0e5], [1.0e5, 1.0e6], [1.0e6, 1.0e7]])
 GROWTH_LOG_RATE_EDGES = np.linspace(-14.0, -7.0, 141)
 
-CYAN = "#00BFC4"
-MAGENTA = "#E729E7"
-YELLOW = "#E6AB02"
-GREEN = "#1B9E77"
-BLUE = "#315EFB"
-RED = "#E41A1C"
-GRAY = "#555555"
-SNAPSHOT_COLORS = (CYAN, MAGENTA, YELLOW, GREEN, BLUE, RED)
-SNAPSHOT_MARKERS = ("o", "s", "D", "^", "h", "p")
-THRESHOLD_COLORS = (CYAN, YELLOW, GREEN)
-THRESHOLD_MARKERS = ("o", "s", "^")
+BLUE = "#0072B2"
+VERMILLION = "#D55E00"
+GREEN = "#009E73"
+ORANGE = "#E69F00"
+PURPLE = "#CC79A7"
+SKY_BLUE = "#56B4E9"
+GRAY = "#4D4D4D"
+SNAPSHOT_COLORS = (BLUE, VERMILLION, GREEN, ORANGE, PURPLE, SKY_BLUE)
+SNAPSHOT_MARKERS = ("o", "s", "D", "^", "v", "P")
+THRESHOLD_COLORS = (BLUE, VERMILLION, GREEN)
+THRESHOLD_MARKERS = ("o", "s", "D")
+THRESHOLD_LINESTYLES = ("-", "--", "-.")
+DELAY_COLORS = (BLUE, VERMILLION, GREEN, PURPLE, ORANGE)
+DELAY_MARKERS = ("o", "s", "D", "^", "v")
 
 
 def _style() -> None:
     plt.rcParams.update(
         {
             "font.family": "serif",
-            "font.size": 8.0,
+            "font.size": 10.0,
             "mathtext.fontset": "stix",
             "axes.linewidth": 0.8,
+            "axes.labelsize": 10.0,
+            "xtick.labelsize": 10.0,
+            "ytick.labelsize": 10.0,
+            "legend.fontsize": 10.0,
             "xtick.direction": "in",
             "ytick.direction": "in",
             "xtick.top": True,
             "ytick.right": True,
+            "xtick.minor.visible": True,
+            "ytick.minor.visible": True,
             "pdf.fonttype": 42,
             "ps.fonttype": 42,
         }
     )
 
 
-def _save(figure: plt.Figure, path: Path, title: str) -> None:
+def _save(figure: plt.Figure, path: Path, _title: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(
         path,
         bbox_inches="tight",
         pad_inches=0.035,
-        metadata={"Title": title, "Creator": "HR5 reproduction analysis"},
     )
     plt.close(figure)
 
@@ -411,14 +420,16 @@ def _plot_figure_1(history: dict[str, np.ndarray], output: Path, volume_cmpc3: f
         mean,
         xerr=half_width,
         yerr=scatter,
-        fmt="o",
-        ms=4.0,
-        mfc=MAGENTA,
+        fmt="D",
+        ms=4.2,
+        color=BLUE,
+        mfc="white",
         mec=GRAY,
-        mew=0.6,
-        ecolor="0.55",
-        elinewidth=0.7,
-        capsize=0,
+        mew=0.7,
+        ecolor=BLUE,
+        elinewidth=0.65,
+        capsize=1.3,
+        capthick=0.6,
     )
     axis.set_yscale("log")
     axis.set_xlim(0.0, 11.0)
@@ -447,13 +458,14 @@ def _plot_figure_2(
             yerr=np.vstack([lower, scatter[number, selected]]),
             fmt=marker,
             color=color,
-            mfc=color,
-            mec="0.3",
-            mew=0.6,
+            mfc="white",
+            mec=color,
+            mew=0.75,
             ms=4.8,
             ecolor=color,
             elinewidth=0.7,
-            capsize=0,
+            capsize=1.3,
+            capthick=0.6,
             label=rf"$z={snapshot_redshifts[number]:.3g}$",
         )
     axis.set_xscale("log")
@@ -462,7 +474,7 @@ def _plot_figure_2(
     axis.set_ylim(3.0e-4, 1.0)
     axis.set_xlabel(r"$M_{\rm BH}$ [$M_\odot$]")
     axis.set_ylabel(r"$M_{\rm merge}/M_{\rm BH}$")
-    axis.legend(frameon=False, loc="lower right", fontsize=7.0)
+    axis.legend(frameon=False, loc="lower right", handletextpad=0.4)
     _save(figure, output, "HR5 merger mass fraction")
 
 
@@ -485,12 +497,13 @@ def _plot_figure_3(
             fmt=marker,
             ms=3.2,
             color=color,
-            mfc=color,
-            mec="0.25",
-            mew=0.45,
-            ecolor="0.5",
+            mfc="white",
+            mec=color,
+            mew=0.65,
+            ecolor=color,
             elinewidth=0.55,
-            capsize=0,
+            capsize=1.0,
+            capthick=0.5,
             label=rf"$z={snapshot_redshifts[number]:.3g}$",
         )
     axis.set_xscale("log")
@@ -499,7 +512,14 @@ def _plot_figure_3(
     axis.set_ylim(1.0e-7, 3.0e-2)
     axis.set_xlabel(r"$M_{\rm BH}$ [$M_\odot$]")
     axis.set_ylabel(r"$\Phi_{\rm BH}$ [cMpc$^{-3}$ dex$^{-1}$]")
-    axis.legend(frameon=False, loc="upper right", fontsize=6.5, ncol=2)
+    axis.legend(
+        frameon=False,
+        loc="upper right",
+        ncol=2,
+        columnspacing=0.7,
+        handletextpad=0.3,
+        borderaxespad=0.3,
+    )
     _save(figure, output, "HR5 SMBH mass functions")
 
 
@@ -508,7 +528,7 @@ def _plot_figure_4(cache: dict[str, np.ndarray], output: Path) -> None:
     display_redshifts = np.array([0.625, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 7.0, 8.0])
     display_index = np.array([np.argmin(np.abs(redshift - z)) for z in display_redshifts])
     z3_index = int(np.argmin(np.abs(redshift - 3.0)))
-    colors = (YELLOW, MAGENTA, CYAN)
+    colors = THRESHOLD_COLORS
     figure, axis = plt.subplots(figsize=(3.35, 3.35))
     for sample_number, color in enumerate(colors):
         mass = cache[f"track_mass_{sample_number}"].astype(np.float64)
@@ -522,7 +542,7 @@ def _plot_figure_4(cache: dict[str, np.ndarray], output: Path) -> None:
             quantile[1],
             quantile[3],
             color=color,
-            alpha=0.62,
+            alpha=0.20,
             edgecolor=color,
             linewidth=0.6,
         )
@@ -530,19 +550,27 @@ def _plot_figure_4(cache: dict[str, np.ndarray], output: Path) -> None:
         axis.plot(
             display_redshifts,
             quantile[2],
-            "s",
+            marker=THRESHOLD_MARKERS[sample_number],
+            ls="none",
             ms=3.1,
             color=color,
-            mec="0.35",
-            mew=0.4,
-            label=rf"$10^{{{int(np.log10(lower))}}}\leq M_{{\rm BH}}(z=3)<10^{{{int(np.log10(upper))}}}\,M_\odot$",
+            mfc="white",
+            mec=color,
+            mew=0.7,
+            label=rf"$10^{{{int(np.log10(lower))}}}$--$10^{{{int(np.log10(upper))}}}$",
         )
     axis.set_yscale("log")
     axis.set_xlim(0.45, 8.3)
     axis.set_ylim(1.0e-2, 2.0e2)
     axis.set_xlabel("redshift")
     axis.set_ylabel(r"$M_{\rm BH}(z)/M_{\rm BH}(z=3)$")
-    axis.legend(frameon=False, fontsize=5.7, loc="upper right")
+    axis.legend(
+        title=r"$M_{\rm BH}(z=3)/M_\odot$",
+        frameon=False,
+        loc="upper right",
+        handletextpad=0.4,
+        borderaxespad=0.3,
+    )
     _save(figure, output, "HR5 SMBH mass growth from redshift three")
 
 
@@ -555,9 +583,19 @@ def _plot_figure_5(cache: dict[str, np.ndarray], output: Path) -> None:
     )
     quantile = 10.0**quantile_log
     z_center = 0.5 * (GROWTH_Z_EDGES[:-1] + GROWTH_Z_EDGES[1:])
-    colors = (YELLOW, MAGENTA, CYAN, "#30D5B2")
+    colors = (BLUE, VERMILLION, GREEN, PURPLE)
+    line_styles = ("-", "--", "-.", ":")
+    markers = ("o", "s", "D", "^")
+    mass_labels = (
+        r"$4.0\!-\!4.5$",
+        r"$5.0\!-\!5.5$",
+        r"$6.0\!-\!6.5$",
+        r"$6.5\!-\!7.0$",
+    )
     figure, axis = plt.subplots(figsize=(3.35, 3.35))
-    for sample_number, color in enumerate(colors):
+    for sample_number, (color, line_style, marker, mass_label) in enumerate(
+        zip(colors, line_styles, markers, mass_labels)
+    ):
         valid = np.isfinite(quantile[:, sample_number, 2])
         axis.fill_between(
             z_center[valid],
@@ -565,48 +603,60 @@ def _plot_figure_5(cache: dict[str, np.ndarray], output: Path) -> None:
             quantile[valid, sample_number, 4],
             facecolor="none",
             edgecolor=color,
-            hatch="////" if sample_number == 0 else None,
-            linewidth=0.45,
-            alpha=0.7,
+            linewidth=0.55,
+            alpha=0.55,
         )
         axis.fill_between(
             z_center[valid],
             quantile[valid, sample_number, 1],
             quantile[valid, sample_number, 3],
             color=color,
-            alpha=0.33,
+            alpha=0.16,
             linewidth=0.0,
         )
         axis.plot(
             z_center[valid],
             quantile[valid, sample_number, 2],
-            marker="o" if sample_number == 2 else "s",
+            marker=marker,
             ms=3.0,
-            lw=0.8,
+            lw=0.9,
+            ls=line_style,
             color=color,
-            mec="0.3",
-            mew=0.4,
+            mfc="white",
+            mec=color,
+            mew=0.65,
         )
     handles = []
-    for sample_number, color in enumerate(colors):
-        lower, upper = GROWTH_MASS_BINS[sample_number]
+    for color, line_style, marker, mass_label in zip(
+        colors, line_styles, markers, mass_labels
+    ):
         handles.append(
             Line2D(
                 [],
                 [],
                 color=color,
-                marker="s",
+                marker=marker,
+                ls=line_style,
+                mfc="white",
+                mec=color,
                 ms=4,
-                lw=1.5,
-                label=rf"${lower:.1g}\leq M_{{\rm BH}}/M_\odot<{upper:.1g}$",
+                lw=1.0,
+                label=mass_label,
             )
         )
     axis.set_yscale("log")
     axis.set_xlim(0.55, 8.0)
-    axis.set_ylim(3.0e-14, 3.0e-8)
+    axis.set_ylim(3.0e-14, 1.0e-6)
     axis.set_xlabel("redshift")
     axis.set_ylabel(r"$d(\delta M)/dt$ [yr$^{-1}$]")
-    axis.legend(handles=handles, frameon=False, fontsize=5.5, loc="lower right")
+    axis.legend(
+        handles=handles,
+        title=r"$\log_{10}(M_{\rm BH}/M_\odot)$",
+        frameon=False,
+        loc="upper left",
+        handletextpad=0.4,
+        borderaxespad=0.3,
+    )
     _save(figure, output, "HR5 SMBH fractional mass growth rate")
 
 
@@ -616,7 +666,8 @@ def _fixed_delay_statistics(
     cosmology: FlatLambdaCDM,
     volume_cmpc3: float,
     fit_bootstrap_realizations: int,
-    rng: np.random.Generator,
+    fit_rng: np.random.Generator,
+    rate_rng: np.random.Generator,
 ) -> tuple[np.ndarray, np.ndarray, dict[float, dict[float, dict[str, object]]]]:
     output_to_index = {
         int(output): int(index) for index, output in enumerate(history["output_number"])
@@ -647,7 +698,13 @@ def _fixed_delay_statistics(
                 count,
                 exposure_cmpc3_gyr,
                 fit_bootstrap_realizations,
-                rng,
+                fit_rng,
+            )
+            rate_bootstrap_quantiles = bootstrap_binned_source_rate(
+                count,
+                exposure_cmpc3_gyr,
+                fit_bootstrap_realizations,
+                rate_rng,
             )
             if fit_bootstrap_samples.size:
                 fit_bootstrap_quantiles = np.quantile(
@@ -663,6 +720,8 @@ def _fixed_delay_statistics(
                 "fit_bootstrap_quantiles": fit_bootstrap_quantiles,
                 "fit_bootstrap_success_count": int(fit_bootstrap_samples.shape[0]),
                 "fit_bootstrap_realization_count": fit_bootstrap_realizations,
+                "rate_bootstrap_quantiles": rate_bootstrap_quantiles,
+                "rate_bootstrap_realization_count": fit_bootstrap_realizations,
                 "n_event": int(np.count_nonzero(selected)),
                 "n_censored": int(np.count_nonzero(valid_mass & censored & (events["chirp_mass"] >= threshold))),
             }
@@ -679,24 +738,32 @@ def _plot_figure_6(
     for threshold, color, marker in zip((1.0e4, 1.0e5, 1.0e6), THRESHOLD_COLORS, THRESHOLD_MARKERS):
         data = statistics[0.5][threshold]
         selected = np.asarray(data["count"]) > 0
+        rate = np.asarray(data["rate"])
+        rate_quantiles = np.asarray(data["rate_bootstrap_quantiles"])
         axis.errorbar(
             redshift_center[selected],
-            np.asarray(data["rate"])[selected] / 1.0e9,
+            rate[selected] / 1.0e9,
             xerr=np.vstack(
                 [redshift_center[selected] - redshift_edges[:-1][selected],
                  redshift_edges[1:][selected] - redshift_center[selected]]
             ),
-            yerr=np.asarray(data["error"])[selected] / 1.0e9,
+            yerr=np.vstack(
+                (
+                    rate[selected] - rate_quantiles[0, selected],
+                    rate_quantiles[2, selected] - rate[selected],
+                )
+            ) / 1.0e9,
             fmt=marker,
             ms=4.2,
             color=color,
-            mfc=color,
-            mec="0.25",
-            mew=0.6,
-            ecolor="0.45",
+            mfc="white",
+            mec=color,
+            mew=0.7,
+            ecolor=color,
             elinewidth=0.65,
-            capsize=0,
-            label=rf"$\mathcal{{M}}_{{\rm c}}\geq10^{{{int(np.log10(threshold))}}}\,M_\odot$",
+            capsize=1.3,
+            capthick=0.6,
+            label=rf"$10^{{{int(np.log10(threshold))}}}$",
         )
     axis.text(0.08, 0.92, r"$\Delta t_{\rm ref}=0.5\,$Gyr", transform=axis.transAxes)
     axis.set_xscale("log")
@@ -705,7 +772,13 @@ def _plot_figure_6(
     axis.set_ylim(3.0e-16, 5.0e-11)
     axis.set_xlabel("reference-event redshift")
     axis.set_ylabel(r"$\Phi$ [cMpc$^{-3}$ yr$^{-1}$]")
-    axis.legend(frameon=False, fontsize=6.1, loc="lower left")
+    axis.legend(
+        title=r"$\mathcal{M}_{\rm c}/M_\odot\geq$",
+        frameon=False,
+        loc="lower left",
+        handletextpad=0.4,
+        borderaxespad=0.3,
+    )
     _save(figure, output, "HR5 fixed-reference-delay event rate")
 
 
@@ -720,23 +793,38 @@ def _plot_rate_grid(
     figure, axes = plt.subplots(4, 1, figsize=(3.35, 5.35), sharex=True, gridspec_kw={"hspace": 0.04})
     fit_redshift = np.geomspace(0.16, 10.5, 500)
     for axis, delay in zip(axes, delays):
-        for threshold, color, marker in zip((1.0e4, 1.0e5, 1.0e6), THRESHOLD_COLORS, THRESHOLD_MARKERS):
+        for threshold, color, marker, line_style in zip(
+            (1.0e4, 1.0e5, 1.0e6),
+            THRESHOLD_COLORS,
+            THRESHOLD_MARKERS,
+            THRESHOLD_LINESTYLES,
+        ):
             data = statistics[delay][threshold]
             count = np.asarray(data["count"])
             selected = count > 0
+            rate = np.asarray(data["rate"])
+            rate_quantiles = np.asarray(data["rate_bootstrap_quantiles"])
+            rate_lower = rate_quantiles[0]
+            rate_upper = rate_quantiles[2]
             axis.errorbar(
                 redshift_center[selected],
-                np.asarray(data["rate"])[selected] / 1.0e9,
-                yerr=np.asarray(data["error"])[selected] / 1.0e9,
+                rate[selected] / 1.0e9,
+                yerr=np.vstack(
+                    (
+                        rate[selected] - rate_lower[selected],
+                        rate_upper[selected] - rate[selected],
+                    )
+                ) / 1.0e9,
                 fmt=marker,
                 color=color,
                 ms=3.4,
-                mfc=color,
-                mec="0.25",
-                mew=0.45,
-                ecolor="0.5",
-                elinewidth=0.5,
-                capsize=0,
+                mfc="white",
+                mec=color,
+                mew=0.7,
+                ecolor=color,
+                elinewidth=0.6,
+                capsize=1.2,
+                capthick=0.6,
             )
             fit = data["fit"]
             if fit.success:
@@ -745,8 +833,9 @@ def _plot_rate_grid(
                     redshift_rate_model(
                         fit_redshift, fit.phi_star, fit.z_star, fit.alpha, fit.beta
                     ) / 1.0e9,
-                    color=MAGENTA,
-                    lw=0.75,
+                    color=color,
+                    ls=line_style,
+                    lw=1.0,
                 )
         axis.text(0.08, 0.83, rf"$\Delta t_{{\rm ref}}={delay:g}\,$Gyr", transform=axis.transAxes)
         axis.set_xscale("log")
@@ -756,11 +845,32 @@ def _plot_rate_grid(
     axes[1].set_ylabel(r"$\Phi$ [cMpc$^{-3}$ yr$^{-1}$]")
     axes[-1].set_xlabel("reference-event redshift")
     legend = [
-        Line2D([], [], color=color, marker=marker, lw=0.0, ms=4.0,
-               label=rf"$\mathcal{{M}}_{{\rm c}}\geq10^{{{power}}}\,M_\odot$")
-        for power, color, marker in zip((4, 5, 6), THRESHOLD_COLORS, THRESHOLD_MARKERS)
+        Line2D(
+            [],
+            [],
+            color=color,
+            marker=marker,
+            ls=line_style,
+            lw=1.0,
+            ms=4.0,
+            mfc="white",
+            mec=color,
+            label=rf"$10^{{{power}}}$",
+        )
+        for power, color, marker, line_style in zip(
+            (4, 5, 6), THRESHOLD_COLORS, THRESHOLD_MARKERS, THRESHOLD_LINESTYLES
+        )
     ]
-    axes[-1].legend(handles=legend, frameon=False, fontsize=5.3, loc="lower left")
+    axes[-1].legend(
+        handles=legend,
+        title=r"$\mathcal{M}_{\rm c}/M_\odot\geq$",
+        frameon=False,
+        loc="lower left",
+        ncol=3,
+        columnspacing=0.7,
+        handletextpad=0.3,
+        borderaxespad=0.3,
+    )
     _save(figure, output, title)
 
 
@@ -773,7 +883,9 @@ def _plot_fit_parameters(
     thresholds = np.array([1.0e4, 1.0e5, 1.0e6, 1.0e7, 1.0e8])
     figure, axes = plt.subplots(4, 1, figsize=(3.35, 5.05), sharex=True, gridspec_kw={"hspace": 0.04})
     line_styles = ("-", ":", "--", "-.", (0, (5, 2, 1, 2)))
-    for delay, line_style in zip(delays, line_styles):
+    for delay, line_style, color, marker in zip(
+        delays, line_styles, DELAY_COLORS, DELAY_MARKERS
+    ):
         fits = [statistics[delay][threshold]["fit"] for threshold in thresholds]
         direct_parameters = np.asarray(
             [[fit.phi_star, fit.z_star, fit.alpha, fit.beta] for fit in fits]
@@ -795,7 +907,7 @@ def _plot_fit_parameters(
             axis.plot(
                 thresholds,
                 direct,
-                color="0.2",
+                color=color,
                 lw=0.9,
                 ls=line_style,
                 label=rf"$\Delta t_{{\rm ref}}={delay:g}\,$Gyr",
@@ -804,29 +916,56 @@ def _plot_fit_parameters(
                 thresholds,
                 center,
                 yerr=np.vstack((center - lower, upper - center)),
-                fmt="o",
+                fmt=marker,
                 ms=2.3,
                 mfc="white",
-                mec="0.2",
-                mew=0.55,
-                color="0.2",
-                ecolor="0.35",
+                mec=color,
+                mew=0.65,
+                color=color,
+                ecolor=color,
                 elinewidth=0.55,
                 capsize=1.4,
                 capthick=0.55,
                 ls="none",
             )
     axes[0].set_ylabel(r"$\alpha$")
+    axes[0].set_ylim(-8.0, 4.5)
     axes[1].set_ylabel(r"$z_*$")
     axes[2].set_ylabel(r"$\beta$")
     axes[3].set_ylabel(r"$\phi_*$")
     axes[3].set_yscale("log")
+    axes[3].set_ylim(1.0e-15, 5.0e-11)
     for axis in axes:
         axis.set_xscale("log")
         axis.set_xlim(8.0e3, 1.2e8)
         axis.margins(y=0.08)
     axes[-1].set_xlabel(r"chirp-mass threshold $\mathcal{M}_{\rm c}$ [$M_\odot$]")
-    axes[-1].legend(frameon=False, fontsize=5.0, loc="lower left")
+    legend_handles = [
+        Line2D(
+            [],
+            [],
+            color=color,
+            ls=line_style,
+            marker=marker,
+            mfc="white",
+            mec=color,
+            label=rf"${delay:g}$",
+        )
+        for delay, line_style, color, marker in zip(
+            delays, line_styles, DELAY_COLORS, DELAY_MARKERS
+        )
+    ]
+    axes[0].legend(
+        handles=legend_handles,
+        title=r"$\Delta t_{\rm ref}$ [Gyr]",
+        frameon=False,
+        loc="lower left",
+        ncol=3,
+        columnspacing=0.7,
+        handlelength=1.3,
+        handletextpad=0.3,
+        borderaxespad=0.3,
+    )
     _save(figure, output, title)
 
 
@@ -868,9 +1007,10 @@ def _plot_cumulative_grid(
     figure, axes = plt.subplots(4, 1, figsize=(3.35, 5.35), sharex=True, gridspec_kw={"hspace": 0.04})
     redshift = np.r_[0.0, np.geomspace(1.0e-3, 10.0, 1800)]
     thresholds = (1.0e4, 1.0e5, 1.0e6, 1.0e7)
-    colors = (MAGENTA, BLUE, GREEN, RED)
+    colors = (BLUE, VERMILLION, GREEN, PURPLE)
+    line_styles = ("-", "--", "-.", ":")
     for axis, delay in zip(axes, delays):
-        for threshold, color in zip(thresholds, colors):
+        for threshold, color, line_style in zip(thresholds, colors, line_styles):
             fit = statistics[delay][threshold]["fit"]
             if not fit.success:
                 continue
@@ -884,7 +1024,7 @@ def _plot_cumulative_grid(
                 cosmology,
                 solid_angle_sr=4.0 * np.pi,
             )
-            axis.plot(redshift, cumulative, color=color, lw=1.0)
+            axis.plot(redshift, cumulative, color=color, ls=line_style, lw=1.0)
         axis.text(0.08, 0.82, rf"$\Delta t_{{\rm ref}}={delay:g}\,$Gyr", transform=axis.transAxes)
         axis.set_xscale("log")
         axis.set_yscale("log")
@@ -896,16 +1036,31 @@ def _plot_cumulative_grid(
         r"all-sky, $\Omega=4\pi\,$sr",
         transform=axes[0].transAxes,
         ha="right",
-        fontsize=6.0,
+        fontsize=10.0,
     )
     axes[1].set_ylabel(r"$N_{\rm active}(<z)$")
     axes[-1].set_xlabel(r"maximum survey redshift $z$")
     handles = [
-        Line2D([], [], color=color, lw=1.2,
-               label=rf"$\mathcal{{M}}_{{\rm c}}\geq10^{{{power}}}\,M_\odot$")
-        for power, color in zip((4, 5, 6, 7), colors)
+        Line2D(
+            [],
+            [],
+            color=color,
+            ls=line_style,
+            lw=1.2,
+            label=rf"$10^{{{power}}}$",
+        )
+        for power, color, line_style in zip((4, 5, 6, 7), colors, line_styles)
     ]
-    axes[-1].legend(handles=handles, frameon=False, fontsize=5.0, loc="lower right")
+    axes[-1].legend(
+        handles=handles,
+        title=r"$\mathcal{M}_{\rm c}/M_\odot\geq$",
+        frameon=False,
+        loc="lower right",
+        ncol=2,
+        columnspacing=0.7,
+        handletextpad=0.3,
+        borderaxespad=0.3,
+    )
     _save(figure, output, title)
 
 
@@ -1119,6 +1274,52 @@ def _write_fit_table(
                 )
 
 
+def _write_rate_bootstrap_table(
+    path: Path,
+    redshift_edges: np.ndarray,
+    redshift_center: np.ndarray,
+    statistics: dict[float, dict[float, dict[str, object]]],
+) -> None:
+    with path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(
+            (
+                "delay_gyr",
+                "chirp_mass_threshold_msun",
+                "redshift_lower",
+                "redshift_center",
+                "redshift_upper",
+                "event_count",
+                "rate_cmpc3_gyr",
+                "rate_q16_cmpc3_gyr",
+                "rate_q50_cmpc3_gyr",
+                "rate_q84_cmpc3_gyr",
+                "bootstrap_realization_count",
+            )
+        )
+        for delay, threshold_data in statistics.items():
+            for threshold, data in threshold_data.items():
+                count = np.asarray(data["count"])
+                rate = np.asarray(data["rate"])
+                quantiles = np.asarray(data["rate_bootstrap_quantiles"])
+                for bin_number in range(redshift_center.size):
+                    writer.writerow(
+                        (
+                            delay,
+                            threshold,
+                            redshift_edges[bin_number],
+                            redshift_center[bin_number],
+                            redshift_edges[bin_number + 1],
+                            count[bin_number],
+                            rate[bin_number],
+                            quantiles[0, bin_number],
+                            quantiles[1, bin_number],
+                            quantiles[2, bin_number],
+                            data["rate_bootstrap_realization_count"],
+                        )
+                    )
+
+
 def reproduce(
     tree: Path,
     history_path: Path,
@@ -1160,6 +1361,7 @@ def reproduce(
         volume_cmpc3,
         fit_bootstrap_realizations,
         np.random.default_rng(seed + 10000),
+        np.random.default_rng(seed + 20000),
     )
 
     _plot_figure_1(history, output_dir / "hr5_fig01_seed_birth_rate.pdf", volume_cmpc3)
@@ -1231,6 +1433,12 @@ def reproduce(
         "HR5 active all-sky population for long fixed delays",
     )
     _write_fit_table(output_dir / "hr5_fixed_delay_fit_parameters.csv", delay_statistics)
+    _write_rate_bootstrap_table(
+        output_dir / "hr5_fixed_delay_rate_bootstrap.csv",
+        redshift_edges,
+        redshift_center,
+        delay_statistics,
+    )
     _write_reproduction_validation(
         output_dir / "hr5_original_figure_validation.json",
         history,
@@ -1252,6 +1460,12 @@ def reproduce(
             "realizations": fit_bootstrap_realizations,
             "central_interval": [0.16, 0.84],
             "seed": seed + 10000,
+        },
+        "redshift_bin_rate_bootstrap": {
+            "method": "independent Poisson resampling of redshift-bin counts",
+            "realizations": fit_bootstrap_realizations,
+            "central_interval": [0.16, 0.84],
+            "seed": seed + 20000,
         },
         "history_sampling_fraction": 0.02,
         "fixed_reference_delay_gyr": list(delay_statistics),

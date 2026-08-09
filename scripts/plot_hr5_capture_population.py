@@ -17,6 +17,7 @@ from matplotlib.colors import LogNorm
 
 
 COLORS = ("#000000", "#0072B2", "#D55E00", "#009E73")
+LINE_STYLES = ("-", "--", "-.", ":")
 
 
 def _read_history(path: Path) -> dict[str, np.ndarray]:
@@ -75,8 +76,18 @@ def make_figure(
     plt.rcParams.update(
         {
             "font.family": "serif",
-            "font.size": 8.0,
+            "font.size": 10.0,
             "axes.linewidth": 0.8,
+            "axes.labelsize": 10.0,
+            "xtick.labelsize": 10.0,
+            "ytick.labelsize": 10.0,
+            "legend.fontsize": 10.0,
+            "xtick.direction": "in",
+            "ytick.direction": "in",
+            "xtick.top": True,
+            "ytick.right": True,
+            "xtick.minor.visible": True,
+            "ytick.minor.visible": True,
             "pdf.fonttype": 42,
             "ps.fonttype": 42,
         }
@@ -90,15 +101,16 @@ def make_figure(
     )
 
     thresholds = (1.0e4, 1.0e5, 1.0e6, 1.0e7)
-    for threshold, color in zip(thresholds, COLORS):
+    for threshold, color, line_style in zip(thresholds, COLORS, LINE_STYLES):
         counts = np.bincount(event_index[chirp_mass >= threshold], minlength=redshift.size)
         rate = counts / (volume_cmpc3 * interval_gyr)
         axes[0].plot(
             capture_redshift_coordinate[1:],
             rate[1:],
             color=color,
+            ls=line_style,
             lw=1.15,
-            label=rf"$\mathcal{{M}}_\mathrm{{c}}\geq 10^{{{int(np.log10(threshold))}}}\,M_\odot$",
+            label=rf"$10^{{{int(np.log10(threshold))}}}$",
         )
     axes[0].set_yscale("log")
     axes[0].set_xlim(*coordinate_limits)
@@ -106,11 +118,12 @@ def make_figure(
     axes[0].set_xlabel(r"$\log_{10}(1+z_{\rm cap})$")
     axes[0].set_ylabel(r"$\mathcal{R}_\mathrm{cap}$ [cMpc$^{-3}$ Gyr$^{-1}$]")
     axes[0].legend(
+        title=r"$\mathcal{M}_{\rm c}/M_\odot\geq$",
         frameon=False,
-        fontsize=5.8,
         handlelength=1.4,
-        labelspacing=0.25,
-        columnspacing=0.8,
+        labelspacing=0.2,
+        columnspacing=0.7,
+        handletextpad=0.3,
         ncol=2,
         loc="upper left",
     )
@@ -150,8 +163,8 @@ def make_figure(
     axes[1].set_ylabel(r"$\log_{10}(\mathcal{M}_\mathrm{c}/M_\odot)$")
     axes[1].text(0.03, 0.95, "(b)", transform=axes[1].transAxes, va="top", color="white", fontweight="bold")
     colorbar = figure.colorbar(mesh, ax=axes[1], pad=0.02, fraction=0.05)
-    colorbar.set_label(r"$N$", fontsize=7, labelpad=2)
-    colorbar.ax.tick_params(labelsize=6)
+    colorbar.set_label(r"$N$", fontsize=10, labelpad=2)
+    colorbar.ax.tick_params(labelsize=10)
 
     output.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(
@@ -165,7 +178,7 @@ def make_figure(
         mass_ratio_output = output.with_name("hr5_capture_mass_ratio.pdf")
     mass_ratio_figure, mass_ratio_axis = plt.subplots(figsize=(3.35, 3.05))
     bins = np.linspace(0.0, 1.0, 41)
-    for threshold, color in zip(thresholds, COLORS):
+    for threshold, color, line_style in zip(thresholds, COLORS, LINE_STYLES):
         selected = chirp_mass >= threshold
         mass_ratio_axis.hist(
             mass_ratio[selected],
@@ -173,8 +186,9 @@ def make_figure(
             density=True,
             histtype="step",
             color=color,
+            linestyle=line_style,
             lw=1.15,
-            label=rf"$\mathcal{{M}}_\mathrm{{c}}\geq 10^{{{int(np.log10(threshold))}}}\,M_\odot$",
+            label=rf"$10^{{{int(np.log10(threshold))}}}$",
         )
     mass_ratio_axis.set_xlim(0.0, 1.0)
     mass_ratio_axis.set_yscale("log")
@@ -182,7 +196,12 @@ def make_figure(
     mass_ratio_axis.set_xlabel(r"mass ratio $q$")
     mass_ratio_axis.set_ylabel(r"$p(q)$")
     mass_ratio_axis.legend(
-        frameon=False, fontsize=6.2, handlelength=1.4, labelspacing=0.25
+        title=r"$\mathcal{M}_{\rm c}/M_\odot\geq$",
+        frameon=False,
+        handlelength=1.4,
+        labelspacing=0.2,
+        handletextpad=0.3,
+        loc="upper right",
     )
     mass_ratio_output.parent.mkdir(parents=True, exist_ok=True)
     mass_ratio_figure.savefig(

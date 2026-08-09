@@ -15,6 +15,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import LogNorm
+from matplotlib.lines import Line2D
 
 from fdm_smbh_delay.hr5 import find_dual_agn_pairs, read_mkagn_snapshot
 
@@ -24,7 +25,7 @@ DEFAULT_AGN_DIRECTORY = Path(
     "SRC(FoF_PSB_Free_Ver2_Dev)/SRC(AGN)/SRC(MkAGN)/HR5_AGN_DATA"
 )
 COLORS = ("#D55E00", "#0072B2", "#009E73")
-MARKERS = ("o", "s", "^")
+MARKERS = ("o", "s", "D")
 
 
 def _read_history(path: Path) -> dict[str, np.ndarray]:
@@ -121,17 +122,23 @@ def _plot(
     plt.rcParams.update(
         {
             "font.family": "serif",
-            "font.size": 8.0,
+            "font.size": 10.0,
             "mathtext.fontset": "stix",
             "axes.linewidth": 0.8,
+            "axes.labelsize": 10.0,
+            "xtick.labelsize": 10.0,
+            "ytick.labelsize": 10.0,
+            "legend.fontsize": 10.0,
             "xtick.direction": "in",
             "ytick.direction": "in",
             "xtick.top": True,
             "ytick.right": True,
+            "xtick.minor.visible": True,
+            "ytick.minor.visible": True,
             "pdf.fonttype": 42,
         }
     )
-    figure, axes = plt.subplots(1, 3, figsize=(7.15, 2.45), gridspec_kw={"wspace": 0.42})
+    figure, axes = plt.subplots(1, 3, figsize=(7.15, 2.75), gridspec_kw={"wspace": 0.48})
     log_edges = np.linspace(np.log10(0.5), np.log10(30.0), 10)
     center = 10.0 ** (0.5 * (log_edges[:-1] + log_edges[1:]))
     for (output_number, threshold_data), color, marker in zip(pair_sets.items(), COLORS, MARKERS):
@@ -148,21 +155,72 @@ def _plot(
                 yerr=error[selected],
                 marker=marker,
                 ms=3.2,
+                mfc="white",
+                mec=color,
+                mew=0.7,
                 lw=0.9,
                 ls=line_style,
                 color=color,
-                label=(
-                    rf"$z={redshift:.2f}$, $L_{{\rm bol}}\geq10^{{{int(np.log10(threshold))}}}$"
-                ),
+                capsize=1.2,
+                capthick=0.6,
             )
     axes[0].set_xscale("log")
     axes[0].set_yscale("log")
     axes[0].set_xlim(0.5, 30.0)
-    axes[0].set_ylim(1.0e-4, 2.0e-1)
+    axes[0].set_ylim(1.0e-5, 1.0)
     axes[0].set_xlabel(r"$r_{\rm 3D}$ [pkpc]")
     axes[0].set_ylabel(r"$dP_{\rm dual}/d\log_{10}r$")
-    axes[0].legend(frameon=False, fontsize=4.9, loc="lower right")
-    axes[0].text(0.04, 0.96, "(a)", transform=axes[0].transAxes, va="top", fontweight="bold")
+    redshift_handles = [
+        Line2D(
+            [],
+            [],
+            color=color,
+            marker=marker,
+            ls="none",
+            mfc="white",
+            mec=color,
+            label=rf"${float(threshold_data[1.0e43]['redshift']):.2f}$",
+        )
+        for (_, threshold_data), color, marker in zip(pair_sets.items(), COLORS, MARKERS)
+    ]
+    redshift_legend = axes[0].legend(
+        handles=redshift_handles,
+        title=r"$z$",
+        frameon=False,
+        loc="lower center",
+        ncol=3,
+        columnspacing=0.6,
+        handletextpad=0.3,
+        borderaxespad=0.3,
+    )
+    axes[0].add_artist(redshift_legend)
+    threshold_handles = [
+        Line2D(
+            [],
+            [],
+            color="0.2",
+            ls=line_style,
+            label=rf"$10^{{{power}}}$",
+        )
+        for power, line_style in ((43, "-"), (44, "--"))
+    ]
+    axes[0].legend(
+        handles=threshold_handles,
+        title=r"$L_{\rm bol}\,[{\rm erg\,s^{-1}}]\geq$",
+        frameon=False,
+        loc="upper left",
+        handletextpad=0.3,
+        borderaxespad=0.3,
+    )
+    axes[0].text(
+        0.96,
+        0.96,
+        "(a)",
+        transform=axes[0].transAxes,
+        ha="right",
+        va="top",
+        fontweight="bold",
+    )
 
     for (output_number, threshold_data), color, marker in zip(pair_sets.items(), COLORS, MARKERS):
         pair = threshold_data[1.0e43]
@@ -188,16 +246,19 @@ def _plot(
             color=color,
             marker=marker,
             ms=3.6,
+            mfc="white",
+            mec=color,
+            mew=0.7,
             lw=0.9,
-            label=rf"$z={redshift:.2f}$",
+            capsize=1.2,
+            capthick=0.6,
         )
     axes[1].set_xscale("log")
     axes[1].set_xlim(0.5, 30.0)
     axes[1].set_ylim(0.0, 1.05)
     axes[1].set_xlabel(r"$r_{\rm 3D}$ [pkpc]")
     axes[1].set_ylabel(r"$P(\Delta t_{\rm cap,upper}\leq1\,{\rm Gyr}\mid r)$")
-    axes[1].legend(frameon=False, fontsize=6.2, loc="lower left")
-    axes[1].text(0.04, 0.96, "(b)", transform=axes[1].transAxes, va="top", fontweight="bold")
+    axes[1].text(0.04, 0.06, "(b)", transform=axes[1].transAxes, va="bottom", fontweight="bold")
 
     earliest_output = min(pair_sets)
     pair = pair_sets[earliest_output][1.0e43]
@@ -222,13 +283,13 @@ def _plot(
     axes[2].set_ylabel(r"$\log_{10}\lambda_{\rm Edd,2}$")
     axes[2].text(0.04, 0.96, "(c)", transform=axes[2].transAxes, va="top", color="white", fontweight="bold")
     colorbar = figure.colorbar(mesh, ax=axes[2], pad=0.02, fraction=0.05)
-    colorbar.set_label(r"$p(\log\lambda_1,\log\lambda_2)$", fontsize=7)
+    colorbar.set_label(r"$p(\log\lambda_1,\log\lambda_2)$", fontsize=10)
+    colorbar.ax.tick_params(labelsize=10)
     output.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(
         output,
         bbox_inches="tight",
         pad_inches=0.035,
-        metadata={"Title": "HR5 dual AGN activity and numerical capture probability"},
     )
     plt.close(figure)
 

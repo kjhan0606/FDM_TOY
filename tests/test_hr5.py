@@ -7,6 +7,7 @@ from astropy.cosmology import FlatLambdaCDM
 from fdm_smbh_delay.hr5 import (
     MKAGN_DTYPE,
     binned_source_rate,
+    bootstrap_binned_source_rate,
     bootstrap_redshift_rate,
     cumulative_active_sources,
     delayed_redshift,
@@ -53,6 +54,23 @@ def test_redshift_rate_bootstrap_is_reproducible_and_ordered() -> None:
     assert np.all(quantiles[0] <= quantiles[1])
     assert np.all(quantiles[1] <= quantiles[2])
     assert quantiles[1, 0] == pytest.approx(expected[0], rel=0.08)
+
+
+def test_binned_source_rate_bootstrap_is_reproducible_and_ordered() -> None:
+    count = np.array([0, 4, 100])
+    exposure = np.array([2.0, 2.0, 5.0])
+    first = bootstrap_binned_source_rate(
+        count, exposure, 400, np.random.default_rng(314159)
+    )
+    second = bootstrap_binned_source_rate(
+        count, exposure, 400, np.random.default_rng(314159)
+    )
+    assert first.shape == (3, 3)
+    assert np.array_equal(first, second)
+    assert np.all(first[0] <= first[1])
+    assert np.all(first[1] <= first[2])
+    assert np.all(first[:, 0] == 0.0)
+    assert first[1, 2] == pytest.approx(count[2] / exposure[2], rel=0.05)
 
 
 def test_fixed_delay_moves_events_to_lower_redshift(cosmology: FlatLambdaCDM) -> None:

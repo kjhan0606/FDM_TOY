@@ -428,6 +428,34 @@ def binned_source_rate(
     return count, rate, error
 
 
+def bootstrap_binned_source_rate(
+    count: np.ndarray,
+    exposure_cmpc3_gyr: np.ndarray,
+    realizations: int,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Estimate binned-rate quantiles by Poisson resampling event counts.
+
+    The returned rows contain the 16th, 50th, and 84th percentiles. Each
+    column corresponds to one redshift bin.
+    """
+
+    observed_count = np.asarray(count, dtype=np.int64)
+    exposure = np.asarray(exposure_cmpc3_gyr, dtype=np.float64)
+    if observed_count.ndim != 1 or observed_count.shape != exposure.shape:
+        raise ValueError("count and exposure must be matching one-dimensional arrays")
+    if np.any(observed_count < 0):
+        raise ValueError("count must be non-negative")
+    if np.any(~np.isfinite(exposure)) or np.any(exposure <= 0.0):
+        raise ValueError("exposure must be finite and positive")
+    if realizations < 1:
+        raise ValueError("realizations must be positive")
+
+    resampled_count = rng.poisson(observed_count, size=(realizations, observed_count.size))
+    resampled_rate = resampled_count / exposure[None, :]
+    return np.quantile(resampled_rate, (0.16, 0.5, 0.84), axis=0)
+
+
 def cumulative_active_sources(
     redshift: np.ndarray,
     source_rate_cmpc3_gyr: np.ndarray,

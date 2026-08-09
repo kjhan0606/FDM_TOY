@@ -93,6 +93,18 @@ the 16th through 84th percentiles. The calculation does not include cosmic
 variance, output-time uncertainty, or ambiguity in the reconstructed capture
 receiver.
 
+Figures 8 and 9, which appear as Figures 11 and 12 in the current JKAS draft,
+show the same count-statistical uncertainty for each measured redshift-bin
+rate. The vertical bars span the 16th through 84th percentiles of 200
+independent Poisson realizations. The measured rates remain at the symbol
+positions. The numerical values are written to
+`hr5_fixed_delay_rate_bootstrap.csv`.
+
+All manuscript graphics use 10-point legend text, open geometric symbols, and
+a color-vision-deficiency-safe palette. Line styles duplicate the color
+encoding for grayscale reproduction. Legends remain inside the axes and occupy
+regions separated from the measured curves and uncertainty intervals.
+
 ## Dual AGN selection and measurements
 
 The dual AGN sample uses the MkAGN snapshots at outputs 89, 117, and 296. Both
