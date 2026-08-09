@@ -65,6 +65,13 @@ THRESHOLD_MARKERS = ("o", "s", "D")
 THRESHOLD_LINESTYLES = ("-", "--", "-.")
 DELAY_COLORS = (BLUE, VERMILLION, GREEN, PURPLE, ORANGE)
 DELAY_MARKERS = ("o", "s", "D", "^", "v")
+SINGLE_PANEL_FIGSIZE = (3.35, 3.15)
+SINGLE_PANEL_MARGINS = {
+    "left": 0.21,
+    "right": 0.97,
+    "bottom": 0.19,
+    "top": 0.97,
+}
 
 
 def _panel_label(axis: plt.Axes, label: str, x: float = 0.97) -> None:
@@ -108,13 +115,28 @@ def _style() -> None:
     )
 
 
-def _save(figure: plt.Figure, path: Path, _title: str) -> None:
+def _single_panel_figure() -> tuple[plt.Figure, plt.Axes]:
+    figure, axis = plt.subplots(figsize=SINGLE_PANEL_FIGSIZE)
+    figure.subplots_adjust(**SINGLE_PANEL_MARGINS)
+    return figure, axis
+
+
+def _save(
+    figure: plt.Figure,
+    path: Path,
+    _title: str,
+    *,
+    fixed_canvas: bool = False,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    figure.savefig(
-        path,
-        bbox_inches="tight",
-        pad_inches=0.035,
-    )
+    if fixed_canvas:
+        figure.savefig(path, bbox_inches=figure.bbox_inches, pad_inches=0.0)
+    else:
+        figure.savefig(
+            path,
+            bbox_inches="tight",
+            pad_inches=0.035,
+        )
     plt.close(figure)
 
 
@@ -433,7 +455,7 @@ def _plot_figure_1(history: dict[str, np.ndarray], output: Path, volume_cmpc3: f
             mean.append(np.mean(birth_rate[selected]))
             scatter.append(np.std(birth_rate[selected]))
             half_width.append(0.5 * (upper - lower))
-    figure, axis = plt.subplots(figsize=(3.35, 3.15))
+    figure, axis = _single_panel_figure()
     axis.errorbar(
         center,
         mean,
@@ -455,7 +477,7 @@ def _plot_figure_1(history: dict[str, np.ndarray], output: Path, volume_cmpc3: f
     axis.set_ylim(3.0e-14, 4.0e-10)
     axis.set_xlabel("redshift")
     axis.set_ylabel(r"$\dot n_{\rm seed}$ [cMpc$^{-3}$ yr$^{-1}$]")
-    _save(figure, output, "HR5 SMBH seed birth rate")
+    _save(figure, output, "HR5 SMBH seed birth rate", fixed_canvas=True)
 
 
 def _plot_figure_2(
@@ -466,7 +488,7 @@ def _plot_figure_2(
     snapshot_redshifts: np.ndarray,
     output: Path,
 ) -> None:
-    figure, axis = plt.subplots(figsize=(3.35, 3.15))
+    figure, axis = _single_panel_figure()
     for number, (color, marker) in enumerate(zip(SNAPSHOT_COLORS[:4], SNAPSHOT_MARKERS[:4])):
         selected = np.isfinite(mean[number]) & (mean[number] > 0.0) & (count[number] >= 5)
         lower = np.minimum(scatter[number, selected], 0.85 * mean[number, selected])
@@ -494,7 +516,7 @@ def _plot_figure_2(
     axis.set_xlabel(r"$M_{\rm BH}$ [$M_\odot$]")
     axis.set_ylabel(r"$\sum M_{\rm dis}/M_{\rm BH}$")
     axis.legend(frameon=False, loc="lower right", handletextpad=0.4)
-    _save(figure, output, "HR5 merger mass fraction")
+    _save(figure, output, "HR5 merger mass fraction", fixed_canvas=True)
 
 
 def _plot_figure_3(
@@ -505,7 +527,7 @@ def _plot_figure_3(
     snapshot_redshifts: np.ndarray,
     output: Path,
 ) -> None:
-    figure, axis = plt.subplots(figsize=(3.35, 3.35))
+    figure, axis = _single_panel_figure()
     for number, (color, marker) in enumerate(zip(SNAPSHOT_COLORS, SNAPSHOT_MARKERS)):
         selected = mass_function[number] > 0.0
         axis.errorbar(
@@ -539,7 +561,7 @@ def _plot_figure_3(
         handletextpad=0.3,
         borderaxespad=0.3,
     )
-    _save(figure, output, "HR5 SMBH mass functions")
+    _save(figure, output, "HR5 SMBH mass functions", fixed_canvas=True)
 
 
 def _plot_figure_4(cache: dict[str, np.ndarray], output: Path) -> None:
@@ -548,7 +570,7 @@ def _plot_figure_4(cache: dict[str, np.ndarray], output: Path) -> None:
     display_index = np.array([np.argmin(np.abs(redshift - z)) for z in display_redshifts])
     z3_index = int(np.argmin(np.abs(redshift - 3.0)))
     colors = THRESHOLD_COLORS
-    figure, axis = plt.subplots(figsize=(3.35, 3.35))
+    figure, axis = _single_panel_figure()
     for sample_number, color in enumerate(colors):
         mass = cache[f"track_mass_{sample_number}"].astype(np.float64)
         denominator = mass[:, z3_index]
@@ -590,7 +612,12 @@ def _plot_figure_4(cache: dict[str, np.ndarray], output: Path) -> None:
         handletextpad=0.4,
         borderaxespad=0.3,
     )
-    _save(figure, output, "HR5 SMBH mass growth from redshift three")
+    _save(
+        figure,
+        output,
+        "HR5 SMBH mass growth from redshift three",
+        fixed_canvas=True,
+    )
 
 
 def _plot_figure_5(cache: dict[str, np.ndarray], output: Path) -> None:

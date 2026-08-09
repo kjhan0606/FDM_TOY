@@ -313,7 +313,15 @@ def _plot_validation(path: Path, data: dict[str, np.ndarray]) -> None:
     axes[1].set_yscale("log")
     axes[1].set_xlabel(r"$v_{\rm rel}/v_{\rm esc}$ at last common output")
     axes[1].set_ylabel(r"probability density")
-    axes[1].legend(frameon=False, loc="upper right")
+    axes[1].legend(
+        frameon=False,
+        loc="lower center",
+        bbox_to_anchor=(0.64, 0.03),
+        borderaxespad=0.0,
+        fontsize=7.0,
+        handlelength=1.2,
+        handletextpad=0.35,
+    )
     _panel_label(axes[1], "(b)", x=0.10)
 
     distance = data["assignment_search_distance_cmpc"]
