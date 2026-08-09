@@ -147,8 +147,10 @@ python scripts/analyze_hr5_dual_agn.py
 The first command produces 576,278 numerical-capture intervals from 1,688,677
 sink histories. The second command redraws Figures 1--13 of the earlier HR5
 draft from those data and writes numerical validation checks. The third command
-measures the dual AGN separation probability density, joint Eddington-ratio
-distribution, and subsequent direct sink-capture fraction.
+measures dual and offset AGN number densities, distinguishes three commonly
+used dual-fraction denominators, applies projected-separation and line-of-sight
+velocity selections over 128 viewing directions, and retains interval and
+right censoring in the subsequent direct sink-capture distribution.
 
 These are numerical sink captures. They are not physical SMBH coalescences.
 The event definitions, legacy light-cone normalization, dual AGN selection, and

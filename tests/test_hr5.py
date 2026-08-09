@@ -12,10 +12,15 @@ from fdm_smbh_delay.hr5 import (
     circular_gw_background_contributions,
     cumulative_active_sources,
     delayed_redshift,
+    fibonacci_sightlines,
     fit_redshift_rate,
+    find_agn_pair_population,
     find_dual_agn_pairs,
     histogram_quantiles,
     infer_capture_receivers,
+    interval_censored_cumulative_bounds,
+    pair_component_multiplicity,
+    project_pair_observables,
     read_mkagn_snapshot,
     redshift_rate_model,
 )
@@ -182,3 +187,74 @@ def test_find_dual_agn_pairs_applies_activity_and_physical_separation() -> None:
     assert int(pairs["active_count"]) == 3
     assert sorted(zip(pairs["id_1"], pairs["id_2"])) == [(1, 2), (1, 4)]
     assert np.allclose(np.sort(pairs["separation_pkpc"]), [10.0, 20.0])
+
+
+def test_find_agn_pair_population_separates_dual_and_offset_pairs() -> None:
+    records = np.zeros(4, dtype=MKAGN_DTYPE)
+    records["sink_id"] = [1, 2, 3, 4]
+    records["mass"] = [4.0e7, 2.0e7, 1.0e7, 1.0e7]
+    records["Lbol"] = [2.0e43, 3.0e43, 1.0e42, 1.0e42]
+    records["LhX"] = records["Lbol"] / 20.0
+    records["x"] = [0.010, 0.020, 0.030, 1.000]
+    pairs = find_agn_pair_population(
+        records,
+        redshift=0.0,
+        dimensionless_hubble=1.0,
+        maximum_separation_pkpc=25.0,
+        box_size_cmpc_over_h=10.0,
+    )
+    assert int(pairs["active_count"]) == 2
+    assert pairs["id_1"].tolist() == [1, 1, 2]
+    assert pairs["id_2"].tolist() == [2, 3, 3]
+    assert pairs["is_dual"].tolist() == [True, False, False]
+    assert pairs["is_offset"].tolist() == [False, True, True]
+    assert np.all(pairs["mass_1_msun"] >= pairs["mass_2_msun"])
+
+
+def test_pair_component_multiplicity_identifies_multiple_system() -> None:
+    pair_size, member, member_size = pair_component_multiplicity(
+        np.array([1, 2, 8]), np.array([2, 3, 9])
+    )
+    assert pair_size.tolist() == [3, 3, 2]
+    assert dict(zip(member.tolist(), member_size.tolist())) == {
+        1: 3,
+        2: 3,
+        3: 3,
+        8: 2,
+        9: 2,
+    }
+
+
+def test_project_pair_observables_includes_hubble_flow() -> None:
+    position_1 = np.zeros((1, 3))
+    position_2 = np.array([[0.003, 0.004, 0.0]])
+    velocity_1 = np.zeros((1, 3))
+    velocity_2 = np.array([[10.0, 20.0, 0.0]])
+    projected, line_velocity = project_pair_observables(
+        position_1,
+        position_2,
+        velocity_1,
+        velocity_2,
+        np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]),
+        redshift=0.0,
+        dimensionless_hubble=1.0,
+        hubble_kms_mpc=100.0,
+        box_size_cmpc_over_h=10.0,
+    )
+    assert projected[0].tolist() == pytest.approx([4.0, 5.0])
+    assert line_velocity[0].tolist() == pytest.approx([10.3, 0.0])
+    sightlines = fibonacci_sightlines(64)
+    assert np.allclose(np.linalg.norm(sightlines, axis=1), 1.0)
+
+
+def test_interval_censored_cumulative_bounds_preserve_censoring() -> None:
+    lower, upper = interval_censored_cumulative_bounds(
+        np.array([0.0, 0.8, np.nan]),
+        np.array([0.2, 1.0, np.nan]),
+        np.array([0.0, 0.5, 0.9, 1.0, 2.0]),
+        followup_gyr=1.0,
+    )
+    assert lower[:4].tolist() == pytest.approx([0.0, 1.0 / 3.0, 1.0 / 3.0, 2.0 / 3.0])
+    assert upper[:4].tolist() == pytest.approx([1.0 / 3.0, 1.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0])
+    assert np.isnan(lower[-1])
+    assert np.isnan(upper[-1])

@@ -11,6 +11,8 @@ from astropy.constants import G, M_sun, c
 from astropy.cosmology import FlatLambdaCDM
 from scipy.integrate import cumulative_trapezoid
 from scipy.optimize import least_squares
+from scipy.sparse import coo_matrix
+from scipy.sparse.csgraph import connected_components
 from scipy.spatial import cKDTree
 
 
@@ -293,6 +295,272 @@ def find_dual_agn_pairs(
         "eddington_ratio_1": primary_record["Lbol"] / (eddington_coefficient * primary_mass),
         "eddington_ratio_2": secondary_record["Lbol"] / (eddington_coefficient * secondary_mass),
     }
+
+
+def find_agn_pair_population(
+    records: np.ndarray,
+    redshift: float,
+    dimensionless_hubble: float,
+    luminosity_threshold_erg_s: float = 1.0e43,
+    luminosity_field: str = "Lbol",
+    minimum_separation_pkpc: float = 0.5,
+    maximum_separation_pkpc: float = 30.0,
+    minimum_mass_msun: float = 0.0,
+    box_size_cmpc_over_h: float = 717.229040,
+) -> dict[str, np.ndarray]:
+    """Select dual and offset AGN among three-dimensional SMBH pairs.
+
+    Every retained pair contains at least one member above the supplied
+    luminosity threshold.  ``is_dual`` identifies pairs for which both members
+    pass the threshold, while ``is_offset`` identifies pairs with one active
+    member.  Primary and secondary labels follow SMBH mass rather than
+    luminosity.
+    """
+
+    required = {
+        "sink_id",
+        "mass",
+        "x",
+        "y",
+        "z",
+        "vx",
+        "vy",
+        "vz",
+        "Lbol",
+        luminosity_field,
+    }
+    if records.dtype.names is None or not required.issubset(records.dtype.names):
+        raise ValueError("The MkAGN record does not contain the requested AGN fields")
+    if dimensionless_hubble <= 0.0:
+        raise ValueError("dimensionless_hubble must be positive")
+    if minimum_separation_pkpc < 0.0 or maximum_separation_pkpc <= minimum_separation_pkpc:
+        raise ValueError("The separation bounds must be positive and ordered")
+
+    mass_msun = np.asarray(records["mass"], dtype=np.float64) / dimensionless_hubble
+    usable = (
+        np.isfinite(mass_msun)
+        & (mass_msun >= minimum_mass_msun)
+        & np.isfinite(records["x"])
+        & np.isfinite(records["y"])
+        & np.isfinite(records["z"])
+    )
+    population = records[usable]
+    population_mass = mass_msun[usable]
+    luminosity = np.asarray(population[luminosity_field], dtype=np.float64)
+    active = np.isfinite(luminosity) & (luminosity >= luminosity_threshold_erg_s)
+
+    empty = {
+        "active_count": np.array(np.count_nonzero(active), dtype=np.int64),
+        "id_1": np.empty(0, dtype=np.int64),
+        "id_2": np.empty(0, dtype=np.int64),
+        "position_1_cmpc_over_h": np.empty((0, 3)),
+        "position_2_cmpc_over_h": np.empty((0, 3)),
+        "velocity_1_kms": np.empty((0, 3)),
+        "velocity_2_kms": np.empty((0, 3)),
+        "separation_pkpc": np.empty(0),
+        "mass_1_msun": np.empty(0),
+        "mass_2_msun": np.empty(0),
+        "luminosity_1_erg_s": np.empty(0),
+        "luminosity_2_erg_s": np.empty(0),
+        "lbol_1_erg_s": np.empty(0),
+        "lbol_2_erg_s": np.empty(0),
+        "lhx_1_erg_s": np.empty(0),
+        "lhx_2_erg_s": np.empty(0),
+        "eddington_ratio_1": np.empty(0),
+        "eddington_ratio_2": np.empty(0),
+        "active_1": np.empty(0, dtype=bool),
+        "active_2": np.empty(0, dtype=bool),
+        "is_dual": np.empty(0, dtype=bool),
+        "is_offset": np.empty(0, dtype=bool),
+    }
+    if population.size < 2 or not np.any(active):
+        return empty
+
+    position = np.column_stack([population["x"], population["y"], population["z"]])
+    maximum_comoving_distance = (
+        maximum_separation_pkpc * dimensionless_hubble * (1.0 + redshift) / 1000.0
+    )
+    tree = cKDTree(np.mod(position, box_size_cmpc_over_h), boxsize=box_size_cmpc_over_h)
+    pair = tree.query_pairs(maximum_comoving_distance, output_type="ndarray")
+    if pair.size == 0:
+        return empty
+
+    delta = position[pair[:, 1]] - position[pair[:, 0]]
+    delta -= box_size_cmpc_over_h * np.rint(delta / box_size_cmpc_over_h)
+    separation_pkpc = (
+        np.linalg.norm(delta, axis=1)
+        * 1000.0
+        / (dimensionless_hubble * (1.0 + redshift))
+    )
+    selected = (
+        (separation_pkpc >= minimum_separation_pkpc)
+        & (active[pair[:, 0]] | active[pair[:, 1]])
+    )
+    pair = pair[selected]
+    separation_pkpc = separation_pkpc[selected]
+    if pair.size == 0:
+        return empty
+
+    first_is_primary = population_mass[pair[:, 0]] >= population_mass[pair[:, 1]]
+    primary = np.where(first_is_primary, pair[:, 0], pair[:, 1])
+    secondary = np.where(first_is_primary, pair[:, 1], pair[:, 0])
+    primary_record = population[primary]
+    secondary_record = population[secondary]
+    primary_mass = population_mass[primary]
+    secondary_mass = population_mass[secondary]
+    active_primary = active[primary]
+    active_secondary = active[secondary]
+    eddington_coefficient = 1.26e38
+    result = {
+        "active_count": np.array(np.count_nonzero(active), dtype=np.int64),
+        "id_1": primary_record["sink_id"].astype(np.int64),
+        "id_2": secondary_record["sink_id"].astype(np.int64),
+        "position_1_cmpc_over_h": np.column_stack(
+            [primary_record["x"], primary_record["y"], primary_record["z"]]
+        ).astype(np.float64),
+        "position_2_cmpc_over_h": np.column_stack(
+            [secondary_record["x"], secondary_record["y"], secondary_record["z"]]
+        ).astype(np.float64),
+        "velocity_1_kms": np.column_stack(
+            [primary_record["vx"], primary_record["vy"], primary_record["vz"]]
+        ).astype(np.float64),
+        "velocity_2_kms": np.column_stack(
+            [secondary_record["vx"], secondary_record["vy"], secondary_record["vz"]]
+        ).astype(np.float64),
+        "separation_pkpc": separation_pkpc,
+        "mass_1_msun": primary_mass,
+        "mass_2_msun": secondary_mass,
+        "luminosity_1_erg_s": np.asarray(primary_record[luminosity_field], dtype=np.float64),
+        "luminosity_2_erg_s": np.asarray(secondary_record[luminosity_field], dtype=np.float64),
+        "lbol_1_erg_s": np.asarray(primary_record["Lbol"], dtype=np.float64),
+        "lbol_2_erg_s": np.asarray(secondary_record["Lbol"], dtype=np.float64),
+        "lhx_1_erg_s": np.asarray(primary_record["LhX"], dtype=np.float64),
+        "lhx_2_erg_s": np.asarray(secondary_record["LhX"], dtype=np.float64),
+        "eddington_ratio_1": np.asarray(primary_record["Lbol"], dtype=np.float64)
+        / (eddington_coefficient * primary_mass),
+        "eddington_ratio_2": np.asarray(secondary_record["Lbol"], dtype=np.float64)
+        / (eddington_coefficient * secondary_mass),
+        "active_1": active_primary,
+        "active_2": active_secondary,
+        "is_dual": active_primary & active_secondary,
+        "is_offset": np.logical_xor(active_primary, active_secondary),
+    }
+    return result
+
+
+def pair_component_multiplicity(
+    first_id: np.ndarray,
+    second_id: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return the connected-system multiplicity associated with every pair.
+
+    The second and third arrays contain the unique member identifiers and the
+    multiplicity of the connected system that contains each member.
+    """
+
+    first = np.asarray(first_id, dtype=np.int64)
+    second = np.asarray(second_id, dtype=np.int64)
+    if first.shape != second.shape or first.ndim != 1:
+        raise ValueError("Pair identifiers must be matching one-dimensional arrays")
+    if first.size == 0:
+        return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64)
+    member, inverse = np.unique(np.r_[first, second], return_inverse=True)
+    edge = inverse.reshape(2, first.size).T
+    row = np.r_[edge[:, 0], edge[:, 1]]
+    column = np.r_[edge[:, 1], edge[:, 0]]
+    graph = coo_matrix(
+        (np.ones(row.size, dtype=np.int8), (row, column)),
+        shape=(member.size, member.size),
+    )
+    _, label = connected_components(graph, directed=False)
+    size = np.bincount(label)
+    member_multiplicity = size[label]
+    pair_multiplicity = member_multiplicity[edge[:, 0]]
+    return pair_multiplicity.astype(np.int64), member, member_multiplicity.astype(np.int64)
+
+
+def fibonacci_sightlines(count: int) -> np.ndarray:
+    """Return nearly uniform deterministic directions on the unit sphere."""
+
+    if count < 1:
+        raise ValueError("count must be positive")
+    index = np.arange(count, dtype=np.float64) + 0.5
+    z = 1.0 - 2.0 * index / count
+    radius = np.sqrt(np.maximum(0.0, 1.0 - z**2))
+    azimuth = np.pi * (3.0 - np.sqrt(5.0)) * index
+    return np.column_stack((radius * np.cos(azimuth), radius * np.sin(azimuth), z))
+
+
+def project_pair_observables(
+    position_1_cmpc_over_h: np.ndarray,
+    position_2_cmpc_over_h: np.ndarray,
+    velocity_1_kms: np.ndarray,
+    velocity_2_kms: np.ndarray,
+    sightlines: np.ndarray,
+    redshift: float,
+    dimensionless_hubble: float,
+    hubble_kms_mpc: float,
+    box_size_cmpc_over_h: float = 717.229040,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Project physical pairs and include Hubble flow in line-of-sight velocity."""
+
+    position_1 = np.asarray(position_1_cmpc_over_h, dtype=np.float64)
+    position_2 = np.asarray(position_2_cmpc_over_h, dtype=np.float64)
+    velocity_1 = np.asarray(velocity_1_kms, dtype=np.float64)
+    velocity_2 = np.asarray(velocity_2_kms, dtype=np.float64)
+    direction = np.asarray(sightlines, dtype=np.float64)
+    if position_1.shape != position_2.shape or position_1.ndim != 2 or position_1.shape[1] != 3:
+        raise ValueError("Pair positions must have shape (N, 3)")
+    if velocity_1.shape != position_1.shape or velocity_2.shape != position_1.shape:
+        raise ValueError("Pair velocities must match the position arrays")
+    if direction.ndim != 2 or direction.shape[1] != 3:
+        raise ValueError("sightlines must have shape (M, 3)")
+    norm = np.linalg.norm(direction, axis=1)
+    if np.any(~np.isfinite(norm)) or np.any(norm <= 0.0):
+        raise ValueError("sightlines must be finite nonzero vectors")
+    direction = direction / norm[:, None]
+
+    delta_comoving = position_2 - position_1
+    delta_comoving -= box_size_cmpc_over_h * np.rint(delta_comoving / box_size_cmpc_over_h)
+    delta_physical_mpc = delta_comoving / (dimensionless_hubble * (1.0 + redshift))
+    delta_velocity = velocity_2 - velocity_1
+    line_of_sight_distance = delta_physical_mpc @ direction.T
+    separation_squared = np.sum(delta_physical_mpc**2, axis=1)[:, None]
+    projected_separation_pkpc = 1000.0 * np.sqrt(
+        np.maximum(0.0, separation_squared - line_of_sight_distance**2)
+    )
+    peculiar_velocity = delta_velocity @ direction.T
+    line_of_sight_velocity_kms = np.abs(
+        peculiar_velocity + hubble_kms_mpc * line_of_sight_distance
+    )
+    return projected_separation_pkpc, line_of_sight_velocity_kms
+
+
+def interval_censored_cumulative_bounds(
+    event_lower_gyr: np.ndarray,
+    event_upper_gyr: np.ndarray,
+    time_grid_gyr: np.ndarray,
+    followup_gyr: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Bound cumulative incidence for interval events and common right censoring."""
+
+    lower = np.asarray(event_lower_gyr, dtype=np.float64)
+    upper = np.asarray(event_upper_gyr, dtype=np.float64)
+    grid = np.asarray(time_grid_gyr, dtype=np.float64)
+    if lower.shape != upper.shape or lower.ndim != 1:
+        raise ValueError("Event bounds must be matching one-dimensional arrays")
+    if grid.ndim != 1 or np.any(np.diff(grid) < 0.0) or np.any(grid < 0.0):
+        raise ValueError("time_grid_gyr must be non-negative and ordered")
+    if followup_gyr < 0.0:
+        raise ValueError("followup_gyr must be non-negative")
+    certain = np.isfinite(upper)
+    possible = np.isfinite(lower)
+    cumulative_lower = np.mean(certain[:, None] & (upper[:, None] <= grid[None, :]), axis=0)
+    cumulative_upper = np.mean(possible[:, None] & (lower[:, None] <= grid[None, :]), axis=0)
+    beyond_followup = grid > followup_gyr
+    cumulative_lower[beyond_followup] = np.nan
+    cumulative_upper[beyond_followup] = np.nan
+    return cumulative_lower, cumulative_upper
 
 
 def redshift_rate_model(

@@ -108,22 +108,64 @@ regions separated from the measured curves and uncertainty intervals.
 ## Dual AGN selection and measurements
 
 The dual AGN sample uses the MkAGN snapshots at outputs 89, 117, and 296. Both
-members must satisfy the adopted bolometric-luminosity threshold, and their
-three-dimensional physical separation must lie between 0.5 and 30 pkpc. The
-reported pair fraction is `N_pair/N_active_AGN`.
+members satisfy the adopted bolometric-luminosity threshold, and their
+three-dimensional physical separation lies between 0.5 and 30 pkpc. Three
+fractional measures are retained because published measurements use different
+denominators. `N_pair/N_AGN` counts pair edges. `N_member/N_AGN` counts every
+unique active SMBH with an active companion. The pure-dual measure removes
+members of connected systems containing three or more active SMBHs.
 
-| redshift | luminosity threshold [erg s^-1] | active AGN | pairs | pair fraction | later direct capture | upper boundary within 1 Gyr |
+| redshift | active AGN | dual pairs | number density [cMpc^-3] | pair/AGN | member/AGN | pure member/AGN |
 |---:|---:|---:|---:|---:|---:|---:|
-| 2.848 | 1e43 | 77,805 | 2,532 | 0.03254 | 2,147 | 2,005 |
-| 2.848 | 1e44 | 21,864 | 410 | 0.01875 | 364 | 341 |
-| 1.499 | 1e43 | 29,446 | 364 | 0.01236 | 295 | 248 |
-| 1.499 | 1e44 | 13,254 | 126 | 0.00951 | 100 | 88 |
-| 0.625 | 1e43 | 8,179 | 39 | 0.00477 | censored | censored |
-| 0.625 | 1e44 | 2,624 | 12 | 0.00457 | censored | censored |
+| 2.848 | 77,805 | 2,532 | 2.329e-4 | 0.03254 | 0.06110 | 0.05609 |
+| 1.499 | 29,446 | 364 | 3.349e-5 | 0.01236 | 0.02343 | 0.02187 |
+| 0.625 | 8,179 | 39 | 3.588e-6 | 0.00477 | 0.00954 | 0.00954 |
 
-The output-296 linkage is right-censored because no later HR5 output is present.
-The direct-capture columns describe the reconstructed numerical association.
-They do not establish physical SMBH coalescence.
+The table adopts `Lbol >= 1e43 erg s^-1`. The calculation also measures
+`Lbol >= 1e44 erg s^-1` and hard-X-ray `L(2-10 keV) >= 1e42 erg s^-1`
+selections. A separate comparison imposes `M_BH >= 1e6 Msun` on both members
+before classifying dual and offset AGN. At redshift 2.848 this comparison
+contains 387 dual and 574 offset pairs. At redshift 1.499 it contains 295 dual
+and 1,336 offset pairs.
+
+The projected-selection calculation follows each physically associated
+three-dimensional pair over 128 deterministic sightlines. It applies
+`0.5 <= r_p <= 30 pkpc` and includes peculiar velocity plus Hubble flow in
+`Delta v_los`. For the fiducial dual population, the mean retained fractions
+are 0.888 and 0.990 at redshift 2.848 for velocity limits of 300 and 600 km/s.
+The corresponding values at redshift 1.499 are 0.869 and 0.986. These fractions
+measure the viewing-angle retention of three-dimensional pairs. They do not
+include unrelated foreground or background objects in an observational
+cylinder.
+
+The direct-capture distribution restricts the fiducial result to pure dual
+systems. At redshift 2.848, 1,938 of 2,182 pure duals have a later direct
+numerical capture. The interval-censored cumulative fraction at 1 Gyr lies
+between 0.832 and 0.841. At redshift 1.499, 270 of 322 pure duals have a later
+capture, and the 1 Gyr interval lies between 0.717 and 0.720. For the
+mass-limited comparison, the 1 Gyr bounds are 0.845--0.855 for duals and
+0.803--0.807 for offsets at redshift 2.848. They are 0.702--0.705 and
+0.597--0.603 at redshift 1.499. The output-296 population is right-censored at
+the selection time because no later HR5 output is present.
+
+Neutral-hydrogen columns are available along six cardinal sightlines at
+outputs 89 and 296. The analysis reports the fraction of active sightlines
+above `N_H = 1e23` and `1e24 cm^-2`. It does not convert these columns into a
+survey detection probability because that step requires a spectral and
+instrument response model.
+
+The local MkAGN products contain zero-valued galaxy identifiers and host mass
+fields. The archived FoF/PSB paths point to a scratch directory that is no
+longer present. The present sample therefore cannot separate same-galaxy and
+distinct-galaxy pairs or construct a host-matched control population. The
+number-density comparison with distinct-galaxy samples in the literature must
+retain this limitation.
+
+The output files are `hr5_dual_agn_summary.json`,
+`hr5_dual_agn_capture_cdf.csv`, `hr5_dual_agn_pairs.csv`, and
+`hr5_dual_offset_pairs_mbh_ge_1e6.csv`. The direct-capture columns describe the
+reconstructed numerical association. They do not establish physical SMBH
+coalescence.
 
 ## Literature comparison
 
@@ -156,7 +198,8 @@ fraction. Direct numerical comparison therefore requires matched selections.
   dual fractions and number densities retain substantial inter-simulation
   variation.
 
-The HR5 values lie within the broad range of these studies. This agreement is a
-selection-level comparison only. Projection, obscuration, host association,
-and the numerical capture prescription still require matched tests before a
-physical conclusion is drawn.
+The HR5 values lie within the broad range of these studies. The common
+luminosity and separation cuts allow a selection-level comparison. The missing
+host association prevents the distinct-galaxy cut used in the recent
+multi-simulation comparison. Obscuration, survey response, and the numerical
+capture prescription remain separate physical uncertainties.
