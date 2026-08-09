@@ -52,7 +52,13 @@ def _read_events(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.nda
     return data[:, 0].astype(np.int64), data[:, 1], data[:, 2], data[:, 3]
 
 
-def make_figure(history_path: Path, catalog_path: Path, output: Path, volume_cmpc3: float) -> None:
+def make_figure(
+    history_path: Path,
+    catalog_path: Path,
+    output: Path,
+    volume_cmpc3: float,
+    mass_ratio_output: Path | None = None,
+) -> None:
     history = _read_history(history_path)
     event_output, event_redshift, mass_ratio, chirp_mass = _read_events(catalog_path)
     valid = np.isfinite(chirp_mass) & np.isfinite(mass_ratio) & (chirp_mass > 0.0)
@@ -75,32 +81,60 @@ def make_figure(history_path: Path, catalog_path: Path, output: Path, volume_cmp
             "ps.fonttype": 42,
         }
     )
-    figure, axes = plt.subplots(1, 3, figsize=(7.15, 2.50), gridspec_kw={"wspace": 0.48})
+    capture_redshift_coordinate = np.log10(1.0 + redshift)
+    event_redshift_coordinate = np.log10(1.0 + event_redshift)
+    coordinate_limits = (np.log10(1.0 + 0.55), np.log10(1.0 + 10.1))
+
+    figure, axes = plt.subplots(
+        1, 2, figsize=(7.15, 2.70), gridspec_kw={"wspace": 0.34}
+    )
 
     thresholds = (1.0e4, 1.0e5, 1.0e6, 1.0e7)
     for threshold, color in zip(thresholds, COLORS):
         counts = np.bincount(event_index[chirp_mass >= threshold], minlength=redshift.size)
         rate = counts / (volume_cmpc3 * interval_gyr)
         axes[0].plot(
-            redshift[1:],
+            capture_redshift_coordinate[1:],
             rate[1:],
             color=color,
             lw=1.15,
             label=rf"$\mathcal{{M}}_\mathrm{{c}}\geq 10^{{{int(np.log10(threshold))}}}\,M_\odot$",
         )
     axes[0].set_yscale("log")
-    axes[0].set_xlim(0.55, 10.1)
-    axes[0].set_ylim(1.0e-6, 3.5e-2)
-    axes[0].set_xlabel("capture redshift")
+    axes[0].set_xlim(*coordinate_limits)
+    axes[0].set_ylim(1.0e-6, 1.0e-1)
+    axes[0].set_xlabel(r"$\log_{10}(1+z_{\rm cap})$")
     axes[0].set_ylabel(r"$\mathcal{R}_\mathrm{cap}$ [cMpc$^{-3}$ Gyr$^{-1}$]")
-    axes[0].legend(frameon=False, fontsize=6.2, handlelength=1.4, labelspacing=0.25)
-    axes[0].text(0.03, 0.95, "(a)", transform=axes[0].transAxes, va="top", fontweight="bold")
+    axes[0].legend(
+        frameon=False,
+        fontsize=5.8,
+        handlelength=1.4,
+        labelspacing=0.25,
+        columnspacing=0.8,
+        ncol=2,
+        loc="upper left",
+    )
+    axes[0].text(
+        0.97,
+        0.95,
+        "(a)",
+        transform=axes[0].transAxes,
+        ha="right",
+        va="top",
+        fontweight="bold",
+    )
 
-    z_edges = np.linspace(0.6, 10.0, 48)
+    redshift_coordinate_edges = np.linspace(
+        np.log10(1.0 + 0.6), np.log10(1.0 + 10.0), 48
+    )
     log_mass_edges = np.linspace(3.8, 9.8, 52)
-    histogram, _, _ = np.histogram2d(event_redshift, np.log10(chirp_mass), bins=(z_edges, log_mass_edges))
+    histogram, _, _ = np.histogram2d(
+        event_redshift_coordinate,
+        np.log10(chirp_mass),
+        bins=(redshift_coordinate_edges, log_mass_edges),
+    )
     mesh = axes[1].pcolormesh(
-        z_edges,
+        redshift_coordinate_edges,
         log_mass_edges,
         histogram.T,
         cmap="viridis",
@@ -108,42 +142,55 @@ def make_figure(history_path: Path, catalog_path: Path, output: Path, volume_cmp
         shading="flat",
         rasterized=True,
     )
-    axes[1].set_xlim(0.6, 10.0)
+    axes[1].set_xlim(
+        redshift_coordinate_edges[0], redshift_coordinate_edges[-1]
+    )
     axes[1].set_ylim(3.8, 9.8)
-    axes[1].set_xlabel("capture redshift")
+    axes[1].set_xlabel(r"$\log_{10}(1+z_{\rm cap})$")
     axes[1].set_ylabel(r"$\log_{10}(\mathcal{M}_\mathrm{c}/M_\odot)$")
     axes[1].text(0.03, 0.95, "(b)", transform=axes[1].transAxes, va="top", color="white", fontweight="bold")
     colorbar = figure.colorbar(mesh, ax=axes[1], pad=0.02, fraction=0.05)
     colorbar.set_label(r"$N$", fontsize=7, labelpad=2)
     colorbar.ax.tick_params(labelsize=6)
 
+    output.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(
+        output,
+        bbox_inches="tight",
+        pad_inches=0.03,
+    )
+    plt.close(figure)
+
+    if mass_ratio_output is None:
+        mass_ratio_output = output.with_name("hr5_capture_mass_ratio.pdf")
+    mass_ratio_figure, mass_ratio_axis = plt.subplots(figsize=(3.35, 3.05))
     bins = np.linspace(0.0, 1.0, 41)
     for threshold, color in zip(thresholds, COLORS):
         selected = chirp_mass >= threshold
-        axes[2].hist(
+        mass_ratio_axis.hist(
             mass_ratio[selected],
             bins=bins,
             density=True,
             histtype="step",
             color=color,
             lw=1.15,
+            label=rf"$\mathcal{{M}}_\mathrm{{c}}\geq 10^{{{int(np.log10(threshold))}}}\,M_\odot$",
         )
-    axes[2].set_xlim(0.0, 1.0)
-    axes[2].set_yscale("log")
-    axes[2].set_ylim(0.12, 80.0)
-    axes[2].set_xlabel(r"mass ratio $q$")
-    axes[2].set_ylabel(r"$p(q)$")
-    axes[2].yaxis.set_label_position("right")
-    axes[2].text(0.03, 0.95, "(c)", transform=axes[2].transAxes, va="top", fontweight="bold")
-
-    output.parent.mkdir(parents=True, exist_ok=True)
-    figure.savefig(
-        output,
+    mass_ratio_axis.set_xlim(0.0, 1.0)
+    mass_ratio_axis.set_yscale("log")
+    mass_ratio_axis.set_ylim(0.12, 80.0)
+    mass_ratio_axis.set_xlabel(r"mass ratio $q$")
+    mass_ratio_axis.set_ylabel(r"$p(q)$")
+    mass_ratio_axis.legend(
+        frameon=False, fontsize=6.2, handlelength=1.4, labelspacing=0.25
+    )
+    mass_ratio_output.parent.mkdir(parents=True, exist_ok=True)
+    mass_ratio_figure.savefig(
+        mass_ratio_output,
         bbox_inches="tight",
         pad_inches=0.03,
-        metadata={"Title": "HR5 numerical SMBH capture population"},
     )
-    plt.close(figure)
+    plt.close(mass_ratio_figure)
 
 
 def main() -> None:
@@ -151,9 +198,20 @@ def main() -> None:
     parser.add_argument("--history", type=Path, default=Path("results/hr5/hr5_sink_history.csv"))
     parser.add_argument("--catalog", type=Path, default=Path("results/hr5/hr5_capture_catalog.csv"))
     parser.add_argument("--output", type=Path, default=Path("results/hr5/hr5_capture_population.pdf"))
+    parser.add_argument(
+        "--mass-ratio-output",
+        type=Path,
+        default=Path("results/hr5/hr5_capture_mass_ratio.pdf"),
+    )
     parser.add_argument("--volume-cmpc3", type=float, default=1.087e7)
     args = parser.parse_args()
-    make_figure(args.history, args.catalog, args.output, args.volume_cmpc3)
+    make_figure(
+        args.history,
+        args.catalog,
+        args.output,
+        args.volume_cmpc3,
+        args.mass_ratio_output,
+    )
 
 
 if __name__ == "__main__":

@@ -65,6 +65,12 @@ values with numerical statements in the draft. The original point series are
 not available in a machine-readable table, so an exact pointwise residual
 cannot be claimed.
 
+`scripts/plot_hr5_capture_population.py` writes the capture-rate and chirp-mass
+distribution to `hr5_capture_population.pdf`. Both horizontal axes use
+`log10(1 + z_cap)`, and the two-dimensional counts use equal intervals in that
+coordinate. The mass-ratio probability density is written separately to
+`hr5_capture_mass_ratio.pdf`.
+
 The regenerated seed-rate peak, massive-SMBH captured-mass fraction, and
 fixed-delay rate normalization satisfy the reported or visually readable
 benchmarks. The legacy cumulative count for the $10^{6}\,M_\odot$ chirp-mass
