@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plot the reconstructed HR5 sink-capture population used by the JKAS paper."""
+"""Plot the inferred HR5 binary-capture population used by the JKAS paper."""
 
 from __future__ import annotations
 

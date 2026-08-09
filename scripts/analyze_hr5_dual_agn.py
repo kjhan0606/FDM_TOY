@@ -63,18 +63,18 @@ def _panel_label(
     )
 
 
-def _plot_settings() -> None:
+def _plot_settings(font_size: float) -> None:
     plt.rcParams.update(
         {
             "font.family": "serif",
-            "font.size": 10.0,
+            "font.size": font_size,
             "mathtext.fontset": "stix",
             "axes.linewidth": 0.8,
-            "axes.labelsize": 10.0,
-            "xtick.labelsize": 10.0,
-            "ytick.labelsize": 10.0,
-            "legend.fontsize": 10.0,
-            "legend.title_fontsize": 10.0,
+            "axes.labelsize": font_size,
+            "xtick.labelsize": font_size,
+            "ytick.labelsize": font_size,
+            "legend.fontsize": font_size,
+            "legend.title_fontsize": font_size,
             "xtick.direction": "in",
             "ytick.direction": "in",
             "xtick.top": True,
@@ -533,7 +533,7 @@ def _plot_demographics(
     data: dict[int, dict[str, object]],
     volume_cmpc3: float,
 ) -> None:
-    _plot_settings()
+    _plot_settings(6.0)
     figure, axes = plt.subplots(
         2,
         2,
@@ -583,8 +583,8 @@ def _plot_demographics(
 
     fraction_definitions = (
         ("dual_pair_count", r"$N_{\rm pair}/N_{\rm AGN}$", COLORS[0], MARKERS[0]),
-        ("dual_member_count", r"$N_{\rm member}/N_{\rm AGN}$", COLORS[1], MARKERS[1]),
-        ("pure_dual_member_count", r"pure dual members", COLORS[2], MARKERS[2]),
+        ("dual_member_count", r"active SMBHs with companion", COLORS[1], MARKERS[1]),
+        ("pure_dual_member_count", r"active SMBHs in two-member systems", COLORS[2], MARKERS[2]),
     )
     active_count = np.asarray(
         [data[number]["selection"]["bol43"]["statistics"]["active_agn_count"] for number in output_numbers]
@@ -620,7 +620,7 @@ def _plot_demographics(
         )
     axes[1].set_yscale("log")
     axes[1].set_xlabel(r"$z$")
-    axes[1].set_ylabel(r"active-pair fraction")
+    axes[1].set_ylabel(r"fraction of active SMBHs")
     axes[1].legend(frameon=False, loc="lower right", handlelength=1.5)
     _panel_label(axes[1], "(b)", x=0.04, horizontal_alignment="left")
 
@@ -659,8 +659,8 @@ def _plot_demographics(
     for number, color, marker in zip(sorted(data)[:2], COLORS, MARKERS):
         pairs = data[number]["mass_selection"]["m6"]["pairs"]
         for selected, line_style, population_label in (
-            (pairs["is_dual"], "-", "dual-active"),
-            (pairs["is_offset"], "--", "single-active"),
+            (pairs["is_dual"], "-", "dual AGN"),
+            (pairs["is_offset"], "--", "single AGN"),
         ):
             density, error = _density_per_log_separation(
                 pairs["separation_pkpc"][selected], int(pairs["active_count"]), log_edges
@@ -685,7 +685,13 @@ def _plot_demographics(
     axes[3].set_xlim(0.5, 30.0)
     axes[3].set_xlabel(r"$r_{\rm 3D}$ [pkpc]")
     axes[3].set_ylabel(r"$dP/d\log_{10}r$")
-    axes[3].legend(frameon=False, loc="upper left", handlelength=1.4)
+    axes[3].legend(
+        frameon=False,
+        loc="upper left",
+        bbox_to_anchor=(0.0, 0.90),
+        borderaxespad=0.0,
+        handlelength=1.4,
+    )
     _panel_label(axes[3], "(d)", x=0.04, horizontal_alignment="left")
 
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -700,7 +706,7 @@ def _plot_precursors(
     matched_comparisons: dict[int, dict[str, object]],
     rng: np.random.Generator,
 ) -> None:
-    _plot_settings()
+    _plot_settings(6.0)
     figure, axes = plt.subplots(
         2,
         2,
@@ -745,7 +751,7 @@ def _plot_precursors(
     axes[0].set_xlim(0.5, 30.0)
     axes[0].set_ylim(0.0, 1.05)
     axes[0].set_xlabel(r"$r_{\rm 3D}$ [pkpc]")
-    axes[0].set_ylabel(r"projected-selection probability")
+    axes[0].set_ylabel(r"probability of passing projected selection")
     axes[0].legend(frameon=False, loc="lower right", handlelength=1.5)
     _panel_label(axes[0], "(a)", x=0.04, horizontal_alignment="left")
 
@@ -758,12 +764,12 @@ def _plot_precursors(
             (
                 pairs["is_dual"] & (pairs["pair_system_multiplicity"] == 2),
                 "-",
-                "dual-active",
+                "dual AGN",
             ),
             (
                 pairs["is_offset"] & (pairs["pair_system_multiplicity"] == 2),
                 "--",
-                "single-active",
+                "single AGN",
             ),
         ):
             count, _ = np.histogram(np.log10(mass_ratio[selected]), bins=ratio_edges)
@@ -788,8 +794,8 @@ def _plot_precursors(
 
     for number, color in zip(curve_outputs, COLORS):
         for population, line_style, population_label in (
-            ("mass_limited_dual", "-", "dual-active"),
-            ("mass_limited_offset", "--", "single-active"),
+            ("mass_limited_dual", "-", "dual AGN"),
+            ("mass_limited_offset", "--", "single AGN"),
         ):
             curve = capture_curves[(number, population)]
             time = curve["time_gyr"]
@@ -819,8 +825,8 @@ def _plot_precursors(
             )
     axes[2].set_xlim(0.0, 3.0)
     axes[2].set_ylim(0.0, 1.05)
-    axes[2].set_xlabel(r"time since active-pair selection [Gyr]")
-    axes[2].set_ylabel(r"cumulative receiver-link fraction")
+    axes[2].set_xlabel(r"time after selection of active pair [Gyr]")
+    axes[2].set_ylabel(r"cumulative binary-capture fraction")
     axes[2].legend(frameon=False, loc="lower right")
     _panel_label(axes[2], "(c)")
 
@@ -882,14 +888,66 @@ def _plot_precursors(
         ms=4.5,
         lw=1.0,
         capsize=1.5,
-        label="midpoint bootstrap",
+        label="midpoint and 68% interval",
     )
     axes[3].axhline(0.0, color="black", lw=0.8, ls=":")
     axes[3].set_xlabel(r"$z$")
-    axes[3].set_ylabel(r"matched $f_{\rm link,dual}-f_{\rm link,single}$")
-    axes[3].legend(frameon=False, loc="lower right", handlelength=1.5)
+    axes[3].set_ylabel(r"matched $f_{\rm cap,dual}-f_{\rm cap,single}$")
+    axes[3].legend(
+        frameon=False,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.98),
+        borderaxespad=0.0,
+        handlelength=1.5,
+    )
     _panel_label(axes[3], "(d)", x=0.04, horizontal_alignment="left")
 
+    output.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(output, bbox_inches="tight", pad_inches=0.035)
+    plt.close(figure)
+
+
+def _plot_eddington_luminosity(
+    output: Path,
+    mass_msun: np.ndarray,
+    bolometric_luminosity_erg_s: np.ndarray,
+) -> None:
+    _plot_settings(10.0)
+    eddington_luminosity = 1.26e38 * mass_msun
+    log_eddington = np.log10(eddington_luminosity)
+    log_bolometric = np.log10(bolometric_luminosity_erg_s)
+    figure, axis = plt.subplots(figsize=(3.35, 3.35))
+    density = axis.hexbin(
+        log_eddington,
+        log_bolometric,
+        gridsize=42,
+        extent=(43.0, 47.7, 43.0, 47.7),
+        mincnt=1,
+        bins="log",
+        cmap="viridis",
+        linewidths=0.15,
+    )
+    coordinate = np.linspace(43.0, 47.7, 100)
+    for ratio, color, line_style in (
+        (1.0, "black", "-"),
+        (0.1, COLORS[0], "--"),
+        (0.01, COLORS[1], ":"),
+    ):
+        axis.plot(
+            coordinate,
+            coordinate + np.log10(ratio),
+            color=color,
+            ls=line_style,
+            lw=1.0,
+            label=rf"$L_{{\rm bol}}/L_{{\rm Edd}}={ratio:g}$",
+        )
+    axis.set_xlim(43.0, 47.7)
+    axis.set_ylim(43.0, 47.7)
+    axis.set_xlabel(r"$\log_{10}L_{\rm Edd}$ [erg s$^{-1}$]")
+    axis.set_ylabel(r"$\log_{10}L_{\rm bol}$ [erg s$^{-1}$]")
+    axis.legend(frameon=False, loc="upper left", handlelength=1.7)
+    colorbar = figure.colorbar(density, ax=axis, pad=0.025)
+    colorbar.set_label("AGN count per hexagon")
     output.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(output, bbox_inches="tight", pad_inches=0.035)
     plt.close(figure)
@@ -1044,6 +1102,8 @@ def analyze(
     sightlines = fibonacci_sightlines(sightline_count)
     rng = np.random.default_rng(20260809)
     data: dict[int, dict[str, object]] = {}
+    eddington_sample: dict[str, object] | None = None
+    eddington_redshift_distance = np.inf
     summary: dict[str, object] = {
         "selection": {
             "minimum_separation_pkpc": 0.5,
@@ -1066,8 +1126,8 @@ def analyze(
                 "distinct-host dual AGNs."
             ),
             "capture_link": (
-                "legacy mkmerging.c distance-and-mass receiver association, not a "
-                "direct RAMSES merger-partner record"
+                "surviving SMBH assigned by the legacy mkmerging.c distance and "
+                "mass criteria, not a direct record of the partner selected by RAMSES"
             ),
             "capture_time": "interval between the last resolved and assigned capture outputs",
             "spatial_jackknife_regions": 8,
@@ -1085,6 +1145,25 @@ def analyze(
     for output_number in outputs:
         path = agn_directory / f"agn.{output_number:05d}.dat"
         redshift, _, records = read_mkagn_snapshot(path)
+        mass_msun = np.asarray(records["mass"], dtype=np.float64) / dimensionless_hubble
+        bolometric_luminosity = np.asarray(records["Lbol"], dtype=np.float64)
+        active_for_eddington = (
+            np.isfinite(mass_msun)
+            & (mass_msun > 0.0)
+            & np.isfinite(bolometric_luminosity)
+            & (bolometric_luminosity >= 1.0e43)
+        )
+        redshift_distance = abs(redshift - 0.625)
+        if redshift_distance < eddington_redshift_distance:
+            eddington_sample = {
+                "output_number": output_number,
+                "redshift": redshift,
+                "mass_msun": mass_msun[active_for_eddington].copy(),
+                "bolometric_luminosity_erg_s": bolometric_luminosity[
+                    active_for_eddington
+                ].copy(),
+            }
+            eddington_redshift_distance = redshift_distance
         snapshot_time = output_to_time[output_number]
         snapshot: dict[str, object] = {
             "redshift": redshift,
@@ -1201,6 +1280,25 @@ def analyze(
             "mass-limited offset pairs",
             flush=True,
         )
+
+    if eddington_sample is None or eddington_redshift_distance > 0.01:
+        raise ValueError("No requested AGN snapshot lies near redshift 0.625")
+    eddington_luminosity = 1.26e38 * eddington_sample["mass_msun"]
+    eddington_ratio = (
+        eddington_sample["bolometric_luminosity_erg_s"] / eddington_luminosity
+    )
+    summary["eddington_luminosity_comparison"] = {
+        "output_number": int(eddington_sample["output_number"]),
+        "redshift": float(eddington_sample["redshift"]),
+        "lbol_threshold_erg_s": 1.0e43,
+        "agn_count": int(eddington_ratio.size),
+        "eddington_ratio_quantiles": {
+            name: float(np.quantile(eddington_ratio, level))
+            for name, level in (("q16", 0.16), ("q50", 0.50), ("q84", 0.84))
+        },
+        "eddington_ratio_ge_0p1_fraction": float(np.mean(eddington_ratio >= 0.1)),
+        "eddington_ratio_ge_1_fraction": float(np.mean(eddington_ratio >= 1.0)),
+    }
 
     capture_curves: dict[tuple[int, str], dict[str, np.ndarray]] = {}
     matched_comparisons: dict[int, dict[str, object]] = {}
@@ -1338,6 +1436,11 @@ def analyze(
         capture_curves,
         matched_comparisons,
         rng,
+    )
+    _plot_eddington_luminosity(
+        output_directory / "hr5_eddington_luminosity_z0p625.pdf",
+        eddington_sample["mass_msun"],
+        eddington_sample["bolometric_luminosity_erg_s"],
     )
 
 

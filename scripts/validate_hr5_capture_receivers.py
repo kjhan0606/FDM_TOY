@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate legacy HR5 receiver associations with sink phase-space histories."""
+"""Validate the surviving SMBHs assigned to HR5 sink disappearances."""
 
 from __future__ import annotations
 
@@ -45,9 +45,9 @@ def _plot_settings() -> None:
             "font.size": 10.0,
             "mathtext.fontset": "stix",
             "axes.linewidth": 0.8,
-            "axes.labelsize": 10.0,
-            "xtick.labelsize": 10.0,
-            "ytick.labelsize": 10.0,
+            "axes.labelsize": 6.0,
+            "xtick.labelsize": 6.0,
+            "ytick.labelsize": 6.0,
             "legend.fontsize": 10.0,
             "xtick.direction": "in",
             "ytick.direction": "in",
@@ -127,7 +127,7 @@ def _read_receiver_states(
     receiver_index = np.asarray(receiver_id, dtype=np.int64) - 1
     nsink = int(header["nsink"])
     if np.any(receiver_index < 0) or np.any(receiver_index >= nsink):
-        raise ValueError("At least one receiver identifier lies outside the sink tree")
+        raise ValueError("At least one assigned SMBH identifier lies outside the sink tree")
     previous_state = np.full((receiver_index.size, 7), np.nan)
     current_state = np.full_like(previous_state, np.nan)
     order = np.argsort(receiver_index, kind="stable")
@@ -137,14 +137,14 @@ def _read_receiver_states(
         for group_number, (begin, end) in enumerate(zip(boundary[:-1], boundary[1:])):
             sink_index = int(sorted_receiver[begin])
             stream.seek(HEADER_DTYPE.itemsize + sink_index * SINK_DTYPE.itemsize)
-            receiver = np.fromfile(stream, dtype=SINK_DTYPE, count=1)
-            if receiver.size != 1:
-                raise ValueError(f"Could not read receiver sink record {sink_index + 1}")
+            surviving = np.fromfile(stream, dtype=SINK_DTYPE, count=1)
+            if surviving.size != 1:
+                raise ValueError(f"Could not read assigned SMBH record {sink_index + 1}")
             row = order[begin:end]
-            previous_state[row] = receiver["state"][0, previous_index[row], :]
-            current_state[row] = receiver["state"][0, current_index[row], :]
+            previous_state[row] = surviving["state"][0, previous_index[row], :]
+            current_state[row] = surviving["state"][0, current_index[row], :]
             if group_number and group_number % 50000 == 0:
-                print(f"Read {group_number:,} distinct receiver histories", flush=True)
+                print(f"Read {group_number:,} distinct assigned SMBH histories", flush=True)
     return previous_state, current_state
 
 
@@ -263,7 +263,7 @@ def _plot_validation(path: Path, data: dict[str, np.ndarray]) -> None:
     axes = axes.ravel()
     separation_edges = np.logspace(-1, 4, 46)
     for selected, color, line_style, label in (
-        (np.ones(data["sink_id"].size, dtype=bool), COLORS[0], "-", "all links"),
+        (np.ones(data["sink_id"].size, dtype=bool), COLORS[0], "-", "all inferred captures"),
         (data["chirp_mass_last_resolved_msun"] >= 1.0e6, COLORS[1], "--", r"$\mathcal{M}_{\rm c}\geq10^6\,M_\odot$"),
     ):
         axes[0].hist(
@@ -278,7 +278,7 @@ def _plot_validation(path: Path, data: dict[str, np.ndarray]) -> None:
         )
     axes[0].set_xscale("log")
     axes[0].set_yscale("log")
-    axes[0].set_xlabel(r"last-resolved separation [pkpc]")
+    axes[0].set_xlabel(r"separation at last common output [pkpc]")
     axes[0].set_ylabel(r"probability density")
     axes[0].legend(frameon=False, loc="lower left")
     _panel_label(axes[0], "(a)")
@@ -296,7 +296,7 @@ def _plot_validation(path: Path, data: dict[str, np.ndarray]) -> None:
     axes[1].axvline(1.0, color="black", lw=0.9, ls=":", label=r"$v_{\rm rel}=v_{\rm esc}$")
     axes[1].set_xscale("log")
     axes[1].set_yscale("log")
-    axes[1].set_xlabel(r"$v_{\rm rel}/v_{\rm esc}$ at the last output")
+    axes[1].set_xlabel(r"$v_{\rm rel}/v_{\rm esc}$ at last common output")
     axes[1].set_ylabel(r"probability density")
     axes[1].legend(frameon=False, loc="upper right")
     _panel_label(axes[1], "(b)", x=0.10)
@@ -313,7 +313,7 @@ def _plot_validation(path: Path, data: dict[str, np.ndarray]) -> None:
     axes[2].axvline(0.5, color="black", lw=0.9, ls=":", label="search limit")
     axes[2].set_xscale("log")
     axes[2].set_yscale("log")
-    axes[2].set_xlabel(r"assignment search distance [cMpc]")
+    axes[2].set_xlabel(r"distance used to assign companion [cMpc]")
     axes[2].set_ylabel(r"probability density")
     axes[2].legend(frameon=False, loc="upper left")
     _panel_label(axes[2], "(c)")
@@ -330,7 +330,7 @@ def _plot_validation(path: Path, data: dict[str, np.ndarray]) -> None:
         linewidth=1.1,
     )
     axes[3].set_yscale("log")
-    axes[3].set_xlabel(r"sink removals assigned to one receiver")
+    axes[3].set_xlabel(r"disappearances assigned to same SMBH")
     axes[3].set_ylabel(r"event fraction")
     axes[3].set_xticks(value[visible])
     _panel_label(axes[3], "(d)")
@@ -448,7 +448,7 @@ def validate(
         "receiver_mass_factor_at_assignment": _quantiles(mass_factor),
         "cross_validation_outputs_20_to_26": cross_validation,
         "interpretation": {
-            "assignment": "The receiver is the legacy mkmerging.c association rather than a direct RAMSES merger partner record.",
+            "assignment": "The assigned surviving SMBH follows the legacy mkmerging.c distance and mass criteria rather than a direct record of the partner selected by RAMSES.",
             "last_resolved_phase_space": "The phase-space test precedes the unresolved removal interval and does not reproduce the instantaneous simulation merger criterion.",
         },
     }

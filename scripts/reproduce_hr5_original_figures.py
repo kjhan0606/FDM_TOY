@@ -492,7 +492,7 @@ def _plot_figure_2(
     axis.set_xlim(1.0e6, 1.0e10)
     axis.set_ylim(3.0e-4, 1.0)
     axis.set_xlabel(r"$M_{\rm BH}$ [$M_\odot$]")
-    axis.set_ylabel(r"$M_{\rm merge}/M_{\rm BH}$")
+    axis.set_ylabel(r"$\sum M_{\rm dis}/M_{\rm BH}$")
     axis.legend(frameon=False, loc="lower right", handletextpad=0.4)
     _save(figure, output, "HR5 merger mass fraction")
 
@@ -533,7 +533,7 @@ def _plot_figure_3(
     axis.set_ylabel(r"$\Phi_{\rm BH}$ [cMpc$^{-3}$ dex$^{-1}$]")
     axis.legend(
         frameon=False,
-        loc="upper right",
+        loc="lower left",
         ncol=2,
         columnspacing=0.7,
         handletextpad=0.3,
@@ -598,7 +598,7 @@ def _plot_figure_5(cache: dict[str, np.ndarray], output: Path) -> None:
     quantile_log = histogram_quantiles(
         histogram,
         GROWTH_LOG_RATE_EDGES,
-        (0.025, 0.16, 0.5, 0.84, 0.975),
+        (0.16, 0.5, 0.84),
     )
     quantile = 10.0**quantile_log
     z_center = 0.5 * (GROWTH_Z_EDGES[:-1] + GROWTH_Z_EDGES[1:])
@@ -615,27 +615,18 @@ def _plot_figure_5(cache: dict[str, np.ndarray], output: Path) -> None:
     for sample_number, (color, line_style, marker, mass_label) in enumerate(
         zip(colors, line_styles, markers, mass_labels)
     ):
-        valid = np.isfinite(quantile[:, sample_number, 2])
+        valid = np.isfinite(quantile[:, sample_number, 1])
         axis.fill_between(
             z_center[valid],
             quantile[valid, sample_number, 0],
-            quantile[valid, sample_number, 4],
-            facecolor="none",
-            edgecolor=color,
-            linewidth=0.55,
-            alpha=0.55,
-        )
-        axis.fill_between(
-            z_center[valid],
-            quantile[valid, sample_number, 1],
-            quantile[valid, sample_number, 3],
+            quantile[valid, sample_number, 2],
             color=color,
             alpha=0.16,
             linewidth=0.0,
         )
         axis.plot(
             z_center[valid],
-            quantile[valid, sample_number, 2],
+            quantile[valid, sample_number, 1],
             marker=marker,
             ms=3.0,
             lw=0.9,

@@ -1,4 +1,4 @@
-# Horizon Run 5 sink-removal and active SMBH pair analysis
+# Horizon Run 5 binary-capture and active SMBH pair analysis
 
 ## Data provenance
 
@@ -9,16 +9,17 @@ The comparison sample is derived from the legacy HR5 sink tree
 ```
 
 The file contains 1,688,677 fixed sink histories over 278 outputs. The extraction
-finds 576,278 sink disappearances with assigned receivers. Of these events,
+finds 576,278 binary captures from disappearing SMBH particles. Of these events,
 576,036 have positive masses for both objects at the last resolved output.
 
-The receiver-selection calculation is reconstructed from `mkmerging.c`. A sink
+The companion-selection calculation is reconstructed from `mkmerging.c`. A sink
 that is present at output `i-1` and absent at output `i` is matched to a sink at
 `i`. The search radius starts at the nearest-survivor distance, increases by
 0.002 cMpc, and stops at 0.5 cMpc. Within each radius, the most massive survivor
 with at least twice the disappearing sink mass is selected. The assigned
-receiver is therefore a legacy numerical association, not a recorded physical
-binary partner.
+surviving SMBH is therefore an inferred companion rather than the partner
+recorded for the merger of two sink particles. The catalog keeps `receiver_id`
+as the historical field name.
 
 ## Output-step convention
 
@@ -27,10 +28,10 @@ Every event is an interval. No single column silently mixes the two boundaries.
 | Quantity | Output | Interpretation |
 |---|---:|---|
 | disappearing sink mass, position, velocity | `i-1` | last resolved state |
-| receiver mass used for mass ratio and chirp mass | `i-1` | two-object mass estimate before disappearance |
-| receiver identifier | selected at `i` | reconstructed from the surviving population |
-| receiver mass at assigned output | `i` | post-disappearance diagnostic, not used in chirp mass |
-| numerical capture time | between `i-1` and `i` | interval-censored event |
+| mass of the assigned surviving SMBH used for mass ratio and chirp mass | `i-1` | two-object mass estimate before disappearance |
+| identifier of the surviving SMBH | selected at `i` | inferred from the surviving population |
+| mass of the surviving SMBH at the assigned output | `i` | post-disappearance diagnostic, not used in chirp mass |
+| binary-capture time | between `i-1` and `i` | interval-censored event |
 | assigned capture time and redshift | `i` | upper boundary of the interval |
 
 The catalog stores both history indices, output numbers, redshifts, cosmic
@@ -39,34 +40,34 @@ times, and the interval width. A later delay condition such as capture within
 1 Gyr boundary falls inside the output interval, the case is recorded
 separately.
 
-## Receiver validation
+## Validation of assigned companions
 
-`scripts/validate_hr5_capture_receivers.py` reads the assigned receiver at both
+`scripts/validate_hr5_capture_receivers.py` reads the assigned surviving SMBH at both
 interval boundaries and compares its last-resolved state with the disappearing
 sink. The two-body diagnostic uses
 
 ```text
-v_escape = sqrt(2 G (M_disappearing + M_receiver) / separation)
+v_escape = sqrt(2 G (M_disappearing + M_surviving) / separation)
 ```
 
-All 576,278 associations satisfy the 0.5 cMpc search limit and the receiver
+All 576,278 associations satisfy the 0.5 cMpc search limit and the companion
 mass factor of two because those conditions define the legacy selection. Of
 576,277 associations with finite last-resolved phase-space quantities, only 41
 have `v_relative <= v_escape`. The fraction is `7.1146e-5`. The median
-last-resolved separation is 4.614 pkpc, and the median relative speed is
-218.2 km/s. Also, 6.54 percent of the links share a receiver and output with at
-least one other disappearance.
+separation at the last common output is 4.614 pkpc, and the median relative
+speed is 218.2 km/s. Also, 6.54 percent of the inferred captures assign the
+same surviving SMBH to at least one other disappearance in the same output.
 
 The locally available consecutive MkAGN outputs span 20 through 26. Only one
-sink disappears across those intervals. Reconstructing its receiver from the
+sink disappears across those intervals. Reconstructing its companion from the
 two adjacent MkAGN snapshots reproduces the legacy tree assignment exactly.
 This single event tests the implementation but does not independently validate
 the full association catalogue.
 
 The phase-space result separates two measurements. Sink disappearance and its
-output interval come directly from the histories. Receiver identity, pair
+output interval come directly from the histories. The identity of the assigned companion, pair
 mass, chirp mass, and relative orbit remain conditional on the legacy
-association until direct sink-merger records are restored. The validation
+association until direct records of the merger of two sink particles are restored. The validation
 products are written under `results/hr5/receiver_validation/`.
 
 ## Regeneration
@@ -121,8 +122,8 @@ distribution. Each redshift-bin count is independently resampled from a
 Poisson distribution 200 times. The four distribution parameters are refitted
 for every realization. Symbols mark the bootstrap medians, and error bars span
 the 16th through 84th percentiles. The calculation does not include cosmic
-variance, output-time uncertainty, or ambiguity in the reconstructed capture
-receiver.
+variance, output-time uncertainty, or ambiguity in the assignment of the
+surviving SMBH.
 
 Figures 8 and 9, which appear as Figures 11 and 12 in the current JKAS draft,
 show the same count-statistical uncertainty for each measured redshift-bin
@@ -131,16 +132,19 @@ independent Poisson realizations. The measured rates remain at the symbol
 positions. The numerical values are written to
 `hr5_fixed_delay_rate_bootstrap.csv`.
 
-All manuscript graphics use 10-point legend text, open geometric symbols, and
-a color-vision-deficiency-safe palette. Line styles duplicate the color
-encoding for grayscale reproduction. Legends remain inside the axes and occupy
-regions separated from the measured curves and uncertainty intervals.
+Figures 9 and 10 use 6-point labels, ticks, panel letters, and legends after the
+requested 40 percent reduction. Figure 3 uses 6-point axis labels and tick
+labels while retaining 10-point panel letters and legends. The remaining
+manuscript graphics use 10-point text, open geometric symbols, and a
+color-vision-deficiency-safe palette. Line styles duplicate the color encoding
+for grayscale reproduction. Legends remain inside the axes and occupy regions
+separated from the measured curves and uncertainty intervals.
 
 ## Active SMBH pair selection and measurements
 
 The active-pair sample uses the MkAGN snapshots at outputs 89, 117, and 296.
-Both members of a dual-active pair satisfy the adopted bolometric-luminosity
-threshold. Exactly one member of a single-active pair satisfies the threshold.
+Both members of a dual AGN candidate satisfy the adopted bolometric-luminosity
+threshold. Exactly one member of a single-AGN pair satisfies the threshold.
 Every pair has a three-dimensional physical separation between 0.5 and
 30 pkpc. Three fractional measures are retained because published measurements
 use different denominators. `N_pair/N_AGN` counts pair edges.
@@ -173,23 +177,23 @@ measure the viewing-angle retention of three-dimensional pairs. They do not
 include unrelated foreground or background objects in an observational
 cylinder.
 
-The controlled receiver-link comparison retains pure two-member systems in
-the mass-limited population. It standardizes `log10(M_primary)`,
+The controlled binary-capture comparison retains systems with exactly two
+SMBHs in the mass-limited population. It standardizes `log10(M_primary)`,
 `log10(mass ratio)`, `log10(separation)`, and
 `log10(relative speed + 10 km/s)`, then finds a unique minimum-distance
-assignment. At redshift 2.848, all 326 pure dual-active pairs are matched to
-326 of 470 pure single-active candidates. The maximum absolute standardized
+assignment. At redshift 2.848, all 326 dual AGN candidates are matched to
+326 of 470 single-AGN pairs. The maximum absolute standardized
 mean difference decreases from 0.328 to 0.088. The interval-censored 1 Gyr
-receiver-link fractions are 0.893--0.902 and 0.859--0.862. Their difference is
+binary-capture fractions are 0.893--0.902 and 0.859--0.862. Their difference is
 bounded by 0.031--0.043.
 
-At redshift 1.499, all 243 pure dual-active pairs are matched to 243 of 1,135
-pure single-active candidates. The maximum absolute standardized mean
-difference decreases from 0.486 to 0.031. The corresponding receiver-link
+At redshift 1.499, all 243 dual AGN candidates are matched to 243 of 1,135
+single-AGN pairs. The maximum absolute standardized mean
+difference decreases from 0.486 to 0.031. The corresponding binary-capture
 fractions are 0.749--0.753 and 0.683--0.695. Their difference is bounded by
 0.053--0.070. The output-296 population is right-censored at the selection time
-because no later HR5 output is present. These are later legacy receiver links,
-not direct sink-merger records or physical coalescences.
+because no later HR5 output is present. These are inferred binary captures,
+not direct records of the partner or physical coalescences.
 
 Neutral-hydrogen columns are available along six cardinal sightlines at
 outputs 89 and 296. The analysis reports the fraction of active sightlines
@@ -207,9 +211,16 @@ retain this limitation.
 The output files are `hr5_dual_agn_summary.json`,
 `hr5_dual_agn_capture_cdf.csv`, `hr5_dual_agn_pairs.csv`, and
 `hr5_dual_offset_pairs_mbh_ge_1e6.csv`. Matched systems are written to
-`hr5_dual_offset_matched_pairs.csv`. The receiver-link columns describe the
-reconstructed numerical association. They do not establish physical SMBH
-coalescence.
+`hr5_dual_offset_matched_pairs.csv`. Columns whose historical names begin with
+`receiver_` identify the surviving SMBH assigned by the distance and mass
+criteria. They do not identify the partner selected by the simulation or
+establish physical SMBH coalescence.
+
+Output 296 at redshift 0.625 contains 8,179 SMBHs above the fiducial bolometric
+limit. Their median Eddington ratio is 0.0410, and the central 68 percent
+interval is 0.0158--0.271. The fraction above an Eddington ratio of 0.1 is
+0.288. The luminosity comparison is written to
+`hr5_eddington_luminosity_z0p625.pdf`.
 
 ## Literature comparison
 

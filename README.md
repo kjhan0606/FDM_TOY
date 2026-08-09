@@ -14,8 +14,8 @@ The package is a **parameterized toy model and unresolved inspiral
 prescription**, not a first-principles prediction of physical coalescence.
 Published separation curves provide comparison cases, but the adopted soliton
 profiles still require calibration against the corresponding simulations. In
-particular, a lagRamses sink merger is a resolution-scale numerical event and
-must not be called an SMBH coalescence.
+particular, a merger of sink particles in lagRamses is a resolution-scale
+numerical event and must not be called an SMBH coalescence.
 
 ## v0.1 scope
 
@@ -124,17 +124,19 @@ mass and core-radius definitions.
 The repository currently implements the static-soliton three-dimensional orbit
 calculation, FDM energy and momentum transfer, Peters gravitational-wave
 times, conservative composition of the physical coalescence time, and a source
-study of the lagRamses sink-merger conditions. Koo and Boey separation curves
+study of the lagRamses conditions for a merger of sink particles. Koo and Boey separation curves
 are included as comparison cases. Calibration against their simulated density
 histories, the numerical-radius-to-parsec inspiral, an evolving FDM
 wavefunction, and the cosmological PTA population remain future work.
 
 ## Horizon Run 5 comparison sample
 
-The legacy HR5 sink tree can be regenerated as an explicit interval catalog.
+The legacy HR5 sink tree can be regenerated as an explicit catalog of binary
+captures with interval-censored times.
 The two output boundaries are retained because a disappearing sink is last
-resolved at output `i-1`, whereas its receiver is selected from the surviving
-population at output `i`.
+resolved at output `i-1`, whereas the assigned surviving SMBH is selected from
+the population at output `i`. The files retain `receiver_id` as a historical
+field name.
 
 ```bash
 python scripts/extract_hr5_capture_catalog.py \
@@ -145,17 +147,17 @@ python scripts/validate_hr5_capture_receivers.py
 python scripts/analyze_hr5_dual_agn.py
 ```
 
-The first command produces 576,278 sink-removal intervals from 1,688,677 sink
+The first command produces 576,278 binary-capture intervals from 1,688,677 sink
 histories. The second command redraws Figures 1--13 of the earlier HR5 draft.
-The third command tests the legacy receiver links against last-resolved
+The third command tests the assigned surviving SMBHs against the phase-space
 phase-space states and consecutive MkAGN outputs. The fourth command measures
-spatially selected dual-active and single-active SMBH pairs, estimates spatial
+spatially selected dual AGN candidates and single-AGN pairs, estimates spatial
 variance with an eight-region jackknife, and constructs matched pure
 two-member comparisons with interval and right censoring.
 
-The disappearing sinks are measured directly, but the assigned receivers are
-legacy distance-and-mass associations rather than direct merger-partner
-records. These associations are not physical SMBH coalescences. The event
-definitions, receiver validation, active-pair selection, and literature
+The disappearing sinks are measured directly, but the assigned surviving SMBHs
+come from distance and mass criteria rather than direct records of the capture
+partners. The inferred binary captures are not physical SMBH coalescences. The event
+definitions, validation of assigned companions, active-pair selection, and literature
 comparison are documented in
 [`docs/hr5_reproduction.md`](docs/hr5_reproduction.md).
