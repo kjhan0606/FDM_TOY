@@ -141,6 +141,20 @@ angular momentum to enter the wave through one rotating pattern. A significant
 departure requires additional orbital harmonics, a radial response, or both.
 The measured ratio constrains the wave source and is not imposed in advance.
 
+The minimal mode decomposition assigns `Omega dot L_wave` to a pattern rotating
+at the orbital frequency and assigns
+
+\[
+\dot E_{m=0}=\dot E_{\rm wave}-\Omega\dot L_{\rm wave}
+\]
+
+to a radial mode with no angular momentum. The function
+`decompose_wave_mode_exchange` evaluates this split. A negative radial
+remainder rules out one orbital-frequency pattern plus a positive-energy radial
+mode and requires other orbital harmonics or an interval with energy returned
+from the wave. The decomposition diagnoses the required modes but does not
+alter the wavefunction.
+
 ## Multipole potential below the resolved binary scale
 
 When the resolved calculation replaces the two SMBHs by one particle at their
