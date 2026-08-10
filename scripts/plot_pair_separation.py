@@ -44,16 +44,20 @@ def main() -> int:
         }
     )
     figure, axis = plt.subplots(figsize=(3.35, 2.35), constrained_layout=True)
-    axis.plot(
-        plot_time,
-        separation_pc,
-        color="#254F73",
-        linewidth=1.35,
-        marker="o",
-        markersize=2.2,
-        markerfacecolor="white",
-        markeredgewidth=0.65,
-    )
+    line_options = {
+        "color": "#254F73",
+        "linewidth": 0.85 if separation_pc.size > 200 else 1.35,
+    }
+    if separation_pc.size <= 200:
+        line_options.update(
+            {
+                "marker": "o",
+                "markersize": 2.2,
+                "markerfacecolor": "white",
+                "markeredgewidth": 0.65,
+            }
+        )
+    axis.plot(plot_time, separation_pc, **line_options)
     axis.set_xlabel(time_label)
     axis.set_ylabel(r"SMBH separation [pc]")
     axis.set_xlim(float(plot_time[0]), float(plot_time[-1]))
