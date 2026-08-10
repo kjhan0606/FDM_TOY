@@ -90,10 +90,9 @@ def test_multipole_rotation_preserves_each_invariant_amplitude() -> None:
         l2_m1=complex(-0.04, 0.09),
         l2_m2=complex(0.06, -0.12),
     )
-    angle = 0.63
-    radial = np.array([np.cos(angle), np.sin(angle), 0.0])
-    tangential = np.array([-np.sin(angle), np.cos(angle), 0.0])
-    normal = np.array([0.0, 0.0, 1.0])
+    radial = np.array([1.0, -1.0, 0.0]) / np.sqrt(2.0)
+    normal = np.array([1.0, 1.0, 1.0]) / np.sqrt(3.0)
+    tangential = np.cross(normal, radial)
     rotated = rotate_multipoles_to_frame(
         multipoles, radial, tangential, normal
     )
