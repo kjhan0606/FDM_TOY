@@ -23,6 +23,69 @@ class CycleAveragedSeries:
     rate: np.ndarray
 
 
+@dataclass(frozen=True)
+class BlockBootstrapInterval:
+    estimate: float
+    lower_95: float
+    upper_95: float
+    block_length: int
+    samples: int
+
+
+def moving_block_bootstrap_rate(
+    *,
+    rate: np.ndarray,
+    duration: np.ndarray,
+    block_length: int,
+    samples: int = 2000,
+    seed: int = 1729,
+) -> BlockBootstrapInterval:
+    """Estimate a time-weighted mean and its interval from circular blocks.
+
+    The input cycles should cover a local interval over which a stationary
+    mean is physically meaningful.  The interval measures correlated
+    cycle-to-cycle variation and excludes numerical-resolution systematics.
+    """
+
+    rate_array = np.asarray(rate, dtype=float)
+    duration_array = np.asarray(duration, dtype=float)
+    if (
+        rate_array.ndim != 1
+        or duration_array.shape != rate_array.shape
+        or rate_array.size < 2
+    ):
+        raise ValueError("rate and duration must be equal vectors with two samples")
+    if np.any(~np.isfinite(rate_array)) or np.any(~np.isfinite(duration_array)):
+        raise ValueError("bootstrap inputs must be finite")
+    if np.any(duration_array <= 0.0):
+        raise ValueError("cycle durations must be positive")
+    if not 1 <= block_length <= rate_array.size:
+        raise ValueError("block length must lie within the input series")
+    if samples < 1:
+        raise ValueError("bootstrap samples must be positive")
+
+    estimate = float(np.sum(rate_array * duration_array) / np.sum(duration_array))
+    generator = np.random.default_rng(seed)
+    block_count = int(np.ceil(rate_array.size / block_length))
+    offsets = np.arange(block_length)
+    bootstrap_means = np.empty(samples)
+    for draw in range(samples):
+        starts = generator.integers(0, rate_array.size, size=block_count)
+        indices = ((starts[:, None] + offsets[None, :]) % rate_array.size).ravel()
+        indices = indices[: rate_array.size]
+        bootstrap_means[draw] = np.sum(
+            rate_array[indices] * duration_array[indices]
+        ) / np.sum(duration_array[indices])
+    lower, upper = np.percentile(bootstrap_means, [2.5, 97.5])
+    return BlockBootstrapInterval(
+        estimate=estimate,
+        lower_95=float(lower),
+        upper_95=float(upper),
+        block_length=block_length,
+        samples=samples,
+    )
+
+
 def unwrapped_orbital_phase(
     displacement: np.ndarray, relative_velocity: np.ndarray
 ) -> np.ndarray:

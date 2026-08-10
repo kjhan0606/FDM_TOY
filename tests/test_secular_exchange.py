@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from fdm_smbh_delay.secular_exchange import (
+    moving_block_bootstrap_rate,
     phase_cycle_average,
     unwrapped_orbital_phase,
 )
@@ -36,3 +37,29 @@ def test_cycle_average_requires_a_complete_orbit() -> None:
         phase_cycle_average(
             time=time, phase=2.0 * np.pi * time, value=np.ones_like(time)
         )
+
+
+def test_block_bootstrap_preserves_constant_rate() -> None:
+    interval = moving_block_bootstrap_rate(
+        rate=np.full(12, -3.0),
+        duration=np.linspace(0.8, 1.2, 12),
+        block_length=4,
+        samples=100,
+        seed=11,
+    )
+    assert interval.estimate == pytest.approx(-3.0)
+    assert interval.lower_95 == pytest.approx(-3.0)
+    assert interval.upper_95 == pytest.approx(-3.0)
+
+
+def test_block_bootstrap_is_reproducible() -> None:
+    arguments = {
+        "rate": np.arange(10.0),
+        "duration": np.ones(10),
+        "block_length": 3,
+        "samples": 80,
+        "seed": 7,
+    }
+    first = moving_block_bootstrap_rate(**arguments)
+    second = moving_block_bootstrap_rate(**arguments)
+    assert first == second

@@ -11,6 +11,7 @@ import numpy as np
 
 from fdm_smbh_delay.pyul import ordered_output_paths
 from fdm_smbh_delay.secular_exchange import (
+    moving_block_bootstrap_rate,
     phase_cycle_average,
     unwrapped_orbital_phase,
 )
@@ -19,7 +20,16 @@ from fdm_smbh_delay.secular_exchange import (
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("run", type=Path)
+    parser.add_argument("--rate-window-orbits", type=int, default=32)
+    parser.add_argument("--block-orbits", type=int, default=8)
+    parser.add_argument("--bootstrap-samples", type=int, default=2000)
     args = parser.parse_args()
+    if args.rate_window_orbits < 2:
+        raise ValueError("--rate-window-orbits must be at least two")
+    if args.block_orbits < 1:
+        raise ValueError("--block-orbits must be positive")
+    if args.bootstrap_samples < 0:
+        raise ValueError("--bootstrap-samples must be non-negative")
     run = args.run.expanduser().resolve()
     metadata = json.loads(
         (run / "fdm_adapter_metadata.json").read_text(encoding="utf-8")
@@ -99,6 +109,42 @@ def main() -> int:
     )
     orbital_energy = averaged["binary_orbital_energy"]
     angular_momentum = averaged["binary_angular_momentum_msun_pc2_myr"]
+    window_orbits = min(args.rate_window_orbits, reference.cycle_index.size)
+    bootstrap_summary = None
+    if window_orbits >= 2 and args.bootstrap_samples > 0:
+        selection = slice(-window_orbits, None)
+        block_orbits = min(args.block_orbits, window_orbits)
+        power_interval = moving_block_bootstrap_rate(
+            rate=orbital_energy.rate[selection],
+            duration=orbital_energy.duration[selection],
+            block_length=block_orbits,
+            samples=args.bootstrap_samples,
+        )
+        torque_interval = moving_block_bootstrap_rate(
+            rate=angular_momentum.rate[selection],
+            duration=angular_momentum.duration[selection],
+            block_length=block_orbits,
+            samples=args.bootstrap_samples,
+        )
+        bootstrap_summary = {
+            "window_orbits": window_orbits,
+            "block_orbits": block_orbits,
+            "samples": args.bootstrap_samples,
+            "orbital_power": {
+                "estimate": power_interval.estimate,
+                "lower_95": power_interval.lower_95,
+                "upper_95": power_interval.upper_95,
+            },
+            "orbital_torque": {
+                "estimate": torque_interval.estimate,
+                "lower_95": torque_interval.lower_95,
+                "upper_95": torque_interval.upper_95,
+            },
+            "scope": (
+                "correlated cycle variation in the final local window; excludes "
+                "spatial-resolution systematics and secular variation outside the window"
+            ),
+        }
     summary = {
         "status": "orbit_averaged",
         "complete_orbits": int(reference.cycle_index.size),
@@ -120,6 +166,7 @@ def main() -> int:
             (angular_momentum.end_value[-1] - angular_momentum.start_value[0])
             / (angular_momentum.end_time[-1] - angular_momentum.start_time[0])
         ),
+        "late_window_block_bootstrap": bootstrap_summary,
         "energy_ledger": (
             "orbital, wave intrinsic, wave-SMBH interaction, SMBH centre-of-mass, "
             "and combined-Hamiltonian residual rates are retained separately"
