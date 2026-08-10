@@ -177,6 +177,13 @@ The table normalizes time by the dynamical time of the soliton, energy by
 `G M1 M2 / r_core`, and angular momentum by
 `mu sqrt(G M_binary r_core)`. The table retains every orbit and records the
 separation in cell units. It does not select a fitting sample automatically.
+When three-dimensional wave states are available, the same row includes the
+soliton-to-binary centre offset, central density, measured half-density radius,
+outer mass and intrinsic energy, complex density multipoles, and radial mass
+and Schrödinger-energy fluxes. These quantities are normalized by the soliton
+and orbital scales of that calculation. The measured half-density radius
+receives a separate spatial-resolution flag and is not interpreted when it
+spans fewer than two cell widths.
 
 Long calculations may retain frequent SMBH and scalar-energy states while
 writing the three-dimensional density and wavefunction less often. For example,

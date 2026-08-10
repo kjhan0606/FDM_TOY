@@ -10,7 +10,10 @@ from pathlib import Path
 
 import numpy as np
 
-from fdm_smbh_delay.exchange_scaling import exchange_scales
+from fdm_smbh_delay.exchange_scaling import (
+    exchange_scales,
+    schrodinger_poisson_similarity_parameter,
+)
 
 
 _MODE_REGIONS = (
@@ -38,18 +41,33 @@ _MODE_COLUMNS = tuple(
     for region in _MODE_REGIONS
     for quantity in ("l1_fraction", "l2_fraction", *_MODE_COEFFICIENTS)
 )
+_WAVE_STATE_COLUMNS = (
+    "wave_binary_com_offset_pc",
+    "central_density_msun_pc3",
+    "core_radius_pc",
+    "outer_mass_msun",
+    "outer_intrinsic_energy",
+    "mass_flux_2rc_msun_myr",
+    "mass_flux_4rc_msun_myr",
+    "mass_flux_8rc_msun_myr",
+    "schrodinger_energy_flux_2rc",
+    "schrodinger_energy_flux_4rc",
+    "schrodinger_energy_flux_8rc",
+)
 
 
-def _nearest_mode_state(
+def _nearest_wave_state(
     response: np.ndarray | None, time_myr: float, orbital_period_myr: float
 ) -> dict[str, float]:
-    values = {column: np.nan for column in _MODE_COLUMNS}
+    values = {
+        column: np.nan for column in (*_WAVE_STATE_COLUMNS, *_MODE_COLUMNS)
+    }
     values["wave_mode_sample_time_offset_over_orbital_period"] = np.nan
     if response is None:
         return values
     index = int(np.argmin(np.abs(response["time_myr"] - time_myr)))
     available = set(response.dtype.names or ())
-    for column in _MODE_COLUMNS:
+    for column in (*_WAVE_STATE_COLUMNS, *_MODE_COLUMNS):
         if column in available:
             values[column] = float(response[column][index])
     values["wave_mode_sample_time_offset_over_orbital_period"] = float(
@@ -85,6 +103,11 @@ def main() -> int:
             soliton_mass_msun=soliton_mass,
             core_radius_pc=core_radius,
         )
+        similarity_parameter = schrodinger_poisson_similarity_parameter(
+            particle_mass_ev=float(metadata["particle_mass_ev"]),
+            soliton_mass_msun=soliton_mass,
+            core_radius_pc=core_radius,
+        )
         conservation_summary = json.loads(
             (run / "conservation_summary.json").read_text(encoding="utf-8")
         )
@@ -111,11 +134,57 @@ def main() -> int:
             table["mean_separation_over_cell_size"] >= 2.0
         )
         for row_index, cycle in enumerate(table):
-            mode_state = _nearest_mode_state(
+            wave_snapshot = _nearest_wave_state(
                 response,
                 float(cycle["mean_time_myr"]),
                 float(cycle["orbital_period_myr"]),
             )
+            initial_central_density = (
+                np.nan
+                if response is None
+                else float(response["central_density_msun_pc3"][0])
+            )
+            measured_half_density_radius = wave_snapshot.pop("core_radius_pc")
+            wave_state = {
+                "wave_binary_com_offset_over_core_radius": (
+                    wave_snapshot.pop("wave_binary_com_offset_pc") / core_radius
+                ),
+                "central_density_over_initial": (
+                    wave_snapshot.pop("central_density_msun_pc3")
+                    / initial_central_density
+                ),
+                "measured_half_density_radius_over_reference": (
+                    measured_half_density_radius / core_radius
+                ),
+                "measured_half_density_radius_over_cell_size": (
+                    measured_half_density_radius / cell_size
+                ),
+                "half_density_radius_spatially_resolved": int(
+                    measured_half_density_radius >= 2.0 * cell_size
+                ),
+                "outer_mass_fraction": (
+                    wave_snapshot.pop("outer_mass_msun") / soliton_mass
+                ),
+                "dimensionless_outer_intrinsic_energy": (
+                    wave_snapshot.pop("outer_intrinsic_energy")
+                    / scales.orbital_energy_msun_pc2_myr2
+                ),
+                **{
+                    f"dimensionless_mass_flux_{factor}rc": (
+                        wave_snapshot.pop(f"mass_flux_{factor}rc_msun_myr")
+                        * scales.soliton_dynamical_time_myr
+                        / soliton_mass
+                    )
+                    for factor in (2, 4, 8)
+                },
+                **{
+                    f"dimensionless_schrodinger_energy_flux_{factor}rc": (
+                        wave_snapshot.pop(f"schrodinger_energy_flux_{factor}rc")
+                        / scales.orbital_power_msun_pc2_myr3
+                    )
+                    for factor in (2, 4, 8)
+                },
+            }
             spatially_resolved = bool(
                 cycle["mean_separation_over_cell_size"] >= 2.0
             )
@@ -125,6 +194,9 @@ def main() -> int:
                     "resolution": int(metadata["resolution"]),
                     "cycle": int(cycle["cycle"]),
                     "particle_mass_ev": float(metadata["particle_mass_ev"]),
+                    "schrodinger_poisson_similarity_parameter": (
+                        similarity_parameter
+                    ),
                     "mass_ratio_q": min(mass1, mass2) / max(mass1, mass2),
                     "binary_to_soliton_mass": (mass1 + mass2) / soliton_mass,
                     "mean_time_over_soliton_dynamical_time": cycle[
@@ -196,7 +268,8 @@ def main() -> int:
                         initial_resolved[row_index]
                         and initial_resolved_energy_passed
                     ),
-                    **mode_state,
+                    **wave_state,
+                    **wave_snapshot,
                 }
             )
     if not rows:
@@ -229,10 +302,15 @@ def main() -> int:
             "through one rigidly rotating pattern"
         ),
         "wave_mode_state": (
-            "nearest saved three-dimensional density multipoles; the time "
-            "offset in orbital periods must be small before phase-dependent "
-            "fits are attempted"
+            "nearest saved three-dimensional density multipoles, core state, "
+            "and radial fluxes; the time offset in orbital periods must be "
+            "small before phase-dependent fits are attempted"
         ),
+        "half_density_radius_rule": (
+            "the measured half-density radius is provisionally resolved only "
+            "when it spans at least two cell widths"
+        ),
+        "similarity_parameter": "hbar^2/(G*m^2*M_soliton*r_core)",
     }
     output.with_suffix(".summary.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
