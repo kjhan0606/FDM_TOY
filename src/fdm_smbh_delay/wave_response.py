@@ -29,6 +29,54 @@ class MultipoleAmplitudes:
     l2_m2: complex
 
 
+@dataclass(frozen=True)
+class FrequencyPeak:
+    frequency_inverse_time: float
+    period_time: float
+    frequency_resolution_inverse_time: float
+    peak_power_fraction: float
+
+
+def windowed_dominant_frequency(
+    time: np.ndarray, signal: np.ndarray
+) -> FrequencyPeak:
+    """Return the strongest nonzero Fourier bin after linear detrending."""
+
+    sample_time = np.asarray(time, dtype=float)
+    values = np.asarray(signal, dtype=float)
+    if (
+        sample_time.ndim != 1
+        or values.shape != sample_time.shape
+        or sample_time.size < 8
+        or np.any(~np.isfinite(sample_time))
+        or np.any(~np.isfinite(values))
+    ):
+        raise ValueError("frequency inputs must be finite vectors with eight samples")
+    intervals = np.diff(sample_time)
+    if np.any(intervals <= 0.0):
+        raise ValueError("sample times must increase")
+    cadence = float(np.median(intervals))
+    if np.max(np.abs(intervals - cadence)) > 1.0e-6 * cadence:
+        raise ValueError("Fourier diagnostic requires uniformly spaced samples")
+    design = np.column_stack((sample_time - np.mean(sample_time), np.ones_like(sample_time)))
+    trend = design @ np.linalg.lstsq(design, values, rcond=None)[0]
+    transformed = np.fft.rfft((values - trend) * np.hanning(values.size))
+    power = np.abs(transformed) ** 2
+    power[0] = 0.0
+    total_power = float(np.sum(power))
+    if total_power <= np.finfo(float).tiny:
+        raise ValueError("detrended signal has no measurable variation")
+    frequencies = np.fft.rfftfreq(values.size, d=cadence)
+    peak = int(np.argmax(power))
+    frequency = float(frequencies[peak])
+    return FrequencyPeak(
+        frequency_inverse_time=frequency,
+        period_time=1.0 / frequency,
+        frequency_resolution_inverse_time=float(frequencies[1]),
+        peak_power_fraction=float(power[peak] / total_power),
+    )
+
+
 def periodic_centre_of_mass(density: np.ndarray, box_size: float) -> np.ndarray:
     """Return the circular centre of mass of a compact periodic density field."""
 

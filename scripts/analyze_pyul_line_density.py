@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 
 from fdm_smbh_delay.pyul import ordered_output_paths, output_index, pyul_unit_system
+from fdm_smbh_delay.wave_response import windowed_dominant_frequency
 
 
 def _symmetric_sample(
@@ -105,6 +106,38 @@ def main() -> int:
             "an energy-deposition measurement"
         ),
     }
+    conservation_summary_path = run / "conservation_summary.json"
+    if conservation_summary_path.is_file():
+        conservation_summary = json.loads(
+            conservation_summary_path.read_text(encoding="utf-8")
+        )
+        resolved_duration = conservation_summary.get(
+            "initial_spatially_resolved_duration_myr"
+        )
+        resolved = (
+            np.ones(time.size, dtype=bool)
+            if resolved_duration is None
+            else time <= float(resolved_duration)
+        )
+        if np.count_nonzero(resolved) >= 8:
+            peak = windowed_dominant_frequency(
+                time[resolved], central_density[resolved]
+            )
+            summary["initial_resolved_central_density_frequency"] = {
+                "samples": int(np.count_nonzero(resolved)),
+                "duration_myr": float(time[resolved][-1] - time[resolved][0]),
+                "dominant_frequency_myr_inverse": peak.frequency_inverse_time,
+                "dominant_period_myr": peak.period_time,
+                "frequency_resolution_myr_inverse": (
+                    peak.frequency_resolution_inverse_time
+                ),
+                "peak_power_fraction": peak.peak_power_fraction,
+                "method": "linear detrending followed by a Hann-windowed FFT",
+                "interpretation": (
+                    "one-dimensional central-density oscillation; not an "
+                    "identified soliton eigenmode"
+                ),
+            }
     (run / "line_density_summary.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )

@@ -9,6 +9,7 @@ from fdm_smbh_delay.wave_response import (
     periodic_poisson_code,
     plummer_potential_code,
     spectral_wave_fields,
+    windowed_dominant_frequency,
 )
 
 
@@ -85,6 +86,15 @@ def test_periodic_point_centre_crosses_box_boundary() -> None:
     assert abs(abs(centre[0]) - 5.0) < 1.0e-12
     assert centre[1] == pytest.approx(1.0)
     assert centre[2] == pytest.approx(0.0)
+
+
+def test_windowed_frequency_recovers_a_detrended_sinusoid() -> None:
+    time = np.linspace(0.0, 2.0, 2049)
+    signal = 3.0 + 0.2 * time + np.sin(2.0 * np.pi * 7.0 * time)
+    peak = windowed_dominant_frequency(time, signal)
+    assert peak.frequency_inverse_time == pytest.approx(7.0, rel=1.0e-3)
+    assert peak.period_time == pytest.approx(1.0 / 7.0, rel=1.0e-3)
+    assert peak.peak_power_fraction > 0.6
 
 
 def test_spectral_plane_wave_currents() -> None:
