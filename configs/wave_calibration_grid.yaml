@@ -16,6 +16,15 @@ fiducial:
   binary_to_soliton_mass: 0.10
   semi_major_axis_over_core_radius: 0.40
 
+similarity_scaling:
+  parameter: "hbar^2/(G*m^2*M_soliton*r_core)"
+  interpretation: >-
+    Physical boson-mass variants share one dimensionless calculation only when
+    this parameter and the other dimensionless state variables agree.
+  perturbed_core_rule: >-
+    Initial complex density multipoles remain independent state variables and
+    are not removed by soliton similarity scaling.
+
 numerics:
   box_over_core_radius: 45.4545454545
   resolutions_by_tier:

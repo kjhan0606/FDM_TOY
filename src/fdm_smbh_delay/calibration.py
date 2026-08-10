@@ -9,6 +9,7 @@ from typing import Iterable
 import numpy as np
 
 from .constants import G_INTERNAL, KM_S_TO_PC_MYR
+from .exchange_scaling import schrodinger_poisson_similarity_parameter
 from .literature import (
     boey2025_schive_soliton,
     koo2024_equivalent_schive_soliton,
@@ -26,6 +27,7 @@ class WaveCalibrationCase:
     soliton_mass_msun: float
     core_radius_pc: float
     central_density_msun_pc3: float
+    schrodinger_poisson_similarity_parameter: float
     mass_ratio_q: float
     eccentricity: float
     binary_to_soliton_mass: float
@@ -122,6 +124,13 @@ def build_wave_case(
         soliton_mass_msun=soliton.total_mass_msun,
         core_radius_pc=soliton.core_radius_pc,
         central_density_msun_pc3=soliton.central_density_msun_pc3,
+        schrodinger_poisson_similarity_parameter=(
+            schrodinger_poisson_similarity_parameter(
+                particle_mass_ev=particle_mass_ev,
+                soliton_mass_msun=soliton.total_mass_msun,
+                core_radius_pc=soliton.core_radius_pc,
+            )
+        ),
         mass_ratio_q=mass_ratio_q,
         eccentricity=eccentricity,
         binary_to_soliton_mass=binary_to_soliton_mass,

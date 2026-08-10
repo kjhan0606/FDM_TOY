@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+from astropy import units as u
+from astropy.constants import G, c, hbar
 
 from .constants import G_INTERNAL
 
@@ -16,6 +18,43 @@ class ExchangeScales:
     orbital_angular_momentum_msun_pc2_myr: float
     orbital_power_msun_pc2_myr3: float
     orbital_torque_msun_pc2_myr2: float
+
+
+def schrodinger_poisson_similarity_parameter(
+    *,
+    particle_mass_ev: float,
+    soliton_mass_msun: float,
+    core_radius_pc: float,
+) -> float:
+    """Return ``hbar^2/(G m^2 M_s r_c)`` for a physical soliton.
+
+    This dimensionless coefficient multiplies the quantum term relative to
+    self-gravity after length, mass, and time are normalized by ``r_c``,
+    ``M_s``, and ``sqrt(r_c^3/(G M_s))``. Self-similar ground-state solitons
+    share the same value even when their physical boson masses differ.
+    """
+
+    values = np.asarray(
+        [particle_mass_ev, soliton_mass_msun, core_radius_pc], dtype=float
+    )
+    if np.any(~np.isfinite(values)) or np.any(values <= 0.0):
+        raise ValueError(
+            "particle mass, soliton mass, and core radius must be positive"
+        )
+    particle_mass = particle_mass_ev * u.eV / c**2
+    return float(
+        (
+            hbar**2
+            / (
+                G
+                * particle_mass**2
+                * (soliton_mass_msun * u.Msun)
+                * (core_radius_pc * u.pc)
+            )
+        )
+        .decompose()
+        .value
+    )
 
 
 def exchange_scales(

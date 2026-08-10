@@ -27,6 +27,9 @@ def test_literature_anchor_initial_conditions() -> None:
     assert boey.initial_separation_pc == pytest.approx(3.0)
     assert boey.mass1_msun == pytest.approx(0.1 * boey.soliton_mass_msun)
     assert boey.target_duration_myr == pytest.approx(0.8)
+    assert boey.schrodinger_poisson_similarity_parameter == pytest.approx(
+        0.3881923084
+    )
 
 
 def test_structured_grid_tiers_and_no_analytic_drag() -> None:

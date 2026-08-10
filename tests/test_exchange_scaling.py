@@ -1,6 +1,9 @@
 import pytest
 
-from fdm_smbh_delay.exchange_scaling import exchange_scales
+from fdm_smbh_delay.exchange_scaling import (
+    exchange_scales,
+    schrodinger_poisson_similarity_parameter,
+)
 
 
 def test_exchange_scales_close_rate_definitions() -> None:
@@ -28,3 +31,17 @@ def test_exchange_scales_reject_non_positive_inputs() -> None:
             soliton_mass_msun=1.0,
             core_radius_pc=1.0,
         )
+
+
+def test_soliton_similarity_parameter_is_invariant_under_fdm_scaling() -> None:
+    reference = schrodinger_poisson_similarity_parameter(
+        particle_mass_ev=1.0e-21,
+        soliton_mass_msun=1.0006508307763383e9,
+        core_radius_pc=2.2,
+    )
+    rescaled = schrodinger_poisson_similarity_parameter(
+        particle_mass_ev=3.0e-22,
+        soliton_mass_msun=3.335502769254603e9,
+        core_radius_pc=7.333333333333333,
+    )
+    assert reference == pytest.approx(rescaled)

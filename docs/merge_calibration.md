@@ -84,6 +84,16 @@ The structured grid varies
 - `M_bin/M_s = 0.04, 0.10, 0.20`;
 - `a/r_c = 0.10, 0.40, 1.36`.
 
+Each physical case also records
+`hbar^2/(G m^2 M_s r_c)`. This coefficient measures the quantum term relative
+to self-gravity after the equations are normalized by the soliton mass, core
+radius, and dynamical time. Physical boson-mass variants do not require a
+separate calculation when this coefficient and all other dimensionless state
+variables agree. The Koo and Boey profile proxies give 0.37079 and 0.38819,
+respectively, and therefore remain distinct initial states. A disturbed core
+also requires its measured complex dipole and quadrupole amplitudes. Soliton
+similarity scaling does not remove that dependence.
+
 Six literature anchors form tier 0. Nine fiducial and one-axis variations form
 tier 1. The remaining 72 interaction cases form tier 2. The resulting 87
 physical cases expand to 108 resolution runs. Tier-0 anchors use effective

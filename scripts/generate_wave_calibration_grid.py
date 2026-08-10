@@ -78,6 +78,7 @@ def main() -> int:
         "analytic_fdm_drag": False,
         "solver_status": "public_pyul_adapter_available_full_grid_pending",
         "energy_accounting": raw["energy_accounting"],
+        "similarity_scaling": raw["similarity_scaling"],
         "required_measurements": raw["measurements"],
         "configuration": str(args.config),
     }
