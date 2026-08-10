@@ -141,6 +141,15 @@ angular momentum to enter the wave through one rotating pattern. A significant
 departure requires additional orbital harmonics, a radial response, or both.
 The measured ratio constrains the wave source and is not imposed in advance.
 
+The local FDM state also affects the secular response. Zhang et al. (2026,
+<https://arxiv.org/abs/2602.11512>) find that an initially unperturbed
+equal-mass binary mainly excites the quadrupole and does not show sustained
+stone-skipping rebounds. A seeded dipole changes the long-term motion in the
+same fully coupled setting. The calibration state must therefore retain the
+complex dipole and quadrupole amplitudes, or an equivalent local wave
+description, rather than assume that masses and orbital elements determine a
+unique decay rate.
+
 The minimal mode decomposition assigns `Omega dot L_wave` to a pattern rotating
 at the orbital frequency and assigns
 

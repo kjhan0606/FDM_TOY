@@ -67,9 +67,11 @@ The output directory contains:
 - `config.yaml`: exact input configuration used for the calculation
 
 `timeout` is a valid censored physical result, not a numerical failure.
-The transfer ledger is not yet a live wavefunction update; the coupling and
-double-counting rules are documented in
-[`docs/wave_energy_coupling.md`](docs/wave_energy_coupling.md).
+The analytic-orbit command records the transfer without evolving the
+wavefunction. Separate PyUL_NBody adapters now run fully coupled
+Schrödinger–Poisson tests in which the FDM wake supplies the force and no
+analytic FDM drag is applied. The coupling and double-counting rules are
+documented in [`docs/wave_energy_coupling.md`](docs/wave_energy_coupling.md).
 
 The numerical capture interface, corrected Koo and Boey profile definitions,
 live-wave parameter grid, and first PyUL_NBody resolution tests are documented
@@ -131,10 +133,44 @@ calculation, FDM energy and momentum transfer, Peters gravitational-wave
 times, conservative composition of the physical coalescence time, and a source
 study of the lagRamses conditions for a merger of sink particles. The Koo and
 Boey profile definitions and fitted separation curves are included as reference
-cases, and the first live-wave resolution tests have been completed. Calibration
-against their full simulated density histories, the numerical-radius-to-parsec
-inspiral, long live-wave calculations, and the cosmological PTA population
-remain future work.
+cases. Fully coupled PyUL_NBody calculations measure the complete Hamiltonian,
+the osculating binary elements, orbit-averaged power and torque, correlated
+uncertainties, central-density evolution, and sparse three-dimensional wave
+diagnostics. Calibration against converged long calculations, the
+numerical-radius-to-parsec inspiral, and the cosmological PTA population remain
+future work.
+
+## Fully coupled wave calculation
+
+The live-wave calculation requires a separate checkout of the public
+PyUL_NBody solver. A representative command is
+
+```bash
+python scripts/run_pyul_wave_case.py \
+  --pyul-path /path/to/PyUL_NBody \
+  --case-id koo_mbh1.0e8 \
+  --resolution 128 \
+  --duration-myr 1.0 \
+  --save-number 2048 \
+  --rk-steps 36 \
+  --box-pc 40 \
+  --output results/pyul_long_term/koo_1myr_s2048
+```
+
+The corresponding orbit-resolved measurements are generated with
+
+```bash
+python scripts/analyze_pyul_wave_run.py RUN
+python scripts/analyze_pyul_secular_exchange.py RUN
+python scripts/analyze_pyul_line_density.py RUN
+python scripts/build_wave_exchange_table.py RUN --output wave_exchange.csv
+```
+
+The live calculation is physically interpretable only while its spatial and
+Hamiltonian acceptance tests pass. An orbit below two cell widths is retained
+as a numerical result but is not used as a calibrated decay rate. Long
+calibration runs should also use `--save-3d-number` to retain sparse fields for
+radial energy transport and spherical-mode measurements.
 
 ## Horizon Run 5 comparison sample
 
