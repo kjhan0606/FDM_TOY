@@ -224,6 +224,24 @@ resolution when the Hamiltonian error exceeds the adopted tolerance. PyUL
 interprets `--rk-steps 36` as 36 Runge--Kutta stages per wave step, which gives
 nine RK4 substeps for the SMBHs. The run metadata records both quantities.
 
+### Immediate convergence sequence
+
+The first convergence comparison repeats the initial `0.1083984375 Myr` of
+the Koo anchor. This interval ends just before the `128^3` trajectory falls
+below two cell widths.
+
+| calculation | cells | wave step factor | SMBH RK4 substeps | estimated wave steps |
+|---|---:|---:|---:|---:|
+| long-run prefix | 128 | 1.0 | 9 | 6,833 |
+| wave-step repeat | 128 | 0.5 | 9 | 13,666 |
+| particle-step repeat | 128 | 1.0 | 18 | 6,833 |
+| spatial repeat | 256 | 1.0 | 9 | 27,330 |
+
+The two `128^3` repeats separate the wave integrator from the SMBH integrator.
+The `256^3` calculation then halves the cell width from 0.3125 to 0.15625 pc.
+The orbital power, torque, Hamiltonian residual, separation history, and local
+wave state must agree before any row enters the physical calibration.
+
 The completed Koo-anchor smoke calculations give:
 
 | resolution | cell size [pc] | duration [yr] | wave-mass error | total-energy error | error / transferred energy |
