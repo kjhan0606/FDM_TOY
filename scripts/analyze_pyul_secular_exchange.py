@@ -107,6 +107,11 @@ def main() -> int:
     exchange_mode_ratio[nonzero_torque] = averaged[
         "binary_orbital_energy"
     ].rate[nonzero_torque] / frequency_torque[nonzero_torque]
+    simultaneous_losses = (
+        averaged["binary_orbital_energy"].rate < 0.0
+    ) & (
+        averaged["binary_angular_momentum_msun_pc2_myr"].rate < 0.0
+    )
     columns.extend((orbital_frequency, exchange_mode_ratio))
     header.extend(
         (
@@ -178,6 +183,20 @@ def main() -> int:
             None
             if np.all(~np.isfinite(exchange_mode_ratio))
             else float(np.nanmedian(exchange_mode_ratio))
+        ),
+        "fraction_of_cycles_with_energy_and_angular_momentum_loss": float(
+            np.mean(simultaneous_losses)
+        ),
+        "median_exchange_mode_ratio_during_simultaneous_losses": (
+            None
+            if not np.any(simultaneous_losses & np.isfinite(exchange_mode_ratio))
+            else float(
+                np.nanmedian(
+                    exchange_mode_ratio[
+                        simultaneous_losses & np.isfinite(exchange_mode_ratio)
+                    ]
+                )
+            )
         ),
         "mean_orbital_power": float(
             (orbital_energy.end_value[-1] - orbital_energy.start_value[0])
