@@ -164,6 +164,19 @@ python scripts/analyze_pyul_line_density.py \
 The saved line passes through the soliton centre along the simulation y axis.
 It is neither a spherical density profile nor a measure of deposited energy.
 
+A short calculation with frequent three-dimensional fields may be compared
+against the same interval of a longer calculation with sparse orbital output:
+
+```bash
+python scripts/compare_pyul_overlap.py \
+  results/pyul_orbit_pilots/koo_orbit1/koo_mbh1.0e8_n128 \
+  results/pyul_long_term/koo_1myr_s2048/koo_mbh1.0e8_n128
+```
+
+The comparison interpolates the longer calculation to the short output times.
+Its reported difference therefore includes cadence interpolation and does not
+replace spatial or temporal convergence.
+
 After several runs pass the Hamiltonian and spatial-resolution tests, their
 orbit-resolved measurements can be expressed in common physical units with
 
