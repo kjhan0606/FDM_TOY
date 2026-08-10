@@ -220,6 +220,41 @@ def main() -> int:
             "systematics between resolutions"
         ),
     )
+    resolved_selection = slice(
+        initial_resolved_orbits - resolved_window_orbits,
+        initial_resolved_orbits,
+    )
+    resolved_losses = simultaneous_losses[resolved_selection]
+    resolved_mode_ratio = exchange_mode_ratio[resolved_selection]
+    resolved_radial_power = wave_radial_residual_power[resolved_selection]
+    resolved_finite_ratio = np.isfinite(resolved_mode_ratio)
+    resolved_mode_summary = None
+    if resolved_window_orbits > 0:
+        resolved_mode_summary = {
+            "window_orbits": resolved_window_orbits,
+            "fraction_with_energy_and_angular_momentum_loss": float(
+                np.mean(resolved_losses)
+            ),
+            "median_power_over_frequency_times_torque": (
+                None
+                if not np.any(resolved_finite_ratio)
+                else float(np.nanmedian(resolved_mode_ratio))
+            ),
+            "median_ratio_during_simultaneous_losses": (
+                None
+                if not np.any(resolved_losses & resolved_finite_ratio)
+                else float(
+                    np.nanmedian(
+                        resolved_mode_ratio[resolved_losses & resolved_finite_ratio]
+                    )
+                )
+            ),
+            "fraction_of_simultaneous_losses_with_nonnegative_radial_residual": (
+                None
+                if not np.any(resolved_losses)
+                else float(np.mean(resolved_radial_power[resolved_losses] >= 0.0))
+            ),
+        }
     summary = {
         "status": "orbit_averaged",
         "complete_orbits": int(reference.cycle_index.size),
@@ -272,6 +307,7 @@ def main() -> int:
         ),
         "late_window_block_bootstrap": bootstrap_summary,
         "initial_resolved_window_block_bootstrap": resolved_bootstrap_summary,
+        "initial_resolved_window_mode_diagnostic": resolved_mode_summary,
         "energy_ledger": (
             "orbital, wave intrinsic, wave-SMBH interaction, SMBH centre-of-mass, "
             "and combined-Hamiltonian residual rates are retained separately"
