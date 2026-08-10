@@ -176,11 +176,11 @@ def main() -> int:
                     / scales.orbital_power_msun_pc2_myr3,
                     "soliton_dynamical_time_myr": scales.soliton_dynamical_time_myr,
                     "cell_size_pc": cell_size,
-                    "spatial_resolution_passed": int(spatially_resolved),
+                    "minimum_spatial_sampling_passed": int(spatially_resolved),
                     "run_energy_conservation_passed": int(
                         energy_conservation_passed
                     ),
-                    "calibration_eligible": int(
+                    "provisional_numerical_acceptance": int(
                         spatially_resolved and energy_conservation_passed
                     ),
                     **mode_state,
@@ -205,9 +205,10 @@ def main() -> int:
             "angular_momentum": "mu*sqrt(G*M_binary*r_core)",
         },
         "selection": (
-            "rows are retained without deletion; calibration_eligible requires "
-            "a mean separation of at least two cell widths and a run that "
-            "passes the Hamiltonian acceptance limit"
+            "rows are retained without deletion; provisional numerical "
+            "acceptance requires a mean separation of at least two cell widths "
+            "and a run that passes the Hamiltonian limit; calibration still "
+            "requires convergence between spatial and temporal resolutions"
         ),
         "exchange_mode_diagnostic": (
             "power/(orbital frequency times torque) equals one for exchange "
