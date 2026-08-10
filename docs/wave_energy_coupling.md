@@ -147,3 +147,10 @@ orbit. Such changes must not enter the fitted dissipative rates. The function
 `keplerian_exchange_rates` implements the conversion after the resolved wake
 and reversible cross-energy reservoir have been separated from the secular
 exchange.
+
+For a finite subgrid interval, `advance_keplerian_exchange` updates orbital
+energy and angular momentum first and then recovers the new semi-major axis,
+eccentricity, and orbital phase. The energy and angular momentum increments of
+the wave are exactly opposite to the orbital increments. A step that produces
+an unbound energy, non-positive angular momentum, or invalid eccentricity is
+rejected rather than projected onto an artificial bound orbit.

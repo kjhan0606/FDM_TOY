@@ -31,6 +31,21 @@ class KeplerianElements:
     eccentricity: float
 
 
+@dataclass(frozen=True)
+class FiniteOrbitalExchangeStep:
+    initial_semimajor_axis_pc: float
+    final_semimajor_axis_pc: float
+    initial_eccentricity: float
+    final_eccentricity: float
+    initial_orbital_energy: float
+    final_orbital_energy: float
+    initial_orbital_angular_momentum: float
+    final_orbital_angular_momentum: float
+    orbital_phase_increment_rad: float
+    wave_energy_increment: float
+    wave_angular_momentum_increment: float
+
+
 def keplerian_elements_from_relative_state(
     *,
     total_mass: float,
@@ -166,4 +181,83 @@ def keplerian_exchange_rates(
         ),
         wave_energy_rate=float(-orbital_power),
         wave_angular_momentum_rate=float(-orbital_torque),
+    )
+
+
+def advance_keplerian_exchange(
+    *,
+    mass1_msun: float,
+    mass2_msun: float,
+    semimajor_axis_pc: float,
+    eccentricity: float,
+    orbital_power: float,
+    orbital_torque: float,
+    time_step_myr: float,
+    eccentricity_squared_tolerance: float = 1.0e-12,
+) -> FiniteOrbitalExchangeStep:
+    """Advance a bound Kepler orbit by finite energy and angular-momentum changes.
+
+    The calibrated power and torque must already exclude reversible forcing by
+    the smooth FDM potential.  The wave increments have the opposite signs.
+    """
+
+    if not np.isfinite(time_step_myr) or time_step_myr <= 0.0:
+        raise ValueError("time step must be finite and positive")
+    if (
+        not np.isfinite(eccentricity_squared_tolerance)
+        or eccentricity_squared_tolerance < 0.0
+    ):
+        raise ValueError("eccentricity tolerance must be finite and non-negative")
+    rates = keplerian_exchange_rates(
+        mass1_msun=mass1_msun,
+        mass2_msun=mass2_msun,
+        semimajor_axis_pc=semimajor_axis_pc,
+        eccentricity=eccentricity,
+        orbital_power=orbital_power,
+        orbital_torque=orbital_torque,
+    )
+    final_energy = rates.orbital_energy + orbital_power * time_step_myr
+    final_angular_momentum = (
+        rates.orbital_angular_momentum + orbital_torque * time_step_myr
+    )
+    if final_energy >= 0.0:
+        raise ValueError("finite exchange produces an unbound orbit")
+    if final_angular_momentum <= 0.0:
+        raise ValueError("finite exchange removes all orbital angular momentum")
+
+    total_mass = mass1_msun + mass2_msun
+    reduced_mass = mass1_msun * mass2_msun / total_mass
+    final_semimajor_axis = -G_INTERNAL * mass1_msun * mass2_msun / (
+        2.0 * final_energy
+    )
+    final_eccentricity_squared = 1.0 - final_angular_momentum**2 / (
+        reduced_mass**2 * G_INTERNAL * total_mass * final_semimajor_axis
+    )
+    if (
+        final_eccentricity_squared < -eccentricity_squared_tolerance
+        or final_eccentricity_squared >= 1.0
+    ):
+        raise ValueError("finite exchange produces invalid bound-orbit elements")
+    final_eccentricity_squared = max(0.0, final_eccentricity_squared)
+    final_eccentricity = np.sqrt(final_eccentricity_squared)
+    initial_frequency = np.sqrt(
+        G_INTERNAL * total_mass / semimajor_axis_pc**3
+    )
+    final_frequency = np.sqrt(
+        G_INTERNAL * total_mass / final_semimajor_axis**3
+    )
+    return FiniteOrbitalExchangeStep(
+        initial_semimajor_axis_pc=float(semimajor_axis_pc),
+        final_semimajor_axis_pc=float(final_semimajor_axis),
+        initial_eccentricity=float(eccentricity),
+        final_eccentricity=float(final_eccentricity),
+        initial_orbital_energy=rates.orbital_energy,
+        final_orbital_energy=float(final_energy),
+        initial_orbital_angular_momentum=rates.orbital_angular_momentum,
+        final_orbital_angular_momentum=float(final_angular_momentum),
+        orbital_phase_increment_rad=float(
+            0.5 * (initial_frequency + final_frequency) * time_step_myr
+        ),
+        wave_energy_increment=float(-orbital_power * time_step_myr),
+        wave_angular_momentum_increment=float(-orbital_torque * time_step_myr),
     )

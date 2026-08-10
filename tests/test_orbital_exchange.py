@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from fdm_smbh_delay.orbital_exchange import (
+    advance_keplerian_exchange,
     keplerian_elements_from_relative_state,
     keplerian_exchange_rates,
 )
@@ -86,6 +87,67 @@ def test_non_circular_rate_at_e_zero_returns_only_e_squared_rate() -> None:
     )
     assert result.eccentricity_squared_rate_per_myr < 0.0
     assert result.eccentricity_rate_per_myr is None
+
+
+def test_finite_exchange_recovers_target_circular_orbit() -> None:
+    initial = keplerian_exchange_rates(
+        mass1_msun=1.0e8,
+        mass2_msun=5.0e7,
+        semimajor_axis_pc=1.0,
+        eccentricity=0.0,
+        orbital_power=0.0,
+        orbital_torque=0.0,
+    )
+    target = keplerian_exchange_rates(
+        mass1_msun=1.0e8,
+        mass2_msun=5.0e7,
+        semimajor_axis_pc=0.9,
+        eccentricity=0.0,
+        orbital_power=0.0,
+        orbital_torque=0.0,
+    )
+    time_step = 0.01
+    step = advance_keplerian_exchange(
+        mass1_msun=1.0e8,
+        mass2_msun=5.0e7,
+        semimajor_axis_pc=1.0,
+        eccentricity=0.0,
+        orbital_power=(target.orbital_energy - initial.orbital_energy) / time_step,
+        orbital_torque=(
+            target.orbital_angular_momentum - initial.orbital_angular_momentum
+        )
+        / time_step,
+        time_step_myr=time_step,
+    )
+    assert step.final_semimajor_axis_pc == pytest.approx(0.9)
+    assert step.final_eccentricity == pytest.approx(0.0, abs=2.0e-8)
+    assert step.wave_energy_increment == pytest.approx(
+        initial.orbital_energy - target.orbital_energy
+    )
+    assert step.wave_angular_momentum_increment == pytest.approx(
+        initial.orbital_angular_momentum - target.orbital_angular_momentum
+    )
+
+
+def test_finite_exchange_rejects_unbound_energy() -> None:
+    initial = keplerian_exchange_rates(
+        mass1_msun=1.0,
+        mass2_msun=1.0,
+        semimajor_axis_pc=1.0,
+        eccentricity=0.2,
+        orbital_power=0.0,
+        orbital_torque=0.0,
+    )
+    with pytest.raises(ValueError, match="unbound"):
+        advance_keplerian_exchange(
+            mass1_msun=1.0,
+            mass2_msun=1.0,
+            semimajor_axis_pc=1.0,
+            eccentricity=0.2,
+            orbital_power=-2.0 * initial.orbital_energy,
+            orbital_torque=0.0,
+            time_step_myr=1.0,
+        )
 
 
 @pytest.mark.parametrize(
