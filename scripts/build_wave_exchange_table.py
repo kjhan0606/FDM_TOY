@@ -91,6 +91,9 @@ def main() -> int:
         energy_conservation_passed = bool(
             conservation_summary["energy_transfer_conservation_passed"]
         )
+        initial_resolved_energy_passed = bool(
+            conservation_summary["initial_resolved_energy_conservation_passed"]
+        )
         cell_size = float(metadata["box_size_pc"]) / int(metadata["resolution"])
         table = np.genfromtxt(
             run / "orbit_averaged_exchange.csv",
@@ -186,8 +189,12 @@ def main() -> int:
                     "run_energy_conservation_passed": int(
                         energy_conservation_passed
                     ),
+                    "initial_resolved_energy_conservation_passed": int(
+                        initial_resolved_energy_passed
+                    ),
                     "provisional_numerical_acceptance": int(
-                        initial_resolved[row_index] and energy_conservation_passed
+                        initial_resolved[row_index]
+                        and initial_resolved_energy_passed
                     ),
                     **mode_state,
                 }
@@ -213,8 +220,9 @@ def main() -> int:
         "selection": (
             "rows are retained without deletion; provisional numerical "
             "acceptance ends at the first orbit below two cell widths and "
-            "requires a run that passes the Hamiltonian limit; calibration still "
-            "requires convergence between spatial and temporal resolutions"
+            "requires the initial resolved interval to pass the Hamiltonian "
+            "limit; calibration still requires convergence between spatial and "
+            "temporal resolutions"
         ),
         "exchange_mode_diagnostic": (
             "power/(orbital frequency times torque) equals one for exchange "

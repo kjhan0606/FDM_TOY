@@ -23,6 +23,19 @@ def _first_below(time: np.ndarray, value: np.ndarray, threshold: float) -> float
     return None if indices.size == 0 else float(time[indices[0]])
 
 
+def _energy_error_over_transfer(
+    combined_energy: np.ndarray, transfer_components: tuple[np.ndarray, ...]
+) -> float:
+    transferred_energy_scale = max(
+        *(np.max(np.abs(component - component[0])) for component in transfer_components),
+        np.finfo(float).tiny,
+    )
+    return float(
+        np.max(np.abs(combined_energy - combined_energy[0]))
+        / transferred_energy_scale
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("run", type=Path)
@@ -171,16 +184,14 @@ def main() -> int:
         abs(binary_orbital_energy[0]),
         np.finfo(float).tiny,
     )
-    transferred_energy_scale = max(
-        np.max(np.abs(binary_orbital_energy - binary_orbital_energy[0])),
-        np.max(np.abs(bh_com_kinetic_array - bh_com_kinetic_array[0])),
-        np.max(np.abs(wave_intrinsic - wave_intrinsic[0])),
-        np.max(np.abs(wave_bh_interaction - wave_bh_interaction[0])),
-        np.finfo(float).tiny,
+    transfer_components = (
+        binary_orbital_energy,
+        bh_com_kinetic_array,
+        wave_intrinsic,
+        wave_bh_interaction,
     )
-    maximum_energy_error_over_transfer = float(
-        np.max(np.abs(combined_energy - combined_energy[0]))
-        / transferred_energy_scale
+    maximum_energy_error_over_transfer = _energy_error_over_transfer(
+        combined_energy, transfer_components
     )
     interaction_scale = np.maximum(
         np.maximum(
@@ -195,6 +206,25 @@ def main() -> int:
         / save_number
     )
     minimum_separation_pc = float(np.min(separation_array))
+    first_underresolved_indices = np.flatnonzero(
+        separation_array < 2.0 * cell_size_pc
+    )
+    initial_resolved_samples = (
+        len(states)
+        if first_underresolved_indices.size == 0
+        else int(first_underresolved_indices[0])
+    )
+    initial_resolved_energy_error = (
+        None
+        if initial_resolved_samples < 2
+        else _energy_error_over_transfer(
+            combined_energy[:initial_resolved_samples],
+            tuple(
+                component[:initial_resolved_samples]
+                for component in transfer_components
+            ),
+        )
+    )
     plummer_force_fraction = minimum_separation_pc**3 / (
         minimum_separation_pc**2 + plummer_radius_pc**2
     ) ** 1.5
@@ -223,6 +253,20 @@ def main() -> int:
         ),
         "first_time_below_two_cell_sizes_myr": _first_below(
             time, separation_array, 2.0 * cell_size_pc
+        ),
+        "initial_spatially_resolved_samples": initial_resolved_samples,
+        "initial_spatially_resolved_duration_myr": (
+            None
+            if initial_resolved_samples == 0
+            else float(time[initial_resolved_samples - 1])
+        ),
+        "initial_resolved_energy_drift_over_transfer": (
+            initial_resolved_energy_error
+        ),
+        "initial_resolved_energy_conservation_passed": bool(
+            initial_resolved_energy_error is not None
+            and initial_resolved_energy_error
+            <= args.max_energy_error_over_transfer
         ),
         "first_time_below_one_cell_size_myr": _first_below(
             time, separation_array, cell_size_pc
