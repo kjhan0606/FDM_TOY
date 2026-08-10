@@ -26,14 +26,26 @@ def _first_below(time: np.ndarray, value: np.ndarray, threshold: float) -> float
 def _energy_error_over_transfer(
     combined_energy: np.ndarray, transfer_components: tuple[np.ndarray, ...]
 ) -> float:
+    return float(
+        np.max(
+            _energy_error_timeseries_over_transfer(
+                combined_energy, transfer_components
+            )
+        )
+    )
+
+
+def _energy_error_timeseries_over_transfer(
+    combined_energy: np.ndarray, transfer_components: tuple[np.ndarray, ...]
+) -> np.ndarray:
     transferred_energy_scale = max(
-        *(np.max(np.abs(component - component[0])) for component in transfer_components),
+        *(
+            np.max(np.abs(component - component[0]))
+            for component in transfer_components
+        ),
         np.finfo(float).tiny,
     )
-    return float(
-        np.max(np.abs(combined_energy - combined_energy[0]))
-        / transferred_energy_scale
-    )
+    return np.abs(combined_energy - combined_energy[0]) / transferred_energy_scale
 
 
 def main() -> int:
@@ -193,6 +205,9 @@ def main() -> int:
     maximum_energy_error_over_transfer = _energy_error_over_transfer(
         combined_energy, transfer_components
     )
+    energy_error_over_transfer = _energy_error_timeseries_over_transfer(
+        combined_energy, transfer_components
+    )
     interaction_scale = np.maximum(
         np.maximum(
             np.abs(wave_bh_interaction), np.abs(point_interaction_estimator)
@@ -224,6 +239,19 @@ def main() -> int:
                 for component in transfer_components
             ),
         )
+    )
+    energy_tolerance_crossings = np.flatnonzero(
+        energy_error_over_transfer > args.max_energy_error_over_transfer
+    )
+    first_energy_tolerance_crossing = (
+        None
+        if energy_tolerance_crossings.size == 0
+        else int(energy_tolerance_crossings[0])
+    )
+    first_underresolved = (
+        None
+        if first_underresolved_indices.size == 0
+        else int(first_underresolved_indices[0])
     )
     plummer_force_fraction = minimum_separation_pc**3 / (
         minimum_separation_pc**2 + plummer_radius_pc**2
@@ -267,6 +295,21 @@ def main() -> int:
             initial_resolved_energy_error is not None
             and initial_resolved_energy_error
             <= args.max_energy_error_over_transfer
+        ),
+        "energy_error_over_transfer_at_first_two_cell_crossing": (
+            None
+            if first_underresolved is None
+            else float(energy_error_over_transfer[first_underresolved])
+        ),
+        "first_time_energy_error_exceeds_tolerance_myr": (
+            None
+            if first_energy_tolerance_crossing is None
+            else float(time[first_energy_tolerance_crossing])
+        ),
+        "separation_when_energy_error_exceeds_tolerance_pc": (
+            None
+            if first_energy_tolerance_crossing is None
+            else float(separation_array[first_energy_tolerance_crossing])
         ),
         "first_time_below_one_cell_size_myr": _first_below(
             time, separation_array, cell_size_pc
@@ -356,6 +399,7 @@ def main() -> int:
             bh_kinetic_array,
             np.asarray(binary_mutual),
             combined_energy,
+            energy_error_over_transfer,
             wave_mass,
         )
     )
@@ -372,7 +416,7 @@ def main() -> int:
             "eccentricity_osculating,"
             "bh_com_kinetic_energy,"
             "bh_total_kinetic_energy,bh_mutual_gravity_energy,combined_energy,"
-            "wave_mass_msun"
+            "energy_error_over_transfer,wave_mass_msun"
         ),
         comments="",
     )

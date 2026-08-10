@@ -48,9 +48,11 @@ def main() -> int:
         max(float(np.max(np.abs(values))) for values in transfer_components),
         np.finfo(float).tiny,
     )
-    hamiltonian_error_envelope = np.maximum.accumulate(
-        np.abs(changes["Total Hamiltonian"])
-    ) / energy_scale
+    if "energy_error_over_transfer" in (table.dtype.names or ()):
+        energy_error = table["energy_error_over_transfer"]
+    else:
+        energy_error = np.abs(changes["Total Hamiltonian"]) / energy_scale
+    hamiltonian_error_envelope = np.maximum.accumulate(energy_error)
     styles = {
         "SMBH orbit": {"color": "#254F73", "linewidth": 1.1},
         "FDM intrinsic": {"color": "#B65E2E", "linewidth": 1.0},
