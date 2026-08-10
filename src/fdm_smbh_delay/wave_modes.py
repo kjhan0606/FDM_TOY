@@ -18,6 +18,77 @@ class WaveModeExchange:
     nonnegative_radial_residual: bool
 
 
+@dataclass(frozen=True)
+class ResidualWaveExchange:
+    target_wave_energy_increment: float
+    target_wave_angular_momentum_increment: np.ndarray
+    resolved_wave_energy_increment: float
+    resolved_wave_angular_momentum_increment: np.ndarray
+    residual_wave_energy_increment: float
+    residual_wave_angular_momentum_increment: np.ndarray
+    energy_closure_error: float
+    angular_momentum_closure_error: np.ndarray
+
+
+def residual_wave_exchange(
+    *,
+    orbital_energy_increment: float,
+    orbital_angular_momentum_increment: np.ndarray,
+    resolved_wave_energy_increment: float,
+    resolved_wave_angular_momentum_increment: np.ndarray,
+) -> ResidualWaveExchange:
+    """Subtract resolved wave work and torque from the conserved target.
+
+    The target wave increment is exactly opposite to the internal orbital
+    increment. Work and torque already produced by the resolved multipole
+    potential are removed before any additional wave-mode source is applied.
+    """
+
+    orbital_angular_momentum = np.asarray(
+        orbital_angular_momentum_increment, dtype=float
+    )
+    resolved_angular_momentum = np.asarray(
+        resolved_wave_angular_momentum_increment, dtype=float
+    )
+    scalar_values = np.asarray(
+        [orbital_energy_increment, resolved_wave_energy_increment], dtype=float
+    )
+    if (
+        orbital_angular_momentum.shape != (3,)
+        or resolved_angular_momentum.shape != (3,)
+        or np.any(~np.isfinite(orbital_angular_momentum))
+        or np.any(~np.isfinite(resolved_angular_momentum))
+        or np.any(~np.isfinite(scalar_values))
+    ):
+        raise ValueError("exchange increments must be finite scalars and vectors")
+    target_energy = -float(orbital_energy_increment)
+    target_angular_momentum = -orbital_angular_momentum
+    residual_energy = target_energy - float(resolved_wave_energy_increment)
+    residual_angular_momentum = (
+        target_angular_momentum - resolved_angular_momentum
+    )
+    energy_closure = (
+        float(orbital_energy_increment)
+        + float(resolved_wave_energy_increment)
+        + residual_energy
+    )
+    angular_momentum_closure = (
+        orbital_angular_momentum
+        + resolved_angular_momentum
+        + residual_angular_momentum
+    )
+    return ResidualWaveExchange(
+        target_wave_energy_increment=target_energy,
+        target_wave_angular_momentum_increment=target_angular_momentum,
+        resolved_wave_energy_increment=float(resolved_wave_energy_increment),
+        resolved_wave_angular_momentum_increment=resolved_angular_momentum,
+        residual_wave_energy_increment=residual_energy,
+        residual_wave_angular_momentum_increment=residual_angular_momentum,
+        energy_closure_error=energy_closure,
+        angular_momentum_closure_error=angular_momentum_closure,
+    )
+
+
 def decompose_wave_mode_exchange(
     *,
     orbital_power: float,

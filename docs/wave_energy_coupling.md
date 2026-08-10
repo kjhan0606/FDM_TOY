@@ -188,6 +188,23 @@ the work produced by the multipole correction counts toward the required wave
 increment. Applying the full calibrated increment in addition would count the
 same transfer twice.
 
+For one finite interval, let `Delta E_res` and `Delta L_res` denote the work
+and torque already received by the resolved wave from the multipole potential.
+The remaining increments are
+
+\[
+\Delta E_{\rm rem}=-\Delta E_{\rm orb}-\Delta E_{\rm res},
+\qquad
+\Delta\mathbf L_{\rm rem}=-\Delta\mathbf L_{\rm orb}
+-\Delta\mathbf L_{\rm res}.
+\]
+
+The function `residual_wave_exchange` evaluates these quantities and tests
+closure. A calibrated mode source acts only on the remainder. If the resolved
+multipole has already supplied the target exchange, the additional source is
+zero. The remainder may change sign when a coherent wave mode returns energy
+to the orbit.
+
 These equations apply to orbit-averaged internal elements. The smooth soliton
 potential may produce reversible changes in osculating Kepler elements over an
 orbit. Such changes must not enter the fitted dissipative rates. The function
