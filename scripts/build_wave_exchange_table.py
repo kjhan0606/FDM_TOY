@@ -16,6 +16,10 @@ from fdm_smbh_delay.exchange_scaling import (
 )
 from fdm_smbh_delay.orbital_exchange import orbital_frame_from_relative_state
 from fdm_smbh_delay.pyul import ordered_output_paths, pyul_unit_system
+from fdm_smbh_delay.wave_response import (
+    MultipoleAmplitudes,
+    rotate_multipoles_to_frame,
+)
 
 
 _MODE_REGIONS = (
@@ -43,6 +47,7 @@ _MODE_COLUMNS = tuple(
     for region in _MODE_REGIONS
     for quantity in ("l1_fraction", "l2_fraction", *_MODE_COEFFICIENTS)
 )
+_ORBITAL_MODE_COLUMNS = tuple(f"orbital_{column}" for column in _MODE_COLUMNS)
 _WAVE_STATE_COLUMNS = (
     "wave_binary_com_offset_pc",
     "central_density_msun_pc3",
@@ -115,6 +120,67 @@ def _orbital_frame_state(
     ):
         for component, value in zip(("x", "y", "z"), vector, strict=True):
             values[f"orbital_{axis}_unit_{component}"] = float(value)
+    return values
+
+
+def _multipoles_in_orbital_frame(
+    wave_snapshot: dict[str, float], frame_state: dict[str, float]
+) -> dict[str, float]:
+    values = {column: np.nan for column in _ORBITAL_MODE_COLUMNS}
+    radial = np.asarray(
+        [frame_state[f"orbital_radial_unit_{component}"] for component in "xyz"]
+    )
+    tangential = np.asarray(
+        [
+            frame_state[f"orbital_tangential_unit_{component}"]
+            for component in "xyz"
+        ]
+    )
+    normal = np.asarray(
+        [frame_state[f"orbital_normal_unit_{component}"] for component in "xyz"]
+    )
+    if np.any(~np.isfinite(np.concatenate((radial, tangential, normal)))):
+        return values
+    for region in _MODE_REGIONS:
+        multipoles = MultipoleAmplitudes(
+            mass=1.0,
+            l1_fraction=wave_snapshot[f"{region}_l1_fraction"],
+            l2_fraction=wave_snapshot[f"{region}_l2_fraction"],
+            l1_m0=complex(
+                wave_snapshot[f"{region}_l1_m0_real"],
+                wave_snapshot[f"{region}_l1_m0_imag"],
+            ),
+            l1_m1=complex(
+                wave_snapshot[f"{region}_l1_m1_real"],
+                wave_snapshot[f"{region}_l1_m1_imag"],
+            ),
+            l2_m0=complex(
+                wave_snapshot[f"{region}_l2_m0_real"],
+                wave_snapshot[f"{region}_l2_m0_imag"],
+            ),
+            l2_m1=complex(
+                wave_snapshot[f"{region}_l2_m1_real"],
+                wave_snapshot[f"{region}_l2_m1_imag"],
+            ),
+            l2_m2=complex(
+                wave_snapshot[f"{region}_l2_m2_real"],
+                wave_snapshot[f"{region}_l2_m2_imag"],
+            ),
+        )
+        rotated = rotate_multipoles_to_frame(
+            multipoles, radial, tangential, normal
+        )
+        values[f"orbital_{region}_l1_fraction"] = rotated.l1_fraction
+        values[f"orbital_{region}_l2_fraction"] = rotated.l2_fraction
+        for ell, orders in ((1, (0, 1)), (2, (0, 1, 2))):
+            for order in orders:
+                coefficient = getattr(rotated, f"l{ell}_m{order}")
+                values[f"orbital_{region}_l{ell}_m{order}_real"] = float(
+                    coefficient.real
+                )
+                values[f"orbital_{region}_l{ell}_m{order}_imag"] = float(
+                    coefficient.imag
+                )
     return values
 
 
@@ -215,6 +281,9 @@ def main() -> int:
                 state_times_myr=state_times_myr,
                 states=states,
                 box_size_code=box_size_code,
+            )
+            orbital_modes = _multipoles_in_orbital_frame(
+                wave_snapshot, frame_state
             )
             wave_state = {
                 "wave_binary_com_offset_over_core_radius": (
@@ -341,6 +410,7 @@ def main() -> int:
                     ),
                     **wave_state,
                     **frame_state,
+                    **orbital_modes,
                     **wave_snapshot,
                 }
             )
@@ -387,6 +457,10 @@ def main() -> int:
             "right-handed radial, tangential, and normal unit vectors at the "
             "saved three-dimensional wave state; rotate complex multipoles "
             "into this frame before fitting phase-dependent transfer"
+        ),
+        "orbital_frame_multipoles": (
+            "complex density multipoles rotated into the instantaneous binary "
+            "frame; each invariant l amplitude must match its unrotated value"
         ),
     }
     output.with_suffix(".summary.json").write_text(

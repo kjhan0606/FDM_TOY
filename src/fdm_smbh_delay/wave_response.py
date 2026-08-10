@@ -37,6 +37,96 @@ class FrequencyPeak:
     peak_power_fraction: float
 
 
+def rotate_multipoles_to_frame(
+    multipoles: MultipoleAmplitudes,
+    radial_unit: np.ndarray,
+    tangential_unit: np.ndarray,
+    normal_unit: np.ndarray,
+) -> MultipoleAmplitudes:
+    """Express density multipoles in a supplied right-handed frame.
+
+    The supplied axes become the x, y, and z directions of the new frame.
+    Dipole coefficients are rotated through their Cartesian vector. Quadrupole
+    coefficients are rotated through the corresponding symmetric trace-free
+    Cartesian tensor.
+    """
+
+    basis = np.column_stack(
+        (
+            np.asarray(radial_unit, dtype=float),
+            np.asarray(tangential_unit, dtype=float),
+            np.asarray(normal_unit, dtype=float),
+        )
+    )
+    if basis.shape != (3, 3) or np.any(~np.isfinite(basis)):
+        raise ValueError("frame axes must be finite three-vectors")
+    if not np.allclose(basis.T @ basis, np.eye(3), rtol=0.0, atol=1.0e-10):
+        raise ValueError("frame axes must be orthonormal")
+    if not np.isclose(np.linalg.det(basis), 1.0, rtol=0.0, atol=1.0e-10):
+        raise ValueError("frame axes must form a right-handed basis")
+
+    dipole = np.asarray(
+        [
+            -np.sqrt(2.0 / 3.0) * multipoles.l1_m1.real,
+            np.sqrt(2.0 / 3.0) * multipoles.l1_m1.imag,
+            multipoles.l1_m0.real / np.sqrt(3.0),
+        ]
+    )
+    dipole_rotated = basis.T @ dipole
+    l1_m0 = complex(np.sqrt(3.0) * dipole_rotated[2])
+    l1_m1 = complex(
+        -np.sqrt(3.0 / 2.0)
+        * (dipole_rotated[0] - 1j * dipole_rotated[1])
+    )
+
+    qzz = 2.0 * multipoles.l2_m0.real / (3.0 * np.sqrt(5.0))
+    qxz = -np.sqrt(2.0 / 15.0) * multipoles.l2_m1.real
+    qyz = np.sqrt(2.0 / 15.0) * multipoles.l2_m1.imag
+    q_difference = np.sqrt(8.0 / 15.0) * multipoles.l2_m2.real
+    qxy = -np.sqrt(2.0 / 15.0) * multipoles.l2_m2.imag
+    qxx = 0.5 * (-qzz + q_difference)
+    qyy = 0.5 * (-qzz - q_difference)
+    quadrupole = np.asarray(
+        [
+            [qxx, qxy, qxz],
+            [qxy, qyy, qyz],
+            [qxz, qyz, qzz],
+        ]
+    )
+    quadrupole_rotated = basis.T @ quadrupole @ basis
+    l2_m0 = complex(
+        1.5 * np.sqrt(5.0) * quadrupole_rotated[2, 2]
+    )
+    l2_m1 = complex(
+        -np.sqrt(15.0 / 2.0)
+        * (quadrupole_rotated[0, 2] - 1j * quadrupole_rotated[1, 2])
+    )
+    l2_m2 = complex(
+        np.sqrt(15.0 / 8.0)
+        * (
+            quadrupole_rotated[0, 0]
+            - quadrupole_rotated[1, 1]
+            - 2j * quadrupole_rotated[0, 1]
+        )
+    )
+    l1_fraction = np.sqrt(abs(l1_m0) ** 2 + 2.0 * abs(l1_m1) ** 2)
+    l2_fraction = np.sqrt(
+        abs(l2_m0) ** 2
+        + 2.0 * abs(l2_m1) ** 2
+        + 2.0 * abs(l2_m2) ** 2
+    )
+    return MultipoleAmplitudes(
+        mass=multipoles.mass,
+        l1_fraction=float(l1_fraction),
+        l2_fraction=float(l2_fraction),
+        l1_m0=l1_m0,
+        l1_m1=l1_m1,
+        l2_m0=l2_m0,
+        l2_m1=l2_m1,
+        l2_m2=l2_m2,
+    )
+
+
 def windowed_dominant_frequency(
     time: np.ndarray, signal: np.ndarray
 ) -> FrequencyPeak:
@@ -58,7 +148,9 @@ def windowed_dominant_frequency(
     cadence = float(np.median(intervals))
     if np.max(np.abs(intervals - cadence)) > 1.0e-6 * cadence:
         raise ValueError("Fourier diagnostic requires uniformly spaced samples")
-    design = np.column_stack((sample_time - np.mean(sample_time), np.ones_like(sample_time)))
+    design = np.column_stack(
+        (sample_time - np.mean(sample_time), np.ones_like(sample_time))
+    )
     trend = design @ np.linalg.lstsq(design, values, rcond=None)[0]
     transformed = np.fft.rfft((values - trend) * np.hanning(values.size))
     power = np.abs(transformed) ** 2

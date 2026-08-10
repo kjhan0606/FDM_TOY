@@ -2,12 +2,14 @@ import numpy as np
 import pytest
 
 from fdm_smbh_delay.wave_response import (
+    MultipoleAmplitudes,
     centred_grid,
     multipole_amplitudes,
     periodic_centre_of_mass,
     periodic_point_centre,
     periodic_poisson_code,
     plummer_potential_code,
+    rotate_multipoles_to_frame,
     spectral_wave_fields,
     windowed_dominant_frequency,
 )
@@ -75,6 +77,57 @@ def test_density_multipoles_retain_dipole_phase() -> None:
     assert abs(x_dipole.l1_m1.real) > 100.0 * abs(x_dipole.l1_m1.imag)
     assert abs(y_dipole.l1_m1.imag) > 100.0 * abs(y_dipole.l1_m1.real)
     assert abs(x_dipole.l1_m1) == pytest.approx(abs(y_dipole.l1_m1), rel=1.0e-3)
+
+
+def test_multipole_rotation_preserves_each_invariant_amplitude() -> None:
+    multipoles = MultipoleAmplitudes(
+        mass=2.0,
+        l1_fraction=np.nan,
+        l2_fraction=np.nan,
+        l1_m0=complex(0.17),
+        l1_m1=complex(-0.21, 0.08),
+        l2_m0=complex(0.11),
+        l2_m1=complex(-0.04, 0.09),
+        l2_m2=complex(0.06, -0.12),
+    )
+    angle = 0.63
+    radial = np.array([np.cos(angle), np.sin(angle), 0.0])
+    tangential = np.array([-np.sin(angle), np.cos(angle), 0.0])
+    normal = np.array([0.0, 0.0, 1.0])
+    rotated = rotate_multipoles_to_frame(
+        multipoles, radial, tangential, normal
+    )
+    original_l1 = np.sqrt(
+        abs(multipoles.l1_m0) ** 2 + 2.0 * abs(multipoles.l1_m1) ** 2
+    )
+    original_l2 = np.sqrt(
+        abs(multipoles.l2_m0) ** 2
+        + 2.0 * abs(multipoles.l2_m1) ** 2
+        + 2.0 * abs(multipoles.l2_m2) ** 2
+    )
+    assert rotated.l1_fraction == pytest.approx(original_l1)
+    assert rotated.l2_fraction == pytest.approx(original_l2)
+
+
+def test_radial_dipole_is_real_negative_m1_in_orbital_frame() -> None:
+    radial = np.array([0.0, 1.0, 0.0])
+    tangential = np.array([-1.0, 0.0, 0.0])
+    normal = np.array([0.0, 0.0, 1.0])
+    global_multipoles = MultipoleAmplitudes(
+        mass=1.0,
+        l1_fraction=1.0,
+        l2_fraction=0.0,
+        l1_m0=0.0j,
+        l1_m1=complex(0.0, np.sqrt(3.0 / 2.0)),
+        l2_m0=0.0j,
+        l2_m1=0.0j,
+        l2_m2=0.0j,
+    )
+    rotated = rotate_multipoles_to_frame(
+        global_multipoles, radial, tangential, normal
+    )
+    assert rotated.l1_m0 == pytest.approx(0.0j)
+    assert rotated.l1_m1 == pytest.approx(complex(-np.sqrt(3.0 / 2.0)))
 
 
 def test_periodic_point_centre_crosses_box_boundary() -> None:

@@ -184,8 +184,9 @@ and Schrödinger-energy fluxes. These quantities are normalized by the soliton
 and orbital scales of that calculation. The measured half-density radius
 receives a separate spatial-resolution flag and is not interpreted when it
 spans fewer than two cell widths. The binary radial, tangential, and normal
-unit vectors define the orbital frame at the matched wave state. A
-phase-dependent fit must rotate the complex multipoles into this frame.
+unit vectors define the orbital frame at the matched wave state. The table
+records the complex multipoles in both the simulation frame and this orbital
+frame. Each invariant amplitude agrees before and after the rotation.
 
 Long calculations may retain frequent SMBH and scalar-energy states while
 writing the three-dimensional density and wavefunction less often. For example,
