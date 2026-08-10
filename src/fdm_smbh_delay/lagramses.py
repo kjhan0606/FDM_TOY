@@ -15,6 +15,7 @@ from typing import Any
 import numpy as np
 
 from .constants import G_INTERNAL
+from .orbital_exchange import keplerian_elements_from_relative_state
 
 
 ACTIVE_SOURCE_DEFAULT_RMERGE = 1.0
@@ -265,26 +266,16 @@ def pair_orbital_state(
         centre_position = np.mod(centre_position, np.asarray(periodic_box_pc, dtype=float))
     centre_velocity = np.sum(masses[:, None] * velocities, axis=0) / total_mass
 
-    gravitational_parameter = G_INTERNAL * total_mass
-    specific_energy = float(
-        0.5 * relative_velocity @ relative_velocity
-        - gravitational_parameter / separation
+    elements = keplerian_elements_from_relative_state(
+        total_mass=total_mass,
+        displacement=displacement,
+        relative_velocity=relative_velocity,
     )
-    specific_angular_momentum = np.cross(displacement, relative_velocity)
-    angular_momentum = reduced_mass * specific_angular_momentum
-    eccentricity_vector = (
-        np.cross(relative_velocity, specific_angular_momentum)
-        / gravitational_parameter
-        - displacement / separation
-    )
-    eccentricity = float(np.linalg.norm(eccentricity_vector))
-
-    if specific_energy < 0.0:
-        semi_major_axis = -gravitational_parameter / (2.0 * specific_energy)
-        pericentre = semi_major_axis * (1.0 - eccentricity)
-        apocentre = semi_major_axis * (1.0 + eccentricity)
+    angular_momentum = reduced_mass * elements.specific_angular_momentum
+    if elements.semimajor_axis is not None:
+        pericentre = elements.semimajor_axis * (1.0 - elements.eccentricity)
+        apocentre = elements.semimajor_axis * (1.0 + elements.eccentricity)
     else:
-        semi_major_axis = None
         pericentre = None
         apocentre = None
 
@@ -295,13 +286,13 @@ def pair_orbital_state(
         relative_velocity_pc_myr=relative_velocity,
         centre_of_mass_position_pc=centre_position,
         centre_of_mass_velocity_pc_myr=centre_velocity,
-        specific_energy_pc2_myr2=specific_energy,
-        orbital_energy_msun_pc2_myr2=reduced_mass * specific_energy,
-        specific_angular_momentum_pc2_myr=specific_angular_momentum,
+        specific_energy_pc2_myr2=elements.specific_energy,
+        orbital_energy_msun_pc2_myr2=reduced_mass * elements.specific_energy,
+        specific_angular_momentum_pc2_myr=elements.specific_angular_momentum,
         angular_momentum_msun_pc2_myr=angular_momentum,
-        eccentricity_vector=eccentricity_vector,
-        eccentricity=eccentricity,
-        semi_major_axis_pc=semi_major_axis,
+        eccentricity_vector=elements.eccentricity_vector,
+        eccentricity=elements.eccentricity,
+        semi_major_axis_pc=elements.semimajor_axis,
         pericentre_pc=pericentre,
         apocentre_pc=apocentre,
     )
