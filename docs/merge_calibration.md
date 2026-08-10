@@ -135,6 +135,17 @@ kinetic energy, and combined-Hamiltonian residual remain separate columns. This
 prevents a transient change in the interaction energy from being labelled as
 irreversible wave heating.
 
+The one-dimensional density states provide a low-volume diagnostic of the
+long-term rearrangement of the wave:
+
+```bash
+python scripts/analyze_pyul_line_density.py \
+  results/pyul_wave/koo_mbh1.0e8_n128
+```
+
+The saved line passes through the soliton centre along the simulation y axis.
+It is neither a spherical density profile nor a measure of deposited energy.
+
 Long calculations may retain frequent SMBH and scalar-energy states while
 writing the three-dimensional density and wavefunction less often. For example,
 the following choice writes 2,049 orbital states and 33 three-dimensional field
