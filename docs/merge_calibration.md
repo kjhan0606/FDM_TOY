@@ -130,6 +130,14 @@ python scripts/analyze_pyul_secular_exchange.py \
   results/pyul_orbit_pilots/koo_orbit1/koo_mbh1.0e8_n128
 ```
 
+The global ledger may be plotted separately from the orbital separation with
+
+```bash
+python scripts/plot_energy_exchange.py \
+  results/pyul_orbit_pilots/koo_orbit1/koo_mbh1.0e8_n128 \
+  --output figures/energy_exchange.pdf
+```
+
 The wave intrinsic energy, wave--SMBH interaction energy, SMBH centre-of-mass
 kinetic energy, and combined-Hamiltonian residual remain separate columns. This
 prevents a transient change in the interaction energy from being labelled as
