@@ -107,16 +107,29 @@ def main() -> int:
     exchange_mode_ratio[nonzero_torque] = averaged[
         "binary_orbital_energy"
     ].rate[nonzero_torque] / frequency_torque[nonzero_torque]
+    wave_rotating_pattern_power = -frequency_torque
+    wave_radial_residual_power = (
+        -averaged["binary_orbital_energy"].rate - wave_rotating_pattern_power
+    )
     simultaneous_losses = (
         averaged["binary_orbital_energy"].rate < 0.0
     ) & (
         averaged["binary_angular_momentum_msun_pc2_myr"].rate < 0.0
     )
-    columns.extend((orbital_frequency, exchange_mode_ratio))
+    columns.extend(
+        (
+            orbital_frequency,
+            exchange_mode_ratio,
+            wave_rotating_pattern_power,
+            wave_radial_residual_power,
+        )
+    )
     header.extend(
         (
             "orbital_frequency_myr_inverse",
             "orbital_power_over_frequency_times_torque",
+            "wave_rotating_pattern_power",
+            "wave_radial_residual_power",
         )
     )
 
@@ -196,6 +209,13 @@ def main() -> int:
                         simultaneous_losses & np.isfinite(exchange_mode_ratio)
                     ]
                 )
+            )
+        ),
+        "fraction_of_simultaneous_losses_with_nonnegative_radial_residual": (
+            None
+            if not np.any(simultaneous_losses)
+            else float(
+                np.mean(wave_radial_residual_power[simultaneous_losses] >= 0.0)
             )
         ),
         "mean_orbital_power": float(

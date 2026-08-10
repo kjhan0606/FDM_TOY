@@ -85,6 +85,14 @@ def main() -> int:
                     / scales.orbital_power_msun_pc2_myr3,
                     "dimensionless_orbital_torque": cycle["orbital_torque"]
                     / scales.orbital_torque_msun_pc2_myr2,
+                    "dimensionless_wave_rotating_pattern_power": cycle[
+                        "wave_rotating_pattern_power"
+                    ]
+                    / scales.orbital_power_msun_pc2_myr3,
+                    "dimensionless_wave_radial_residual_power": cycle[
+                        "wave_radial_residual_power"
+                    ]
+                    / scales.orbital_power_msun_pc2_myr3,
                     "dimensionless_wave_intrinsic_energy_rate": cycle[
                         "wave_intrinsic_energy_rate"
                     ]
