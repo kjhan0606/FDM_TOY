@@ -18,6 +18,7 @@ def main() -> int:
     parser.add_argument("run", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--wave-density-panel", action="store_true")
+    parser.add_argument("--mark-resolution-limit", action="store_true")
     args = parser.parse_args()
     run = args.run.expanduser().resolve()
     table = np.genfromtxt(
@@ -83,12 +84,38 @@ def main() -> int:
         float(np.max(separation_pc) + 0.08 * span),
     )
     axis.tick_params(top=True, right=True)
-    if args.wave_density_panel:
-        axis.set_xlabel("")
-        axis.text(0.03, 0.94, "(a)", transform=axis.transAxes, va="top")
+    metadata = None
+    if args.mark_resolution_limit or args.wave_density_panel:
         metadata = json.loads(
             (run / "fdm_adapter_metadata.json").read_text(encoding="utf-8")
         )
+    if args.mark_resolution_limit:
+        assert metadata is not None
+        two_cells_pc = 2.0 * float(metadata["box_size_pc"]) / int(
+            metadata["resolution"]
+        )
+        lower_limit, upper_limit = axis.get_ylim()
+        if lower_limit < two_cells_pc < upper_limit:
+            axis.axhline(
+                two_cells_pc,
+                color="0.35",
+                linewidth=0.7,
+                linestyle=(0, (3, 2)),
+            )
+            axis.text(
+                0.97,
+                two_cells_pc,
+                "2 cell widths",
+                color="0.25",
+                fontsize=7.0,
+                ha="right",
+                va="bottom",
+                transform=axis.get_yaxis_transform(),
+            )
+    if args.wave_density_panel:
+        axis.set_xlabel("")
+        axis.text(0.03, 0.94, "(a)", transform=axis.transAxes, va="top")
+        assert metadata is not None
         units = pyul_unit_system(metadata)
         density_paths = ordered_output_paths(
             run / "Outputs" / "1Density", "R1D_#*.npy"
