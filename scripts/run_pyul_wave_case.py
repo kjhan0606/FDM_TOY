@@ -32,6 +32,17 @@ def _git_revision(path: Path) -> str:
     return completed.stdout.strip()
 
 
+def _git_worktree_clean(path: Path) -> bool:
+    completed = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=path,
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    return not bool(completed.stdout.strip())
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--pyul-path", required=True, type=Path)
@@ -177,6 +188,9 @@ def main() -> int:
             "case_id": args.case_id,
             "run_id": run_id,
             "project_root": str(project_root),
+            "adapter_revision": _git_revision(project_root),
+            "adapter_worktree_clean": _git_worktree_clean(project_root),
+            "adapter_arguments": sys.argv[1:],
             "pyul_repository": "https://github.com/Sifyrena/PyUL_NBody",
             "pyul_revision": _git_revision(pyul_path),
             "particle_mass_ev": particle_mass_ev,

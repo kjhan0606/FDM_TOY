@@ -117,6 +117,11 @@ records its exact commit and keeps the checkout external to this repository.
 It also supplies compatibility aliases required by current SciPy and IPython
 without editing the upstream source.
 
+Each run records the exact PyUL revision, the FDM_TOY revision, the adapter
+arguments, and whether the FDM_TOY working tree was clean at launch. A dirty
+launch remains identifiable and must be accompanied by the corresponding
+local changes before the result enters a calibration release.
+
 ```bash
 python scripts/run_pyul_wave_case.py \
   --pyul-path /path/to/PyUL_NBody \
