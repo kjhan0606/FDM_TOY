@@ -163,8 +163,9 @@ def main() -> int:
         density_paths = ordered_output_paths(
             run / "Outputs" / "1Density", "R1D_#*.npy"
         )
-        if len(density_paths) != time_myr.size:
-            raise ValueError("line-density and orbital outputs have different lengths")
+        if len(density_paths) < time_myr.size:
+            raise ValueError("line-density output is shorter than the orbital table")
+        density_paths = density_paths[: time_myr.size]
         line_density = (
             np.asarray([np.load(path) for path in density_paths])
             * units.density_msun_pc3
