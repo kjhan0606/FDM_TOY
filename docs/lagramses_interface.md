@@ -49,7 +49,9 @@ The runtime update performs the following physical operations.
 5. The binary multipole correction equals the potential of the two internal
    members minus the monopole potential already supplied by the centre-of-mass
    particle.
-6. The Hamiltonian ledger tests the orbital, centre-of-mass, wave intrinsic,
+6. The work and torque produced by that correction are subtracted from the
+   target wave exchange. A calibrated mode source receives only the remainder.
+7. The Hamiltonian ledger tests the orbital, centre-of-mass, wave intrinsic,
    wave-SMBH interaction, and total energies.
 
 The force from a resolved FDM wake and an analytic FDM drag never act on the
