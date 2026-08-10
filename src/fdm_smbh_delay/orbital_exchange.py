@@ -32,6 +32,44 @@ class KeplerianElements:
 
 
 @dataclass(frozen=True)
+class OrbitalFrame:
+    radial_unit: np.ndarray
+    tangential_unit: np.ndarray
+    normal_unit: np.ndarray
+
+
+def orbital_frame_from_relative_state(
+    displacement: np.ndarray, relative_velocity: np.ndarray
+) -> OrbitalFrame:
+    """Return a right-handed frame tied to the instantaneous binary orbit."""
+
+    position = np.asarray(displacement, dtype=float)
+    velocity = np.asarray(relative_velocity, dtype=float)
+    if (
+        position.shape != (3,)
+        or velocity.shape != (3,)
+        or np.any(~np.isfinite(position))
+        or np.any(~np.isfinite(velocity))
+    ):
+        raise ValueError("relative position and velocity must be finite vectors")
+    separation = float(np.linalg.norm(position))
+    angular_momentum = np.cross(position, velocity)
+    angular_momentum_norm = float(np.linalg.norm(angular_momentum))
+    if separation <= 0.0 or angular_momentum_norm <= 0.0:
+        raise ValueError(
+            "the orbital frame requires nonzero separation and angular momentum"
+        )
+    radial = position / separation
+    normal = angular_momentum / angular_momentum_norm
+    tangential = np.cross(normal, radial)
+    return OrbitalFrame(
+        radial_unit=radial,
+        tangential_unit=tangential,
+        normal_unit=normal,
+    )
+
+
+@dataclass(frozen=True)
 class FiniteOrbitalExchangeStep:
     initial_semimajor_axis_pc: float
     final_semimajor_axis_pc: float

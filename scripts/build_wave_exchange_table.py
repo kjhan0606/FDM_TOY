@@ -14,6 +14,8 @@ from fdm_smbh_delay.exchange_scaling import (
     exchange_scales,
     schrodinger_poisson_similarity_parameter,
 )
+from fdm_smbh_delay.orbital_exchange import orbital_frame_from_relative_state
+from fdm_smbh_delay.pyul import ordered_output_paths, pyul_unit_system
 
 
 _MODE_REGIONS = (
@@ -54,6 +56,11 @@ _WAVE_STATE_COLUMNS = (
     "schrodinger_energy_flux_4rc",
     "schrodinger_energy_flux_8rc",
 )
+_ORBITAL_FRAME_COLUMNS = tuple(
+    f"orbital_{axis}_unit_{component}"
+    for axis in ("radial", "tangential", "normal")
+    for component in ("x", "y", "z")
+)
 
 
 def _nearest_wave_state(
@@ -63,9 +70,11 @@ def _nearest_wave_state(
         column: np.nan for column in (*_WAVE_STATE_COLUMNS, *_MODE_COLUMNS)
     }
     values["wave_mode_sample_time_offset_over_orbital_period"] = np.nan
+    values["wave_snapshot_time_myr"] = np.nan
     if response is None:
         return values
     index = int(np.argmin(np.abs(response["time_myr"] - time_myr)))
+    values["wave_snapshot_time_myr"] = float(response["time_myr"][index])
     available = set(response.dtype.names or ())
     for column in (*_WAVE_STATE_COLUMNS, *_MODE_COLUMNS):
         if column in available:
@@ -73,6 +82,39 @@ def _nearest_wave_state(
     values["wave_mode_sample_time_offset_over_orbital_period"] = float(
         (response["time_myr"][index] - time_myr) / orbital_period_myr
     )
+    return values
+
+
+def _orbital_frame_state(
+    *,
+    wave_time_myr: float,
+    state_times_myr: np.ndarray | None,
+    states: np.ndarray | None,
+    box_size_code: float | None,
+) -> dict[str, float]:
+    values = {column: np.nan for column in _ORBITAL_FRAME_COLUMNS}
+    if (
+        not np.isfinite(wave_time_myr)
+        or state_times_myr is None
+        or states is None
+        or box_size_code is None
+    ):
+        return values
+    index = int(np.argmin(np.abs(state_times_myr - wave_time_myr)))
+    bodies = states[index]
+    displacement = bodies[0, :3] - bodies[1, :3]
+    displacement -= box_size_code * np.floor(
+        displacement / box_size_code + 0.5
+    )
+    relative_velocity = bodies[0, 3:] - bodies[1, 3:]
+    frame = orbital_frame_from_relative_state(displacement, relative_velocity)
+    for axis, vector in (
+        ("radial", frame.radial_unit),
+        ("tangential", frame.tangential_unit),
+        ("normal", frame.normal_unit),
+    ):
+        for component, value in zip(("x", "y", "z"), vector, strict=True):
+            values[f"orbital_{axis}_unit_{component}"] = float(value)
     return values
 
 
@@ -130,6 +172,28 @@ def main() -> int:
             if response_path.is_file()
             else None
         )
+        state_times_myr = None
+        states = None
+        box_size_code = None
+        if response is not None:
+            conservation = np.genfromtxt(
+                run / "conservation_timeseries.csv",
+                delimiter=",",
+                names=True,
+                ndmin=1,
+            )
+            state_paths = ordered_output_paths(
+                run / "Outputs" / "NBody", "NTM_#*.npy"
+            )
+            if len(state_paths) != conservation.size:
+                raise ValueError("SMBH states and conservation times are inconsistent")
+            states = np.asarray(
+                [np.load(path).reshape(2, 6) for path in state_paths]
+            )
+            state_times_myr = conservation["time_myr"]
+            box_size_code = float(metadata["box_size_pc"]) / pyul_unit_system(
+                metadata
+            ).length_pc
         initial_resolved = np.minimum.accumulate(
             table["mean_separation_over_cell_size"] >= 2.0
         )
@@ -145,6 +209,13 @@ def main() -> int:
                 else float(response["central_density_msun_pc3"][0])
             )
             measured_half_density_radius = wave_snapshot.pop("core_radius_pc")
+            wave_snapshot_time = wave_snapshot.pop("wave_snapshot_time_myr")
+            frame_state = _orbital_frame_state(
+                wave_time_myr=wave_snapshot_time,
+                state_times_myr=state_times_myr,
+                states=states,
+                box_size_code=box_size_code,
+            )
             wave_state = {
                 "wave_binary_com_offset_over_core_radius": (
                     wave_snapshot.pop("wave_binary_com_offset_pc") / core_radius
@@ -269,6 +340,7 @@ def main() -> int:
                         and initial_resolved_energy_passed
                     ),
                     **wave_state,
+                    **frame_state,
                     **wave_snapshot,
                 }
             )
@@ -311,6 +383,11 @@ def main() -> int:
             "when it spans at least two cell widths"
         ),
         "similarity_parameter": "hbar^2/(G*m^2*M_soliton*r_core)",
+        "orbital_frame_state": (
+            "right-handed radial, tangential, and normal unit vectors at the "
+            "saved three-dimensional wave state; rotate complex multipoles "
+            "into this frame before fitting phase-dependent transfer"
+        ),
     }
     output.with_suffix(".summary.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"

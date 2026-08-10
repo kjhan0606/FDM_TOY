@@ -152,6 +152,50 @@ unique decay rate. The diagnostic records multipoles about both the wave centre
 and the binary centre. Their difference separates an internal distortion of
 the soliton from a displacement of the wave relative to the binary.
 
+## Form of the calibrated transfer
+
+The transfer model must retain a secular part and a coherent response. In
+dimensionless variables, a suitable expansion is
+
+\[
+\mathcal P=\mathcal P_0(q,e,f_\mathrm{bin},a/r_c,\eta_\mathrm{SP})
++\sum_{\ell m}\mathop{\rm Re}
+\left[C^P_{\ell m} A^{\rm orb}_{\ell m}\right],
+\]
+
+\[
+\mathcal T=\mathcal T_0(q,e,f_\mathrm{bin},a/r_c,\eta_\mathrm{SP})
++\sum_{\ell m}\mathop{\rm Re}
+\left[C^T_{\ell m} A^{\rm orb}_{\ell m}\right].
+\]
+
+Here `f_bin=M_binary/M_soliton` and
+`eta_SP=hbar^2/(G m^2 M_soliton r_c)`. The coefficients
+`A_lm^orb` denote the local complex density multipoles expressed relative to
+the instantaneous orbital frame. Their phases are physical. Replacing them by
+the invariant `l=1` and `l=2` amplitudes would erase whether a coherent mode
+removes energy from the binary or returns energy to it.
+
+The leading unperturbed term obeys the symmetry of the binary. An equal-mass
+circular binary has no internal dipole about its centre of mass and first
+drives a rotating quadrupole. A displaced soliton or an existing dipole breaks
+that symmetry. The fitted dipole response must therefore be conditioned on the
+measured wave state instead of being assigned to every equal-mass binary.
+
+Only rows that satisfy the spatial and Hamiltonian tests enter a provisional
+fit. A physical calibration additionally requires agreement between spatial
+resolutions, wave time-step factors, and SMBH RK4 substep counts. The fit
+returns signed orbital power and torque. It does not force either quantity to
+remain negative because coherent wave modes may return energy or angular
+momentum over part of their oscillation. Long-time decay follows only after
+averaging over the relevant orbital and soliton-mode periods.
+
+The fitted power and torque determine the orbital update. The resolved
+multipole potential supplies part of the opposite wave exchange. A separate
+mode source supplies only the residual defined above. This sequence preserves
+the Hamiltonian constraint and prevents the coherent response from being
+applied twice.
+
 The minimal mode decomposition assigns `Omega dot L_wave` to a pattern rotating
 at the orbital frequency and assigns
 

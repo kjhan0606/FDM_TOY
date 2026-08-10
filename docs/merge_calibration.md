@@ -183,7 +183,9 @@ outer mass and intrinsic energy, complex density multipoles, and radial mass
 and Schrödinger-energy fluxes. These quantities are normalized by the soliton
 and orbital scales of that calculation. The measured half-density radius
 receives a separate spatial-resolution flag and is not interpreted when it
-spans fewer than two cell widths.
+spans fewer than two cell widths. The binary radial, tangential, and normal
+unit vectors define the orbital frame at the matched wave state. A
+phase-dependent fit must rotate the complex multipoles into this frame.
 
 Long calculations may retain frequent SMBH and scalar-energy states while
 writing the three-dimensional density and wavefunction less often. For example,

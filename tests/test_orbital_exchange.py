@@ -5,7 +5,27 @@ from fdm_smbh_delay.orbital_exchange import (
     advance_keplerian_exchange,
     keplerian_elements_from_relative_state,
     keplerian_exchange_rates,
+    orbital_frame_from_relative_state,
 )
+
+
+def test_orbital_frame_is_right_handed() -> None:
+    frame = orbital_frame_from_relative_state(
+        np.array([2.0, 0.0, 0.0]), np.array([0.0, 3.0, 0.0])
+    )
+    np.testing.assert_allclose(frame.radial_unit, [1.0, 0.0, 0.0])
+    np.testing.assert_allclose(frame.tangential_unit, [0.0, 1.0, 0.0])
+    np.testing.assert_allclose(frame.normal_unit, [0.0, 0.0, 1.0])
+    np.testing.assert_allclose(
+        np.cross(frame.radial_unit, frame.tangential_unit), frame.normal_unit
+    )
+
+
+def test_orbital_frame_rejects_radial_motion() -> None:
+    with pytest.raises(ValueError):
+        orbital_frame_from_relative_state(
+            np.array([1.0, 0.0, 0.0]), np.array([2.0, 0.0, 0.0])
+        )
 
 
 def test_circular_relative_state_recovers_keplerian_elements() -> None:
