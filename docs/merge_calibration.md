@@ -121,6 +121,20 @@ python scripts/analyze_pyul_wave_run.py \
   results/pyul_smoke/koo_mbh1.0e8_n512
 ```
 
+For a calculation that spans at least one complete orbit, the secular analysis
+compares successive equal-phase boundaries and writes the orbit-resolved power,
+torque, and energy ledger:
+
+```bash
+python scripts/analyze_pyul_secular_exchange.py \
+  results/pyul_orbit_pilots/koo_orbit1/koo_mbh1.0e8_n128
+```
+
+The wave intrinsic energy, wave--SMBH interaction energy, SMBH centre-of-mass
+kinetic energy, and combined-Hamiltonian residual remain separate columns. This
+prevents a transient change in the interaction energy from being labelled as
+irreversible wave heating.
+
 The completed Koo-anchor smoke calculations give:
 
 | resolution | cell size [pc] | duration [yr] | wave-mass error | total-energy error | error / transferred energy |
