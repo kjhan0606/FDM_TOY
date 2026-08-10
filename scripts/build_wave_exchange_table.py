@@ -85,6 +85,12 @@ def main() -> int:
             soliton_mass_msun=soliton_mass,
             core_radius_pc=core_radius,
         )
+        conservation_summary = json.loads(
+            (run / "conservation_summary.json").read_text(encoding="utf-8")
+        )
+        energy_conservation_passed = bool(
+            conservation_summary["energy_transfer_conservation_passed"]
+        )
         cell_size = float(metadata["box_size_pc"]) / int(metadata["resolution"])
         table = np.genfromtxt(
             run / "orbit_averaged_exchange.csv",
@@ -103,6 +109,9 @@ def main() -> int:
                 response,
                 float(cycle["mean_time_myr"]),
                 float(cycle["orbital_period_myr"]),
+            )
+            spatially_resolved = bool(
+                cycle["mean_separation_over_cell_size"] >= 2.0
             )
             rows.append(
                 {
@@ -167,6 +176,13 @@ def main() -> int:
                     / scales.orbital_power_msun_pc2_myr3,
                     "soliton_dynamical_time_myr": scales.soliton_dynamical_time_myr,
                     "cell_size_pc": cell_size,
+                    "spatial_resolution_passed": int(spatially_resolved),
+                    "run_energy_conservation_passed": int(
+                        energy_conservation_passed
+                    ),
+                    "calibration_eligible": int(
+                        spatially_resolved and energy_conservation_passed
+                    ),
                     **mode_state,
                 }
             )
@@ -189,8 +205,9 @@ def main() -> int:
             "angular_momentum": "mu*sqrt(G*M_binary*r_core)",
         },
         "selection": (
-            "no physical or numerical selection applied; spatial-scale columns "
-            "must be used before fitting"
+            "rows are retained without deletion; calibration_eligible requires "
+            "a mean separation of at least two cell widths and a run that "
+            "passes the Hamiltonian acceptance limit"
         ),
         "exchange_mode_diagnostic": (
             "power/(orbital frequency times torque) equals one for exchange "
