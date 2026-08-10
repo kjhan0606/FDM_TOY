@@ -18,9 +18,11 @@ The record requires
 - the separation vector, relative velocity, centre-of-mass state, orbital
   energy, angular momentum, eccentricity vector, and osculating semi-major axis
 - local gas, stellar, and FDM densities and velocities
-- the fitted mass, core radius, centre, and bulk velocity of the FDM soliton
+- the fitted mass, core radius, centre, bulk velocity, and dimensionless
+  Schrödinger--Poisson coefficient of the FDM soliton
 - complex FDM dipole and quadrupole amplitudes measured about the soliton and
-  binary centres, together with the displacement between those centres
+  binary centres, together with the displacement between those centres and the
+  orbital frame used to rotate the coefficients
 - the numerical linking length, finest cell width, and gravitational softening
 
 A group with more than two sinks retains the complete member list and receives
@@ -39,8 +41,9 @@ particle.
 The runtime update performs the following physical operations.
 
 1. The local FDM state, including coherent dipole and quadrupole amplitudes,
-   and the internal binary elements select an accepted region of the
-   calibration table.
+   is rotated into the instantaneous binary frame. The resulting state and the
+   internal binary elements select an accepted region of the calibration
+   table.
 2. The interpolated power and torque change internal orbital energy and angular
    momentum over the current interval.
 3. The new energy and angular momentum determine the semi-major axis,
