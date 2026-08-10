@@ -44,7 +44,15 @@ def main() -> int:
     parser.add_argument("--resolution", type=int, default=128)
     parser.add_argument("--duration-myr", type=float)
     parser.add_argument("--save-number", type=int, default=16)
-    parser.add_argument("--rk-steps", type=int, default=36)
+    parser.add_argument(
+        "--rk-steps",
+        type=int,
+        default=36,
+        help=(
+            "PyUL N-body RK stage count per wave step; a multiple of four "
+            "gives that count divided by four RK4 substeps"
+        ),
+    )
     parser.add_argument("--time-step-factor", type=float, default=1.0)
     parser.add_argument("--output", type=Path, default=Path("results/pyul_wave"))
     parser.add_argument("--box-pc", type=float)
@@ -63,6 +71,8 @@ def main() -> int:
         raise ValueError("PyUL_NBody requires resolution >= 128")
     if args.save_number < 1:
         raise ValueError("--save-number must be positive")
+    if args.rk_steps != 1 and (args.rk_steps < 4 or args.rk_steps % 4 != 0):
+        raise ValueError("--rk-steps must be one or a positive multiple of four")
     if not 0.0 < args.time_step_factor <= 1.0:
         raise ValueError("--time-step-factor must satisfy 0 < factor <= 1")
     if args.duration_myr is not None and args.duration_myr <= 0.0:
@@ -176,6 +186,10 @@ def main() -> int:
             "plummer_radius_pc": plummer_radius,
             "duration_myr": duration,
             "time_step_factor": args.time_step_factor,
+            "nbody_rk_stage_count_per_wave_step": args.rk_steps,
+            "nbody_rk4_substeps_per_wave_step": (
+                None if args.rk_steps == 1 else args.rk_steps // 4
+            ),
             "save_number": args.save_number,
             "saved_3d_states": saved_3d_states,
             "estimated_wave_steps": estimated_steps,
