@@ -118,6 +118,7 @@ def main() -> int:
     )
     axis.tick_params(top=True, right=True)
     metadata = None
+    first_unresolved_time = None
     if args.mark_resolution_limit or args.wave_density_panel:
         metadata = json.loads(
             (run / "fdm_adapter_metadata.json").read_text(encoding="utf-8")
@@ -195,6 +196,13 @@ def main() -> int:
         density_axis.set_xlabel(time_label)
         density_axis.set_ylabel(r"$y$ [pc]")
         density_axis.tick_params(top=True, right=True)
+        if first_unresolved_time is not None:
+            density_axis.axvline(
+                first_unresolved_time,
+                color="white",
+                linewidth=0.65,
+                linestyle=(0, (3, 2)),
+            )
         density_axis.text(
             0.03,
             0.94,
