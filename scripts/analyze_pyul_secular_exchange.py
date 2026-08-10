@@ -98,6 +98,22 @@ def main() -> int:
     )
     columns.append(mean_separation_over_cell)
     header.append("mean_separation_over_cell_size")
+    orbital_frequency = 2.0 * np.pi / reference.duration
+    frequency_torque = orbital_frequency * averaged[
+        "binary_angular_momentum_msun_pc2_myr"
+    ].rate
+    exchange_mode_ratio = np.full(reference.cycle_index.size, np.nan)
+    nonzero_torque = np.abs(frequency_torque) > np.finfo(float).tiny
+    exchange_mode_ratio[nonzero_torque] = averaged[
+        "binary_orbital_energy"
+    ].rate[nonzero_torque] / frequency_torque[nonzero_torque]
+    columns.extend((orbital_frequency, exchange_mode_ratio))
+    header.extend(
+        (
+            "orbital_frequency_myr_inverse",
+            "orbital_power_over_frequency_times_torque",
+        )
+    )
 
     output_path = run / "orbit_averaged_exchange.csv"
     np.savetxt(
@@ -158,6 +174,11 @@ def main() -> int:
         "cycles_with_mean_separation_above_two_cells": int(
             np.count_nonzero(mean_separation_over_cell >= 2.0)
         ),
+        "median_orbital_power_over_frequency_times_torque": (
+            None
+            if np.all(~np.isfinite(exchange_mode_ratio))
+            else float(np.nanmedian(exchange_mode_ratio))
+        ),
         "mean_orbital_power": float(
             (orbital_energy.end_value[-1] - orbital_energy.start_value[0])
             / (orbital_energy.end_time[-1] - orbital_energy.start_time[0])
@@ -170,6 +191,10 @@ def main() -> int:
         "energy_ledger": (
             "orbital, wave intrinsic, wave-SMBH interaction, SMBH centre-of-mass, "
             "and combined-Hamiltonian residual rates are retained separately"
+        ),
+        "exchange_mode_ratio_role": (
+            "a rigidly rotating perturbation gives power/(orbital frequency "
+            "times torque)=1; departures require additional harmonics or radial response"
         ),
     }
     summary_path = run / "orbit_averaged_exchange_summary.json"

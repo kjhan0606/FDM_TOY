@@ -74,6 +74,9 @@ def main() -> int:
                     "mean_separation_over_cell_size": cycle[
                         "mean_separation_over_cell_size"
                     ],
+                    "orbital_power_over_frequency_times_torque": cycle[
+                        "orbital_power_over_frequency_times_torque"
+                    ],
                     "plummer_radius_over_core_radius": float(
                         metadata["plummer_radius_pc"]
                     )
@@ -123,6 +126,10 @@ def main() -> int:
         "selection": (
             "no physical or numerical selection applied; spatial-scale columns "
             "must be used before fitting"
+        ),
+        "exchange_mode_diagnostic": (
+            "power/(orbital frequency times torque) equals one for exchange "
+            "through one rigidly rotating pattern"
         ),
     }
     output.with_suffix(".summary.json").write_text(

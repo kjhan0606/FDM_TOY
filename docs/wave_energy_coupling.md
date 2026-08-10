@@ -129,6 +129,18 @@ The second expression remains regular at `e=0`. The scalar `de/dt` follows by
 division by `2e` only for nonzero eccentricity. The wave receives
 `-dE_orb/dt` and `-d|L_orb|/dt`.
 
+A single perturbation that rotates at angular frequency `Omega` obeys
+
+\[
+\dot E_{\rm orb}=\Omega\dot L_{\rm orb}.
+\]
+
+The orbit-resolved analysis therefore records
+`dot E_orb/(Omega dot L_orb)`. A value near unity permits the energy and
+angular momentum to enter the wave through one rotating pattern. A significant
+departure requires additional orbital harmonics, a radial response, or both.
+The measured ratio constrains the wave source and is not imposed in advance.
+
 These equations apply to orbit-averaged internal elements. The smooth soliton
 potential may produce reversible changes in osculating Kepler elements over an
 orbit. Such changes must not enter the fitted dissipative rates. The function
