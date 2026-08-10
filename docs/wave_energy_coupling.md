@@ -102,3 +102,36 @@ decelerate them counts the interaction twice. Likewise, injecting arbitrary
 "heat" into `|psi|^2` is not acceptable. The evolution must preserve FDM mass,
 apply the required momentum, add the required energy, and pass a total-energy
 convergence test.
+
+## Orbit-averaged element rates below the resolved scale
+
+The calibration calculations will return the secular binary power
+`dE_orb/dt` and the torque along the orbital angular momentum
+`d|L_orb|/dt`. For a Keplerian internal binary,
+
+\[
+E_{\rm orb}=-\frac{G M_1 M_2}{2a},\qquad
+L_{\rm orb}=\mu\sqrt{G(M_1+M_2)a(1-e^2)}.
+\]
+
+The corresponding rates are
+
+\[
+\dot a=\frac{2a^2}{G M_1 M_2}\dot E_{\rm orb},
+\]
+
+\[
+\frac{d e^2}{dt}=(1-e^2)
+\left(\frac{\dot a}{a}-2\frac{\dot L_{\rm orb}}{L_{\rm orb}}\right).
+\]
+
+The second expression remains regular at `e=0`. The scalar `de/dt` follows by
+division by `2e` only for nonzero eccentricity. The wave receives
+`-dE_orb/dt` and `-d|L_orb|/dt`.
+
+These equations apply to orbit-averaged internal elements. The smooth soliton
+potential may produce reversible changes in osculating Kepler elements over an
+orbit. Such changes must not enter the fitted dissipative rates. The function
+`keplerian_exchange_rates` implements the conversion after the resolved wake
+and reversible cross-energy reservoir have been separated from the secular
+exchange.
