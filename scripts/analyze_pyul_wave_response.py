@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from fdm_smbh_delay.pyul import ordered_output_paths, pyul_unit_system
+from fdm_smbh_delay.pyul import ordered_output_paths, output_index, pyul_unit_system
 from fdm_smbh_delay.wave_response import (
     centred_grid,
     multipole_amplitudes,
@@ -83,16 +83,40 @@ def main() -> int:
     density_paths = ordered_output_paths(
         run / "Outputs" / "3Density", "R3D_#*.npy"
     )
-    state_paths = ordered_output_paths(run / "Outputs" / "NBody", "NTM_#*.npy")
-    if not len(wave_paths) == len(density_paths) == len(state_paths):
-        raise ValueError("3D wavefunction, density, and SMBH outputs are inconsistent")
+    wave_indices = [output_index(path) for path in wave_paths]
+    density_indices = [output_index(path) for path in density_paths]
+    if wave_indices != density_indices:
+        raise ValueError("3D wavefunction and density outputs are inconsistent")
+    all_state_paths = ordered_output_paths(
+        run / "Outputs" / "NBody", "NTM_#*.npy"
+    )
+    state_by_index = {output_index(path): path for path in all_state_paths}
+    try:
+        state_paths = [state_by_index[index] for index in wave_indices]
+    except KeyError as exc:
+        raise ValueError("a 3D field has no matching SMBH state") from exc
     samples = len(wave_paths)
-    times_myr = np.linspace(0.0, float(metadata["duration_myr"]), samples)
-    saved_kinetic = np.load(run / "Outputs" / "ekandqlist.npy")
-    saved_self = np.load(run / "Outputs" / "egpsilist.npy")
-    saved_cross = np.load(run / "Outputs" / "egpcmlist.npy")
-    if not saved_kinetic.size == saved_self.size == saved_cross.size == samples:
-        raise ValueError("saved energy arrays do not match 3D snapshots")
+    save_number = int(
+        metadata.get("save_number", config["Save Options"]["Number"])
+    )
+    times_myr = (
+        float(metadata["duration_myr"])
+        * np.asarray(wave_indices, dtype=float)
+        / save_number
+    )
+    saved_kinetic_all = np.load(run / "Outputs" / "ekandqlist.npy")
+    saved_self_all = np.load(run / "Outputs" / "egpsilist.npy")
+    saved_cross_all = np.load(run / "Outputs" / "egpcmlist.npy")
+    if not (
+        saved_kinetic_all.size
+        == saved_self_all.size
+        == saved_cross_all.size
+        == len(all_state_paths)
+    ):
+        raise ValueError("saved energy arrays do not match the SMBH states")
+    saved_kinetic = saved_kinetic_all[wave_indices]
+    saved_self = saved_self_all[wave_indices]
+    saved_cross = saved_cross_all[wave_indices]
 
     maximum_radius_code = min(0.45 * box_code, 8.0 * core_code)
     radial_edges = np.linspace(0.0, maximum_radius_code, args.radial_bins + 1)

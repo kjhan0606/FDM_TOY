@@ -135,6 +135,22 @@ kinetic energy, and combined-Hamiltonian residual remain separate columns. This
 prevents a transient change in the interaction energy from being labelled as
 irreversible wave heating.
 
+Long calculations may retain frequent SMBH and scalar-energy states while
+writing the three-dimensional density and wavefunction less often. For example,
+the following choice writes 2,049 orbital states and 33 three-dimensional field
+states at matching times:
+
+```bash
+python scripts/run_pyul_wave_case.py \
+  --pyul-path /path/to/PyUL_NBody \
+  --case-id koo_mbh1.0e8 \
+  --resolution 128 \
+  --duration-myr 1 \
+  --save-number 2048 \
+  --save-3d-number 32 \
+  --output results/pyul_wave
+```
+
 The completed Koo-anchor smoke calculations give:
 
 | resolution | cell size [pc] | duration [yr] | wave-mass error | total-energy error | error / transferred energy |

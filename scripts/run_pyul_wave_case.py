@@ -49,6 +49,7 @@ def main() -> int:
     parser.add_argument("--box-pc", type=float)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--save-3d", action="store_true")
+    parser.add_argument("--save-3d-number", type=int)
     args = parser.parse_args()
 
     project_root = Path(__file__).resolve().parents[1]
@@ -59,8 +60,17 @@ def main() -> int:
         raise ValueError("--pyul-path must point to a PyUL_NBody checkout")
     if args.resolution < 128:
         raise ValueError("PyUL_NBody requires resolution >= 128")
+    if args.save_number < 1:
+        raise ValueError("--save-number must be positive")
     if args.duration_myr is not None and args.duration_myr <= 0.0:
         raise ValueError("--duration-myr must be positive")
+    if args.save_3d and args.save_3d_number is not None:
+        raise ValueError("choose either all 3D states or a sparse 3D schedule")
+    if args.save_3d_number is not None:
+        if not 0 < args.save_3d_number <= args.save_number:
+            raise ValueError("--save-3d-number must lie between 1 and --save-number")
+        if args.save_number % args.save_3d_number != 0:
+            raise ValueError("--save-3d-number must divide --save-number")
 
     case = _load_case(cases_path, args.case_id)
     particle_mass_ev = float(case["particle_mass_ev"])
@@ -96,6 +106,8 @@ def main() -> int:
 
     original_cwd = Path.cwd()
     original_input = builtins.input
+    evolve_globals = None
+    original_save_grid = None
     try:
         os.chdir(pyul_path)
         os.environ.setdefault("NUMEXPR_MAX_THREADS", "128")
@@ -129,7 +141,7 @@ def main() -> int:
         plummer_radius = max(0.001, 0.5 * cell_size)
         plummer_parameter = pyul.GenPlummer(plummer_radius, "pc")
         save_options = "Energy NBody DF 1Density Entropy Quadrupole"
-        if args.save_3d:
+        if args.save_3d or args.save_3d_number is not None:
             save_options += " 3Density 3Wfn"
         estimated_steps = int(
             pyul.ULDStepEst(
@@ -142,6 +154,12 @@ def main() -> int:
                 save_number=-1,
             )
         )
+        if args.save_3d:
+            saved_3d_states = args.save_number + 1
+        elif args.save_3d_number is not None:
+            saved_3d_states = args.save_3d_number + 1
+        else:
+            saved_3d_states = 0
         metadata = {
             "case_id": args.case_id,
             "run_id": run_id,
@@ -154,6 +172,8 @@ def main() -> int:
             "cell_size_pc": cell_size,
             "plummer_radius_pc": plummer_radius,
             "duration_myr": duration,
+            "save_number": args.save_number,
+            "saved_3d_states": saved_3d_states,
             "estimated_wave_steps": estimated_steps,
             "analytic_fdm_drag": False,
             "live_wave_force_on_smbhs": True,
@@ -204,6 +224,50 @@ def main() -> int:
             json.dumps(metadata, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+        if args.save_3d_number is not None:
+            stride = args.save_number // args.save_3d_number
+            evolve_globals = pyul.evolve.__globals__
+            original_save_grid = evolve_globals["save_grid"]
+
+            def sparse_save_grid(
+                rho,
+                psi,
+                resol,
+                matter_state,
+                phi_sp,
+                phi,
+                gradient_log,
+                options,
+                save_format,
+                location,
+                step_index,
+                steps_per_save,
+            ):
+                snapshot = (
+                    0
+                    if step_index < 0
+                    else int((step_index + 1) / steps_per_save)
+                )
+                selected_options = list(options)
+                if snapshot % stride != 0 and snapshot != args.save_number:
+                    selected_options[0] = False
+                    selected_options[1] = False
+                return original_save_grid(
+                    rho,
+                    psi,
+                    resol,
+                    matter_state,
+                    phi_sp,
+                    phi,
+                    gradient_log,
+                    selected_options,
+                    save_format,
+                    location,
+                    step_index,
+                    steps_per_save,
+                )
+
+            evolve_globals["save_grid"] = sparse_save_grid
         pyul.evolve(
             str(output_root),
             run_id,
@@ -218,6 +282,8 @@ def main() -> int:
             ComputeQuad=True,
         )
     finally:
+        if evolve_globals is not None and original_save_grid is not None:
+            evolve_globals["save_grid"] = original_save_grid
         builtins.input = original_input
         os.chdir(original_cwd)
     return 0
