@@ -31,7 +31,10 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("run", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--max-energy-error-over-transfer", type=float, default=0.01)
     args = parser.parse_args()
+    if args.max_energy_error_over_transfer <= 0.0:
+        raise ValueError("energy-error tolerance must be positive")
     run = args.run.expanduser().resolve()
     metadata = json.loads(
         (run / "fdm_adapter_metadata.json").read_text(encoding="utf-8")
@@ -178,6 +181,10 @@ def main() -> int:
         np.max(np.abs(wave_bh_interaction - wave_bh_interaction[0])),
         np.finfo(float).tiny,
     )
+    maximum_energy_error_over_transfer = float(
+        np.max(np.abs(combined_energy - combined_energy[0]))
+        / transferred_energy_scale
+    )
     interaction_scale = np.maximum(
         np.maximum(
             np.abs(wave_bh_interaction), np.abs(point_interaction_estimator)
@@ -253,8 +260,14 @@ def main() -> int:
             np.max(np.abs(combined_energy - combined_energy[0])) / energy_scale
         ),
         "max_total_energy_drift_over_energy_transfer": float(
-            np.max(np.abs(combined_energy - combined_energy[0]))
-            / transferred_energy_scale
+            maximum_energy_error_over_transfer
+        ),
+        "maximum_energy_error_over_transfer_tolerance": float(
+            args.max_energy_error_over_transfer
+        ),
+        "energy_transfer_conservation_passed": bool(
+            maximum_energy_error_over_transfer
+            <= args.max_energy_error_over_transfer
         ),
         "max_wave_energy_decomposition_relative_error": float(
             np.max(np.abs(saved_wave_total - wave_total))
