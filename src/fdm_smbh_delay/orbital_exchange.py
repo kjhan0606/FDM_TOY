@@ -20,6 +20,71 @@ class OrbitalExchangeRates:
     wave_angular_momentum_rate: float
 
 
+@dataclass(frozen=True)
+class KeplerianElements:
+    separation: float
+    relative_speed: float
+    specific_energy: float
+    specific_angular_momentum: np.ndarray
+    semimajor_axis: float | None
+    eccentricity_vector: np.ndarray
+    eccentricity: float
+
+
+def keplerian_elements_from_relative_state(
+    *,
+    total_mass: float,
+    displacement: np.ndarray,
+    relative_velocity: np.ndarray,
+    gravitational_constant: float = G_INTERNAL,
+) -> KeplerianElements:
+    """Return point-mass osculating elements in a consistent unit system.
+
+    The elements describe the instantaneous Kepler orbit defined by the
+    relative state.  An extended external potential or softened mutual force
+    produces reversible oscillations in these diagnostic elements.
+    """
+
+    position = np.asarray(displacement, dtype=float)
+    velocity = np.asarray(relative_velocity, dtype=float)
+    if position.shape != (3,) or velocity.shape != (3,):
+        raise ValueError("relative position and velocity must have shape (3,)")
+    if (
+        total_mass <= 0.0
+        or gravitational_constant <= 0.0
+        or np.any(~np.isfinite(position))
+        or np.any(~np.isfinite(velocity))
+    ):
+        raise ValueError("mass, gravity, position, and velocity must be finite")
+    separation = float(np.linalg.norm(position))
+    if separation <= 0.0:
+        raise ValueError("relative separation must be positive")
+    relative_speed = float(np.linalg.norm(velocity))
+    gravitational_mass = gravitational_constant * total_mass
+    angular_momentum = np.cross(position, velocity)
+    specific_energy = 0.5 * relative_speed**2 - gravitational_mass / separation
+    eccentricity_vector = (
+        np.cross(velocity, angular_momentum) / gravitational_mass
+        - position / separation
+    )
+    semimajor_axis = (
+        -gravitational_mass / (2.0 * specific_energy)
+        if specific_energy < 0.0
+        else None
+    )
+    return KeplerianElements(
+        separation=separation,
+        relative_speed=relative_speed,
+        specific_energy=float(specific_energy),
+        specific_angular_momentum=angular_momentum,
+        semimajor_axis=(
+            None if semimajor_axis is None else float(semimajor_axis)
+        ),
+        eccentricity_vector=eccentricity_vector,
+        eccentricity=float(np.linalg.norm(eccentricity_vector)),
+    )
+
+
 def keplerian_exchange_rates(
     *,
     mass1_msun: float,

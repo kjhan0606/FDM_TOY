@@ -19,6 +19,7 @@ def test_pyul_units_from_explicit_metadata() -> None:
     assert units.time_myr == pytest.approx(1.0)
     assert units.mass_msun == pytest.approx(1.0)
     assert units.energy_msun_pc2_myr2 == pytest.approx(1.0)
+    assert units.angular_momentum_msun_pc2_myr == pytest.approx(1.0)
 
 
 def test_pyul_fallback_matches_reference_run() -> None:

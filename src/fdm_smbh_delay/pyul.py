@@ -37,6 +37,10 @@ class PyulUnitSystem:
     def energy_rate_msun_pc2_myr3(self) -> float:
         return self.energy_msun_pc2_myr2 / self.time_myr
 
+    @property
+    def angular_momentum_msun_pc2_myr(self) -> float:
+        return self.mass_msun * self.length_pc**2 / self.time_myr
+
 
 def pyul_unit_system(metadata: dict) -> PyulUnitSystem:
     """Build physical conversions from adapter metadata or PyUL constants."""

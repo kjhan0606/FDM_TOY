@@ -1,6 +1,35 @@
+import numpy as np
 import pytest
 
-from fdm_smbh_delay.orbital_exchange import keplerian_exchange_rates
+from fdm_smbh_delay.orbital_exchange import (
+    keplerian_elements_from_relative_state,
+    keplerian_exchange_rates,
+)
+
+
+def test_circular_relative_state_recovers_keplerian_elements() -> None:
+    elements = keplerian_elements_from_relative_state(
+        total_mass=3.0,
+        displacement=np.array([2.0, 0.0, 0.0]),
+        relative_velocity=np.array([0.0, np.sqrt(1.5), 0.0]),
+        gravitational_constant=1.0,
+    )
+    assert elements.semimajor_axis == pytest.approx(2.0)
+    assert elements.eccentricity == pytest.approx(0.0, abs=1.0e-15)
+    np.testing.assert_allclose(
+        elements.specific_angular_momentum, [0.0, 0.0, np.sqrt(6.0)]
+    )
+
+
+def test_unbound_relative_state_has_no_semimajor_axis() -> None:
+    elements = keplerian_elements_from_relative_state(
+        total_mass=1.0,
+        displacement=np.array([1.0, 0.0, 0.0]),
+        relative_velocity=np.array([0.0, 2.0, 0.0]),
+        gravitational_constant=1.0,
+    )
+    assert elements.specific_energy > 0.0
+    assert elements.semimajor_axis is None
 
 
 def test_negative_power_shrinks_semimajor_axis_and_closes_exchange() -> None:

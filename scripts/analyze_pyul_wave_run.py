@@ -10,11 +10,16 @@ from pathlib import Path
 import numpy as np
 
 from fdm_smbh_delay.interaction import coupled_hamiltonian
+from fdm_smbh_delay.orbital_exchange import keplerian_elements_from_relative_state
 from fdm_smbh_delay.pyul import ordered_output_paths, pyul_unit_system
 
 
 def _ordered_arrays(directory: Path, pattern: str) -> list[np.ndarray]:
     return [np.load(path) for path in ordered_output_paths(directory, pattern)]
+
+
+def _finite_or_none(value: float) -> float | None:
+    return float(value) if np.isfinite(value) else None
 
 
 def main() -> int:
@@ -75,6 +80,9 @@ def main() -> int:
     bh_com_kinetic: list[float] = []
     binary_relative_kinetic: list[float] = []
     binary_mutual: list[float] = []
+    binary_angular_momentum: list[float] = []
+    osculating_semimajor_axis: list[float] = []
+    osculating_eccentricity: list[float] = []
     for state in states:
         bodies = state.reshape(2, 6)
         positions_code = bodies[:, :3]
@@ -97,6 +105,7 @@ def main() -> int:
             com_velocity_code @ com_velocity_code
         )
         relative_velocity_code = velocities_code[0] - velocities_code[1]
+        relative_position_code = positions_code[0] - positions_code[1]
         relative_kinetic_code = 0.5 * reduced_mass_code * float(
             relative_velocity_code @ relative_velocity_code
         )
@@ -110,6 +119,23 @@ def main() -> int:
             relative_kinetic_code * energy_code_to_internal
         )
         binary_mutual.append(float(mutual_code * energy_code_to_internal))
+        elements = keplerian_elements_from_relative_state(
+            total_mass=total_mass_code,
+            displacement=relative_position_code,
+            relative_velocity=relative_velocity_code,
+            gravitational_constant=1.0,
+        )
+        binary_angular_momentum.append(
+            reduced_mass_code
+            * float(np.linalg.norm(elements.specific_angular_momentum))
+            * units.angular_momentum_msun_pc2_myr
+        )
+        osculating_semimajor_axis.append(
+            np.nan
+            if elements.semimajor_axis is None
+            else elements.semimajor_axis * length_code_to_pc
+        )
+        osculating_eccentricity.append(elements.eccentricity)
 
     separation_array = np.asarray(separation)
     bh_kinetic_array = np.asarray(bh_kinetic)
@@ -117,6 +143,12 @@ def main() -> int:
     binary_orbital_energy = np.asarray(binary_relative_kinetic) + np.asarray(
         binary_mutual
     )
+    binary_angular_momentum_array = np.asarray(binary_angular_momentum)
+    osculating_semimajor_axis_array = np.asarray(osculating_semimajor_axis)
+    osculating_eccentricity_array = np.asarray(osculating_eccentricity)
+    finite_semimajor_axes = osculating_semimajor_axis_array[
+        np.isfinite(osculating_semimajor_axis_array)
+    ]
     bh_kinetic_decomposition_error = bh_kinetic_array - (
         bh_com_kinetic_array + np.asarray(binary_relative_kinetic)
     )
@@ -158,6 +190,34 @@ def main() -> int:
         "fractional_separation_change": float(
             separation_array[-1] / separation_array[0] - 1.0
         ),
+        "minimum_separation_over_plummer_radius": float(
+            np.min(separation_array) / plummer_radius_pc
+        ),
+        "initial_osculating_semimajor_axis_pc": _finite_or_none(
+            osculating_semimajor_axis_array[0]
+        ),
+        "final_osculating_semimajor_axis_pc": _finite_or_none(
+            osculating_semimajor_axis_array[-1]
+        ),
+        "minimum_osculating_semimajor_axis_pc": (
+            None
+            if finite_semimajor_axes.size == 0
+            else float(np.min(finite_semimajor_axes))
+        ),
+        "initial_osculating_eccentricity": float(
+            osculating_eccentricity_array[0]
+        ),
+        "final_osculating_eccentricity": float(
+            osculating_eccentricity_array[-1]
+        ),
+        "maximum_osculating_eccentricity": float(
+            np.max(osculating_eccentricity_array)
+        ),
+        "fractional_angular_momentum_change": float(
+            binary_angular_momentum_array[-1]
+            / binary_angular_momentum_array[0]
+            - 1.0
+        ),
         "max_wave_mass_relative_error": float(
             np.max(np.abs(wave_mass / wave_mass[0] - 1.0))
         ),
@@ -187,6 +247,10 @@ def main() -> int:
             "gauge-dependent force diagnostic; not included in the Hamiltonian"
         ),
         "analytic_fdm_drag": metadata["analytic_fdm_drag"],
+        "osculating_elements_role": (
+            "point-mass diagnostics; orbit averaging is required because the "
+            "FDM core and Plummer softening perturb the Kepler elements"
+        ),
     }
     table = np.column_stack(
         (
@@ -198,6 +262,9 @@ def main() -> int:
             wave_bh_interaction,
             point_interaction_estimator,
             binary_orbital_energy,
+            binary_angular_momentum_array,
+            osculating_semimajor_axis_array,
+            osculating_eccentricity_array,
             bh_com_kinetic_array,
             bh_kinetic_array,
             np.asarray(binary_mutual),
@@ -213,7 +280,10 @@ def main() -> int:
         header=(
             "time_myr,separation_pc,wave_kinetic_energy,wave_self_gravity_energy,"
             "wave_intrinsic_energy,wave_bh_interaction_grid,"
-            "bh_wave_point_estimator,binary_orbital_energy,bh_com_kinetic_energy,"
+            "bh_wave_point_estimator,binary_orbital_energy,"
+            "binary_angular_momentum_msun_pc2_myr,semimajor_axis_osculating_pc,"
+            "eccentricity_osculating,"
+            "bh_com_kinetic_energy,"
             "bh_total_kinetic_energy,bh_mutual_gravity_energy,combined_energy,"
             "wave_mass_msun"
         ),
