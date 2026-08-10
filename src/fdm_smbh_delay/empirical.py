@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from .constants import G_INTERNAL
+
 
 def koo_separation_pc(time_myr: float | np.ndarray, d0_pc: float, q0: float) -> float | np.ndarray:
     """Koo et al. small-separation analytic curve.
@@ -30,6 +32,49 @@ def koo_time_between_myr(d_initial_pc: float, d_final_pc: float, q0: float) -> f
         ((d_initial_pc / d_final_pc) ** 2.5 - 1.0)
         / (2.5 * q0 * d_initial_pc**2.5)
     )
+
+
+def koo_separation_rate_at_separation_pc_myr(
+    separation_pc: float | np.ndarray, q0: float
+) -> float | np.ndarray:
+    """Return the derivative implied by the Koo et al. separation fit."""
+
+    separation = np.asarray(separation_pc, dtype=float)
+    if np.any(separation <= 0.0) or q0 <= 0.0:
+        raise ValueError("separation and q0 must be positive")
+    result = -q0 * separation**3.5
+    if np.ndim(separation_pc) == 0:
+        return float(result)
+    return result
+
+
+def koo_kepler_inferred_orbital_power(
+    *,
+    separation_pc: float | np.ndarray,
+    mass1_msun: float,
+    mass2_msun: float,
+    q0: float,
+) -> float | np.ndarray:
+    """Map the Koo separation rate to isolated circular two-body power.
+
+    The FDM potential does not appear in this conversion. The result is a
+    comparison quantity and is not the energy deposited in the live wave.
+    """
+
+    separation = np.asarray(separation_pc, dtype=float)
+    if mass1_msun <= 0.0 or mass2_msun <= 0.0:
+        raise ValueError("black hole masses must be positive")
+    separation_rate = koo_separation_rate_at_separation_pc_myr(separation, q0)
+    result = (
+        G_INTERNAL
+        * mass1_msun
+        * mass2_msun
+        * separation_rate
+        / (2.0 * separation**2)
+    )
+    if np.ndim(separation_pc) == 0:
+        return float(result)
+    return result
 
 
 def koo_q0_pc_m5half_myr(

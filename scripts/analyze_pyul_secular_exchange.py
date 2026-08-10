@@ -9,6 +9,11 @@ from pathlib import Path
 
 import numpy as np
 
+from fdm_smbh_delay.empirical import (
+    koo_kepler_inferred_orbital_power,
+    koo_q0_pc_m5half_myr,
+    koo_separation_rate_at_separation_pc_myr,
+)
 from fdm_smbh_delay.pyul import ordered_output_paths
 from fdm_smbh_delay.secular_exchange import (
     moving_block_bootstrap_rate,
@@ -77,6 +82,7 @@ def main() -> int:
     metadata = json.loads(
         (run / "fdm_adapter_metadata.json").read_text(encoding="utf-8")
     )
+    config = json.loads((run / "config.uldm").read_text(encoding="utf-8"))
     cell_size_pc = float(metadata["box_size_pc"]) / int(metadata["resolution"])
 
     timeseries_path = run / "conservation_timeseries.csv"
@@ -255,6 +261,60 @@ def main() -> int:
                 else float(np.mean(resolved_radial_power[resolved_losses] >= 0.0))
             ),
         }
+    published_fit_cross_check = None
+    particles = config["Matter Particles"]["Condition"]
+    solitons = config["ULDM Solitons"]["Condition"]
+    if (
+        str(metadata["case_id"]).startswith("koo_")
+        and len(particles) == 2
+        and len(solitons) == 1
+        and np.isclose(float(particles[0][0]), float(particles[1][0]))
+        and resolved_window_orbits > 0
+    ):
+        mass1 = float(particles[0][0])
+        mass2 = float(particles[1][0])
+        soliton_mass = float(solitons[0][0])
+        q0 = koo_q0_pc_m5half_myr(
+            soliton_mass_msun=soliton_mass,
+            black_hole_mass_msun=mass1,
+            particle_mass_ev=float(metadata["particle_mass_ev"]),
+        )
+        resolved_durations = reference.duration[resolved_selection]
+        mean_separation = float(
+            np.sum(
+                averaged["separation_pc"].mean_value[resolved_selection]
+                * resolved_durations
+            )
+            / np.sum(resolved_durations)
+        )
+        reference_power = koo_kepler_inferred_orbital_power(
+            separation_pc=mean_separation,
+            mass1_msun=mass1,
+            mass2_msun=mass2,
+            q0=q0,
+        )
+        measured_power = (
+            None
+            if resolved_bootstrap_summary is None
+            else resolved_bootstrap_summary["orbital_power"]["estimate"]
+        )
+        published_fit_cross_check = {
+            "reference": "Koo et al. (2024), equation 18",
+            "window_orbits": resolved_window_orbits,
+            "time_weighted_mean_separation_pc": mean_separation,
+            "separation_rate_pc_myr": (
+                koo_separation_rate_at_separation_pc_myr(mean_separation, q0)
+            ),
+            "kepler_inferred_orbital_power": reference_power,
+            "measured_to_kepler_inferred_power_ratio": (
+                None if measured_power is None else measured_power / reference_power
+            ),
+            "interpretation": (
+                "the published separation fit is mapped through an isolated "
+                "circular Kepler relation; it does not measure energy deposited "
+                "in the live FDM wave"
+            ),
+        }
     summary = {
         "status": "orbit_averaged",
         "complete_orbits": int(reference.cycle_index.size),
@@ -308,6 +368,7 @@ def main() -> int:
         "late_window_block_bootstrap": bootstrap_summary,
         "initial_resolved_window_block_bootstrap": resolved_bootstrap_summary,
         "initial_resolved_window_mode_diagnostic": resolved_mode_summary,
+        "published_separation_fit_cross_check": published_fit_cross_check,
         "energy_ledger": (
             "orbital, wave intrinsic, wave-SMBH interaction, SMBH centre-of-mass, "
             "and combined-Hamiltonian residual rates are retained separately"

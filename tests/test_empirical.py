@@ -4,8 +4,10 @@ import pytest
 
 from fdm_smbh_delay.empirical import (
     BOEY_2025_FITS,
+    koo_kepler_inferred_orbital_power,
     koo_q0_pc_m5half_myr,
     koo_separation_pc,
+    koo_separation_rate_at_separation_pc_myr,
     koo_time_between_myr,
 )
 
@@ -14,6 +16,24 @@ def test_koo_curve_inverse() -> None:
     q0 = 0.7
     elapsed = koo_time_between_myr(1.0, 0.2, q0)
     assert koo_separation_pc(elapsed, 1.0, q0) == pytest.approx(0.2, rel=1.0e-13)
+
+
+def test_koo_separation_derivative_and_kepler_mapping() -> None:
+    q0 = 2.3
+    separation = 0.7
+    time_step = 1.0e-7
+    numerical_rate = (
+        koo_separation_pc(time_step, separation, q0) - separation
+    ) / time_step
+    analytic_rate = koo_separation_rate_at_separation_pc_myr(separation, q0)
+    assert numerical_rate == pytest.approx(analytic_rate, rel=2.0e-6)
+    power = koo_kepler_inferred_orbital_power(
+        separation_pc=separation,
+        mass1_msun=1.0e8,
+        mass2_msun=1.0e8,
+        q0=q0,
+    )
+    assert power < 0.0
 
 
 def test_boey_public_fit_replay_and_ordering() -> None:
