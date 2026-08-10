@@ -362,6 +362,11 @@ def main() -> int:
             maximum_energy_error_over_transfer
             <= args.max_energy_error_over_transfer
         ),
+        "energy_error_history_normalization": (
+            "at each saved prefix, cumulative maximum absolute Hamiltonian "
+            "change divided by the largest cumulative exchange among the "
+            "orbital, centre-of-mass, intrinsic-wave, and interaction terms"
+        ),
         "max_wave_energy_decomposition_relative_error": float(
             np.max(np.abs(saved_wave_total - wave_total))
             / max(np.max(np.abs(saved_wave_total)), np.finfo(float).tiny)
