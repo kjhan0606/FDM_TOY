@@ -22,6 +22,11 @@ class MultipoleAmplitudes:
     mass: float
     l1_fraction: float
     l2_fraction: float
+    l1_m0: complex
+    l1_m1: complex
+    l2_m0: complex
+    l2_m1: complex
+    l2_m2: complex
 
 
 def periodic_centre_of_mass(density: np.ndarray, box_size: float) -> np.ndarray:
@@ -182,7 +187,13 @@ def multipole_amplitudes(
     selection: np.ndarray,
     cell_volume: float,
 ) -> MultipoleAmplitudes:
-    """Return rotationally invariant normalized l=1 and l=2 amplitudes."""
+    """Return normalized density multipoles through ``l=2``.
+
+    The complex coefficients use the standard complex spherical harmonics and
+    are normalized by the selected mass divided by ``sqrt(4 pi)``.  Coefficients
+    with negative ``m`` follow from the reality condition and are not stored.
+    The invariant fractions retain the sum over both signs of ``m``.
+    """
 
     rho = np.asarray(density, dtype=float)
     mask = np.asarray(selection, dtype=bool)
@@ -191,7 +202,8 @@ def multipole_amplitudes(
     weights = rho[mask] * cell_volume
     mass = float(np.sum(weights))
     if mass <= 0.0:
-        return MultipoleAmplitudes(0.0, np.nan, np.nan)
+        nan = complex(np.nan, np.nan)
+        return MultipoleAmplitudes(0.0, np.nan, np.nan, nan, nan, nan, nan, nan)
     selected_radius = radius[mask]
     safe_radius = np.where(radius > 0.0, radius, 1.0)
     xhat = np.broadcast_to(x, rho.shape)[mask] / safe_radius[mask]
@@ -200,22 +212,35 @@ def multipole_amplitudes(
 
     a10 = np.sqrt(3.0 / (4.0 * np.pi)) * np.sum(weights * zhat)
     a11 = -np.sqrt(3.0 / (8.0 * np.pi)) * np.sum(
-        weights * (xhat + 1j * yhat)
+        weights * (xhat - 1j * yhat)
     )
-    l1_power = abs(a10) ** 2 + 2.0 * abs(a11) ** 2
-
     y20_shape = np.where(selected_radius > 0.0, 3.0 * zhat**2 - 1.0, 0.0)
     a20 = np.sqrt(5.0 / (16.0 * np.pi)) * np.sum(weights * y20_shape)
     a21 = -np.sqrt(15.0 / (8.0 * np.pi)) * np.sum(
-        weights * zhat * (xhat + 1j * yhat)
+        weights * zhat * (xhat - 1j * yhat)
     )
     a22 = np.sqrt(15.0 / (32.0 * np.pi)) * np.sum(
-        weights * (xhat + 1j * yhat) ** 2
+        weights * (xhat - 1j * yhat) ** 2
     )
-    l2_power = abs(a20) ** 2 + 2.0 * abs(a21) ** 2 + 2.0 * abs(a22) ** 2
     normalization = np.sqrt(4.0 * np.pi) / mass
+    normalized_a10 = complex(normalization * a10)
+    normalized_a11 = complex(normalization * a11)
+    normalized_a20 = complex(normalization * a20)
+    normalized_a21 = complex(normalization * a21)
+    normalized_a22 = complex(normalization * a22)
+    l1_power = abs(normalized_a10) ** 2 + 2.0 * abs(normalized_a11) ** 2
+    l2_power = (
+        abs(normalized_a20) ** 2
+        + 2.0 * abs(normalized_a21) ** 2
+        + 2.0 * abs(normalized_a22) ** 2
+    )
     return MultipoleAmplitudes(
         mass=mass,
-        l1_fraction=float(normalization * np.sqrt(l1_power)),
-        l2_fraction=float(normalization * np.sqrt(l2_power)),
+        l1_fraction=float(np.sqrt(l1_power)),
+        l2_fraction=float(np.sqrt(l2_power)),
+        l1_m0=normalized_a10,
+        l1_m1=normalized_a11,
+        l2_m0=normalized_a20,
+        l2_m1=normalized_a21,
+        l2_m2=normalized_a22,
     )

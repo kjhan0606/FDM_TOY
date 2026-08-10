@@ -269,6 +269,17 @@ def main() -> int:
                 "near_l2_fraction": modes["near"].l2_fraction,
                 "outer_l1_fraction": modes["outer"].l1_fraction,
                 "outer_l2_fraction": modes["outer"].l2_fraction,
+                **{
+                    f"{region}_l{ell}_m{order}_{component}": float(
+                        getattr(multipoles, f"l{ell}_m{order}").real
+                        if component == "real"
+                        else getattr(multipoles, f"l{ell}_m{order}").imag
+                    )
+                    for region, multipoles in modes.items()
+                    for ell, orders in ((1, (0, 1)), (2, (0, 1, 2)))
+                    for order in orders
+                    for component in ("real", "imag")
+                },
             }
         )
         for radial_bin in range(args.radial_bins):
@@ -327,6 +338,11 @@ def main() -> int:
         "maximum_core_l2_fraction": max(row["core_l2_fraction"] for row in response_rows),
         "maximum_near_l2_fraction": max(row["near_l2_fraction"] for row in response_rows),
         "maximum_outer_l2_fraction": max(row["outer_l2_fraction"] for row in response_rows),
+        "density_multipole_coefficients": (
+            "standard complex spherical-harmonic coefficients normalized by "
+            "selected mass/sqrt(4*pi); negative-m coefficients follow from "
+            "the reality condition"
+        ),
     }
     conservation_path = run / "conservation_timeseries.csv"
     if conservation_path.is_file():

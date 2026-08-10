@@ -257,6 +257,8 @@ transfer, not merely below a tolerance normalized by the much larger soliton
 binding energy.
 
 Long calculations must additionally save the density or wavefunction needed
-for radial fluxes, central-density evolution, and `l = 0, 1, 2` mode amplitudes.
-Only after the literature anchors pass the energy, force, and resolution tests
+for radial fluxes, central-density evolution, the radial monopole profile, and
+the complex `l = 1, 2` density multipoles. The individual complex coefficients
+retain the phase that a rotationally invariant mode fraction discards. Only
+after the literature anchors pass the energy, force, and resolution tests
 should the 87-case physical grid be executed.

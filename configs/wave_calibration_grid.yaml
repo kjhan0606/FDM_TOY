@@ -40,6 +40,6 @@ measurements:
   - wave_kinetic_self_gravity_and_bh_interaction_energy
   - radial_mass_energy_and_angular_momentum_flux
   - central_density_and_half_density_radius
-  - spherical_harmonic_modes_l0_l1_l2
+  - radial_monopole_profile_and_complex_density_multipoles_l1_l2
   - outgoing_wave_energy
   - total_mass_energy_and_angular_momentum_error

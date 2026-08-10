@@ -34,6 +34,45 @@ def test_periodic_centre_and_spherical_modes() -> None:
     )
     assert modes.l1_fraction < 1.0e-3
     assert modes.l2_fraction < 1.0e-3
+    assert modes.l1_fraction**2 == pytest.approx(
+        abs(modes.l1_m0) ** 2 + 2.0 * abs(modes.l1_m1) ** 2
+    )
+    assert modes.l2_fraction**2 == pytest.approx(
+        abs(modes.l2_m0) ** 2
+        + 2.0 * abs(modes.l2_m1) ** 2
+        + 2.0 * abs(modes.l2_m2) ** 2
+    )
+
+
+def test_density_multipoles_retain_dipole_phase() -> None:
+    n = 48
+    box = 10.0
+    centre = np.zeros(3)
+    x, y, z, radius = centred_grid(n, box, centre)
+    safe_radius = np.where(radius > 0.0, radius, 1.0)
+    spherical = np.exp(-radius**2)
+    selection = radius < 3.0
+    x_dipole = multipole_amplitudes(
+        spherical * (1.0 + 0.2 * x / safe_radius),
+        x,
+        y,
+        z,
+        radius,
+        selection,
+        (box / n) ** 3,
+    )
+    y_dipole = multipole_amplitudes(
+        spherical * (1.0 + 0.2 * y / safe_radius),
+        x,
+        y,
+        z,
+        radius,
+        selection,
+        (box / n) ** 3,
+    )
+    assert abs(x_dipole.l1_m1.real) > 100.0 * abs(x_dipole.l1_m1.imag)
+    assert abs(y_dipole.l1_m1.imag) > 100.0 * abs(y_dipole.l1_m1.real)
+    assert abs(x_dipole.l1_m1) == pytest.approx(abs(y_dipole.l1_m1), rel=1.0e-3)
 
 
 def test_spectral_plane_wave_currents() -> None:
