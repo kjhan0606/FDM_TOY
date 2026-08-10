@@ -104,7 +104,10 @@ def main() -> int:
             if response_path.is_file()
             else None
         )
-        for cycle in table:
+        initial_resolved = np.minimum.accumulate(
+            table["mean_separation_over_cell_size"] >= 2.0
+        )
+        for row_index, cycle in enumerate(table):
             mode_state = _nearest_mode_state(
                 response,
                 float(cycle["mean_time_myr"]),
@@ -177,11 +180,14 @@ def main() -> int:
                     "soliton_dynamical_time_myr": scales.soliton_dynamical_time_myr,
                     "cell_size_pc": cell_size,
                     "minimum_spatial_sampling_passed": int(spatially_resolved),
+                    "before_first_underresolved_orbit": int(
+                        initial_resolved[row_index]
+                    ),
                     "run_energy_conservation_passed": int(
                         energy_conservation_passed
                     ),
                     "provisional_numerical_acceptance": int(
-                        spatially_resolved and energy_conservation_passed
+                        initial_resolved[row_index] and energy_conservation_passed
                     ),
                     **mode_state,
                 }
@@ -206,8 +212,8 @@ def main() -> int:
         },
         "selection": (
             "rows are retained without deletion; provisional numerical "
-            "acceptance requires a mean separation of at least two cell widths "
-            "and a run that passes the Hamiltonian limit; calibration still "
+            "acceptance ends at the first orbit below two cell widths and "
+            "requires a run that passes the Hamiltonian limit; calibration still "
             "requires convergence between spatial and temporal resolutions"
         ),
         "exchange_mode_diagnostic": (

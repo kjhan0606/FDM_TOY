@@ -17,6 +17,49 @@ from fdm_smbh_delay.secular_exchange import (
 )
 
 
+def _bootstrap_window(
+    *,
+    orbital_energy,
+    angular_momentum,
+    selection: slice,
+    window_orbits: int,
+    requested_block_orbits: int,
+    samples: int,
+    scope: str,
+) -> dict | None:
+    if window_orbits < 2 or samples <= 0:
+        return None
+    block_orbits = min(requested_block_orbits, window_orbits)
+    power_interval = moving_block_bootstrap_rate(
+        rate=orbital_energy.rate[selection],
+        duration=orbital_energy.duration[selection],
+        block_length=block_orbits,
+        samples=samples,
+    )
+    torque_interval = moving_block_bootstrap_rate(
+        rate=angular_momentum.rate[selection],
+        duration=angular_momentum.duration[selection],
+        block_length=block_orbits,
+        samples=samples,
+    )
+    return {
+        "window_orbits": window_orbits,
+        "block_orbits": block_orbits,
+        "samples": samples,
+        "orbital_power": {
+            "estimate": power_interval.estimate,
+            "lower_95": power_interval.lower_95,
+            "upper_95": power_interval.upper_95,
+        },
+        "orbital_torque": {
+            "estimate": torque_interval.estimate,
+            "lower_95": torque_interval.lower_95,
+            "upper_95": torque_interval.upper_95,
+        },
+        "scope": scope,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("run", type=Path)
@@ -42,14 +85,12 @@ def main() -> int:
             "run scripts/analyze_pyul_wave_run.py before the secular analysis"
         )
     data = np.genfromtxt(timeseries_path, delimiter=",", names=True)
+    state_paths = ordered_output_paths(run / "Outputs" / "NBody", "NTM_#*.npy")
+    if len(state_paths) < data.shape[0]:
+        raise ValueError("particle states are shorter than the energy table")
     states = np.asarray(
-        [
-            np.load(path).reshape(2, 6)
-            for path in ordered_output_paths(run / "Outputs" / "NBody", "NTM_#*.npy")
-        ]
+        [np.load(path).reshape(2, 6) for path in state_paths[: data.shape[0]]]
     )
-    if states.shape[0] != data.shape[0]:
-        raise ValueError("particle states and energy table have different lengths")
     displacement = states[:, 0, :3] - states[:, 1, :3]
     relative_velocity = states[:, 0, 3:] - states[:, 1, 3:]
     phase = unwrapped_orbital_phase(displacement, relative_velocity)
@@ -144,41 +185,41 @@ def main() -> int:
     orbital_energy = averaged["binary_orbital_energy"]
     angular_momentum = averaged["binary_angular_momentum_msun_pc2_myr"]
     window_orbits = min(args.rate_window_orbits, reference.cycle_index.size)
-    bootstrap_summary = None
-    if window_orbits >= 2 and args.bootstrap_samples > 0:
-        selection = slice(-window_orbits, None)
-        block_orbits = min(args.block_orbits, window_orbits)
-        power_interval = moving_block_bootstrap_rate(
-            rate=orbital_energy.rate[selection],
-            duration=orbital_energy.duration[selection],
-            block_length=block_orbits,
-            samples=args.bootstrap_samples,
-        )
-        torque_interval = moving_block_bootstrap_rate(
-            rate=angular_momentum.rate[selection],
-            duration=angular_momentum.duration[selection],
-            block_length=block_orbits,
-            samples=args.bootstrap_samples,
-        )
-        bootstrap_summary = {
-            "window_orbits": window_orbits,
-            "block_orbits": block_orbits,
-            "samples": args.bootstrap_samples,
-            "orbital_power": {
-                "estimate": power_interval.estimate,
-                "lower_95": power_interval.lower_95,
-                "upper_95": power_interval.upper_95,
-            },
-            "orbital_torque": {
-                "estimate": torque_interval.estimate,
-                "lower_95": torque_interval.lower_95,
-                "upper_95": torque_interval.upper_95,
-            },
-            "scope": (
-                "correlated cycle variation in the final local window; excludes "
-                "spatial-resolution systematics and secular variation outside the window"
-            ),
-        }
+    bootstrap_summary = _bootstrap_window(
+        orbital_energy=orbital_energy,
+        angular_momentum=angular_momentum,
+        selection=slice(-window_orbits, None),
+        window_orbits=window_orbits,
+        requested_block_orbits=args.block_orbits,
+        samples=args.bootstrap_samples,
+        scope=(
+            "correlated cycle variation in the final local window; excludes "
+            "spatial-resolution systematics and secular variation outside the window"
+        ),
+    )
+    underresolved_cycles = np.flatnonzero(mean_separation_over_cell < 2.0)
+    initial_resolved_orbits = (
+        reference.cycle_index.size
+        if underresolved_cycles.size == 0
+        else int(underresolved_cycles[0])
+    )
+    resolved_window_orbits = min(args.rate_window_orbits, initial_resolved_orbits)
+    resolved_bootstrap_summary = _bootstrap_window(
+        orbital_energy=orbital_energy,
+        angular_momentum=angular_momentum,
+        selection=slice(
+            initial_resolved_orbits - resolved_window_orbits,
+            initial_resolved_orbits,
+        ),
+        window_orbits=resolved_window_orbits,
+        requested_block_orbits=args.block_orbits,
+        samples=args.bootstrap_samples,
+        scope=(
+            "correlated cycle variation in the last initial window whose mean "
+            "separation remains at least two cell widths; excludes convergence "
+            "systematics between resolutions"
+        ),
+    )
     summary = {
         "status": "orbit_averaged",
         "complete_orbits": int(reference.cycle_index.size),
@@ -191,6 +232,9 @@ def main() -> int:
         ),
         "cycles_with_mean_separation_above_two_cells": int(
             np.count_nonzero(mean_separation_over_cell >= 2.0)
+        ),
+        "initial_cycles_before_first_underresolved_orbit": int(
+            initial_resolved_orbits
         ),
         "median_orbital_power_over_frequency_times_torque": (
             None
@@ -227,6 +271,7 @@ def main() -> int:
             / (angular_momentum.end_time[-1] - angular_momentum.start_time[0])
         ),
         "late_window_block_bootstrap": bootstrap_summary,
+        "initial_resolved_window_block_bootstrap": resolved_bootstrap_summary,
         "energy_ledger": (
             "orbital, wave intrinsic, wave-SMBH interaction, SMBH centre-of-mass, "
             "and combined-Hamiltonian residual rates are retained separately"
