@@ -21,6 +21,10 @@ def main() -> int:
     parser.add_argument("run", type=Path)
     args = parser.parse_args()
     run = args.run.expanduser().resolve()
+    metadata = json.loads(
+        (run / "fdm_adapter_metadata.json").read_text(encoding="utf-8")
+    )
+    cell_size_pc = float(metadata["box_size_pc"]) / int(metadata["resolution"])
 
     timeseries_path = run / "conservation_timeseries.csv"
     if not timeseries_path.exists():
@@ -79,6 +83,11 @@ def main() -> int:
         else:
             columns.append(series.rate)
         header.append(output_name)
+    mean_separation_over_cell = (
+        averaged["separation_pc"].mean_value / cell_size_pc
+    )
+    columns.append(mean_separation_over_cell)
+    header.append("mean_separation_over_cell_size")
 
     output_path = run / "orbit_averaged_exchange.csv"
     np.savetxt(
@@ -96,6 +105,13 @@ def main() -> int:
         "start_time_myr": float(reference.start_time[0]),
         "end_time_myr": float(reference.end_time[-1]),
         "median_orbital_period_myr": float(np.median(reference.duration)),
+        "cell_size_pc": cell_size_pc,
+        "minimum_cycle_mean_separation_over_cell_size": float(
+            np.min(mean_separation_over_cell)
+        ),
+        "cycles_with_mean_separation_above_two_cells": int(
+            np.count_nonzero(mean_separation_over_cell >= 2.0)
+        ),
         "mean_orbital_power": float(
             (orbital_energy.end_value[-1] - orbital_energy.start_value[0])
             / (orbital_energy.end_time[-1] - orbital_energy.start_time[0])
