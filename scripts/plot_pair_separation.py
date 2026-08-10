@@ -68,7 +68,7 @@ def main() -> int:
         "linewidth": 0.85 if separation_pc.size > 200 else 1.35,
     }
     if args.koo_reference:
-        line_options["label"] = "Live wave"
+        line_options["label"] = "FDM calculation"
     if separation_pc.size <= 200:
         line_options.update(
             {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plot the global energy ledger of a completed live-wave calculation."""
+"""Plot the global energy balance of a completed live-wave calculation."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ def main() -> int:
         - table["binary_orbital_energy"][0],
         "FDM intrinsic": table["wave_intrinsic_energy"]
         - table["wave_intrinsic_energy"][0],
-        "FDM-SMBH interaction": table["wave_bh_interaction_grid"]
+        "Interaction with SMBHs": table["wave_bh_interaction_grid"]
         - table["wave_bh_interaction_grid"][0],
         "Total Hamiltonian": table["combined_energy"] - table["combined_energy"][0],
     }
@@ -42,7 +42,7 @@ def main() -> int:
         changes["SMBH orbit"],
         table["bh_com_kinetic_energy"] - table["bh_com_kinetic_energy"][0],
         changes["FDM intrinsic"],
-        changes["FDM-SMBH interaction"],
+        changes["Interaction with SMBHs"],
     )
     energy_scale = max(
         max(float(np.max(np.abs(values))) for values in transfer_components),
@@ -66,7 +66,7 @@ def main() -> int:
     styles = {
         "SMBH orbit": {"color": "#254F73", "linewidth": 1.1},
         "FDM intrinsic": {"color": "#B65E2E", "linewidth": 1.0},
-        "FDM-SMBH interaction": {
+        "Interaction with SMBHs": {
             "color": "#6D4C7D",
             "linewidth": 1.0,
             "linestyle": (0, (4, 2)),
