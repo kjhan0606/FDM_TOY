@@ -11,11 +11,7 @@ import numpy as np
 
 from fdm_smbh_delay.interaction import coupled_hamiltonian
 from fdm_smbh_delay.orbital_exchange import keplerian_elements_from_relative_state
-from fdm_smbh_delay.pyul import ordered_output_paths, pyul_unit_system
-
-
-def _ordered_arrays(directory: Path, pattern: str) -> list[np.ndarray]:
-    return [np.load(path) for path in ordered_output_paths(directory, pattern)]
+from fdm_smbh_delay.pyul import ordered_output_paths, output_index, pyul_unit_system
 
 
 def _finite_or_none(value: float) -> float | None:
@@ -56,7 +52,8 @@ def main() -> int:
     mass2_code = mass2 / mass_code_to_msun
     plummer_radius_code = plummer_radius_pc / length_code_to_pc
 
-    states = _ordered_arrays(run / "Outputs" / "NBody", "NTM_#*.npy")
+    state_paths = ordered_output_paths(run / "Outputs" / "NBody", "NTM_#*.npy")
+    states = [np.load(path) for path in state_paths]
     saved_wave_total = (
         np.load(run / "Outputs" / "egylist.npy") * energy_code_to_internal
     )
@@ -191,7 +188,12 @@ def main() -> int:
         ),
         np.finfo(float).tiny,
     )
-    time = np.linspace(0.0, metadata["duration_myr"], len(states))
+    save_number = int(metadata.get("save_number", config["Save Options"]["Number"]))
+    time = (
+        float(metadata["duration_myr"])
+        * np.asarray([output_index(path) for path in state_paths], dtype=float)
+        / save_number
+    )
     minimum_separation_pc = float(np.min(separation_array))
     plummer_force_fraction = minimum_separation_pc**3 / (
         minimum_separation_pc**2 + plummer_radius_pc**2
