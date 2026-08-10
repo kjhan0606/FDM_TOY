@@ -173,8 +173,13 @@ python scripts/run_pyul_wave_case.py \
   --duration-myr 1 \
   --save-number 2048 \
   --save-3d-number 32 \
+  --time-step-factor 0.5 \
   --output results/pyul_wave
 ```
+
+The time-step factor multiplies the solver limit. A value below one increases
+the number of wave steps and should be varied together with the spatial
+resolution when the Hamiltonian error exceeds the adopted tolerance.
 
 The completed Koo-anchor smoke calculations give:
 
