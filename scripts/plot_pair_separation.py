@@ -127,6 +127,16 @@ def main() -> int:
         two_cells_pc = 2.0 * float(metadata["box_size_pc"]) / int(
             metadata["resolution"]
         )
+        unresolved_indices = np.flatnonzero(separation_pc < two_cells_pc)
+        if unresolved_indices.size:
+            first_unresolved_time = float(plot_time[unresolved_indices[0]])
+            axis.axvspan(
+                first_unresolved_time,
+                float(plot_time[-1]),
+                color="0.92",
+                linewidth=0.0,
+                zorder=-10,
+            )
         lower_limit, upper_limit = axis.get_ylim()
         if lower_limit < two_cells_pc < upper_limit:
             axis.axhline(
