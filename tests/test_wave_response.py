@@ -5,6 +5,7 @@ from fdm_smbh_delay.wave_response import (
     centred_grid,
     multipole_amplitudes,
     periodic_centre_of_mass,
+    periodic_point_centre,
     periodic_poisson_code,
     plummer_potential_code,
     spectral_wave_fields,
@@ -73,6 +74,17 @@ def test_density_multipoles_retain_dipole_phase() -> None:
     assert abs(x_dipole.l1_m1.real) > 100.0 * abs(x_dipole.l1_m1.imag)
     assert abs(y_dipole.l1_m1.imag) > 100.0 * abs(y_dipole.l1_m1.real)
     assert abs(x_dipole.l1_m1) == pytest.approx(abs(y_dipole.l1_m1), rel=1.0e-3)
+
+
+def test_periodic_point_centre_crosses_box_boundary() -> None:
+    centre = periodic_point_centre(
+        np.array([[4.8, 1.0, 0.0], [-4.8, 1.0, 0.0]]),
+        np.array([1.0, 1.0]),
+        10.0,
+    )
+    assert abs(abs(centre[0]) - 5.0) < 1.0e-12
+    assert centre[1] == pytest.approx(1.0)
+    assert centre[2] == pytest.approx(0.0)
 
 
 def test_spectral_plane_wave_currents() -> None:

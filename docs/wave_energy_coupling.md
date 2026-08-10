@@ -148,7 +148,9 @@ stone-skipping rebounds. A seeded dipole changes the long-term motion in the
 same fully coupled setting. The calibration state must therefore retain the
 complex dipole and quadrupole amplitudes, or an equivalent local wave
 description, rather than assume that masses and orbital elements determine a
-unique decay rate.
+unique decay rate. The diagnostic records multipoles about both the wave centre
+and the binary centre. Their difference separates an internal distortion of
+the soliton from a displacement of the wave relative to the binary.
 
 The minimal mode decomposition assigns `Omega dot L_wave` to a pattern rotating
 at the orbital frequency and assigns

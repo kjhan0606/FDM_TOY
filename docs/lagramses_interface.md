@@ -19,7 +19,8 @@ The record requires
   energy, angular momentum, eccentricity vector, and osculating semi-major axis
 - local gas, stellar, and FDM densities and velocities
 - the fitted mass, core radius, centre, and bulk velocity of the FDM soliton
-- complex FDM dipole and quadrupole amplitudes measured about the soliton centre
+- complex FDM dipole and quadrupole amplitudes measured about the soliton and
+  binary centres, together with the displacement between those centres
 - the numerical linking length, finest cell width, and gravitational softening
 
 A group with more than two sinks retains the complete member list and receives

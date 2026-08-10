@@ -15,6 +15,7 @@ from fdm_smbh_delay.wave_response import (
     centred_grid,
     multipole_amplitudes,
     periodic_centre_of_mass,
+    periodic_point_centre,
     periodic_poisson_code,
     plummer_potential_code,
     spectral_wave_fields,
@@ -143,6 +144,9 @@ def main() -> int:
         )
         state = np.load(state_path).reshape(len(particles), 6)
         positions_code = state[:, :3]
+        binary_centre = periodic_point_centre(
+            positions_code, masses_code, box_code
+        )
         self_potential = periodic_poisson_code(density, box_code)
         bh_potential = plummer_potential_code(
             shape=density.shape,
@@ -206,6 +210,31 @@ def main() -> int:
             )
             for name, selection in regions.items()
         }
+        binary_x, binary_y, binary_z, binary_radius = centred_grid(
+            resolution, box_code, binary_centre
+        )
+        binary_regions = {
+            "binary_core": binary_radius < core_code,
+            "binary_near": (binary_radius >= core_code)
+            & (binary_radius < 4.0 * core_code),
+            "binary_outer": (binary_radius >= 4.0 * core_code)
+            & (binary_radius < 8.0 * core_code),
+        }
+        binary_modes = {
+            name: multipole_amplitudes(
+                density,
+                binary_x,
+                binary_y,
+                binary_z,
+                binary_radius,
+                selection,
+                cell_volume_code,
+            )
+            for name, selection in binary_regions.items()
+        }
+        all_modes = {**modes, **binary_modes}
+        centre_offset = wave_centre - binary_centre
+        centre_offset -= box_code * np.floor(centre_offset / box_code + 0.5)
         offline_kinetic = float(np.sum(fields.kinetic_energy_density) * cell_volume_code)
         offline_self = float(np.sum(wave_self_density) * cell_volume_code)
         offline_cross = float(np.sum(wave_cross_density) * cell_volume_code)
@@ -237,6 +266,11 @@ def main() -> int:
                 "wave_com_x_pc": wave_centre[0] * units.length_pc,
                 "wave_com_y_pc": wave_centre[1] * units.length_pc,
                 "wave_com_z_pc": wave_centre[2] * units.length_pc,
+                "binary_com_x_pc": binary_centre[0] * units.length_pc,
+                "binary_com_y_pc": binary_centre[1] * units.length_pc,
+                "binary_com_z_pc": binary_centre[2] * units.length_pc,
+                "wave_binary_com_offset_pc": float(np.linalg.norm(centre_offset))
+                * units.length_pc,
                 "central_density_msun_pc3": central_density_code
                 * units.density_msun_pc3,
                 "core_radius_pc": evolved_core_code * units.length_pc,
@@ -263,19 +297,20 @@ def main() -> int:
                 * units.energy_rate_msun_pc2_myr3,
                 "schrodinger_energy_flux_8rc": shell_energy_flux[flux_indices[8]]
                 * units.energy_rate_msun_pc2_myr3,
-                "core_l1_fraction": modes["core"].l1_fraction,
-                "core_l2_fraction": modes["core"].l2_fraction,
-                "near_l1_fraction": modes["near"].l1_fraction,
-                "near_l2_fraction": modes["near"].l2_fraction,
-                "outer_l1_fraction": modes["outer"].l1_fraction,
-                "outer_l2_fraction": modes["outer"].l2_fraction,
+                **{
+                    f"{region}_l{ell}_fraction": getattr(
+                        multipoles, f"l{ell}_fraction"
+                    )
+                    for region, multipoles in all_modes.items()
+                    for ell in (1, 2)
+                },
                 **{
                     f"{region}_l{ell}_m{order}_{component}": float(
                         getattr(multipoles, f"l{ell}_m{order}").real
                         if component == "real"
                         else getattr(multipoles, f"l{ell}_m{order}").imag
                     )
-                    for region, multipoles in modes.items()
+                    for region, multipoles in all_modes.items()
                     for ell, orders in ((1, (0, 1)), (2, (0, 1, 2)))
                     for order in orders
                     for component in ("real", "imag")
@@ -338,10 +373,20 @@ def main() -> int:
         "maximum_core_l2_fraction": max(row["core_l2_fraction"] for row in response_rows),
         "maximum_near_l2_fraction": max(row["near_l2_fraction"] for row in response_rows),
         "maximum_outer_l2_fraction": max(row["outer_l2_fraction"] for row in response_rows),
+        "maximum_binary_core_l1_fraction": max(
+            row["binary_core_l1_fraction"] for row in response_rows
+        ),
+        "maximum_binary_core_l2_fraction": max(
+            row["binary_core_l2_fraction"] for row in response_rows
+        ),
+        "maximum_wave_binary_com_offset_pc": max(
+            row["wave_binary_com_offset_pc"] for row in response_rows
+        ),
         "density_multipole_coefficients": (
             "standard complex spherical-harmonic coefficients normalized by "
             "selected mass/sqrt(4*pi); negative-m coefficients follow from "
-            "the reality condition"
+            "the reality condition; core/near/outer use the wave centre and "
+            "binary_core/binary_near/binary_outer use the binary centre"
         ),
     }
     conservation_path = run / "conservation_timeseries.csv"

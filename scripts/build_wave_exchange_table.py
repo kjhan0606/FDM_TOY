@@ -13,7 +13,14 @@ import numpy as np
 from fdm_smbh_delay.exchange_scaling import exchange_scales
 
 
-_MODE_REGIONS = ("core", "near", "outer")
+_MODE_REGIONS = (
+    "core",
+    "near",
+    "outer",
+    "binary_core",
+    "binary_near",
+    "binary_outer",
+)
 _MODE_COEFFICIENTS = (
     "l1_m0_real",
     "l1_m0_imag",

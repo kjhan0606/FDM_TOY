@@ -51,6 +51,31 @@ def periodic_centre_of_mass(density: np.ndarray, box_size: float) -> np.ndarray:
     return np.asarray(centre)
 
 
+def periodic_point_centre(
+    positions: np.ndarray, weights: np.ndarray, box_size: float
+) -> np.ndarray:
+    """Return the circular weighted centre of points in a periodic cube."""
+
+    point_positions = np.asarray(positions, dtype=float)
+    point_weights = np.asarray(weights, dtype=float)
+    if point_positions.ndim != 2 or point_positions.shape[1] != 3:
+        raise ValueError("positions must have shape (number of points, 3)")
+    if point_weights.shape != (point_positions.shape[0],):
+        raise ValueError("weights must have one value per point")
+    if (
+        box_size <= 0.0
+        or np.any(~np.isfinite(point_positions))
+        or np.any(~np.isfinite(point_weights))
+        or np.any(point_weights < 0.0)
+        or not np.sum(point_weights) > 0.0
+    ):
+        raise ValueError("box size, positions, and weights must be finite and valid")
+    angles = 2.0 * np.pi * (point_positions / box_size + 0.5)
+    moments = np.sum(point_weights[:, None] * np.exp(1j * angles), axis=0)
+    phases = np.angle(moments) % (2.0 * np.pi)
+    return box_size * (phases / (2.0 * np.pi) - 0.5)
+
+
 def centred_grid(
     resolution: int, box_size: float, centre: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
