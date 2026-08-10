@@ -61,6 +61,33 @@ one Hamiltonian. The coupled calculation must test conservation of SMBH kinetic
 energy, SMBH mutual interaction energy, wave kinetic energy, FDM self-gravity,
 and SMBH and FDM interaction energy.
 
+The adopted live-wave Hamiltonian is
+
+\[
+H_{\rm tot}=K_\psi+\frac{1}{2}\int\rho\Phi_\psi\,dV
++\int\rho\Phi_{\rm BH}\,dV+K_{\rm BH}+U_{\rm BH-BH}.
+\]
+
+Thus `integral rho*Phi_BH dV` is the interaction energy and is counted once.
+It has no factor of one half. A point value such as
+`sum M_BH*Phi_wave(x_BH)` can differ by a potential-gauge constant and is used
+only to test forces and resolution after one reference offset is removed.
+
+For a binary, the energy exchange is diagnosed with
+
+\[
+\Delta E_{\rm orb}+\Delta K_{\rm COM}+\Delta E_{\rm FDM,intrinsic}
++\Delta E_{\rm FDM-BH}=0.
+\]
+
+The intrinsic FDM energy contains wave kinetic and self-gravity terms. The
+interaction energy remains separate because it changes as the SMBHs move even
+before energy propagates into a wake. Therefore `-Delta E_orb` must not be
+identified directly with local wave heating. The deposition measurement uses
+the intrinsic energy change together with radial energy flux and the evolving
+wave modes. The controlled numerical audit and acceptance limits are recorded
+in [`merge_calibration.md`](merge_calibration.md).
+
 ## Double-counting prohibition
 
 Two calculations remain physically distinct.

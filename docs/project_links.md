@@ -1,6 +1,6 @@
 # Project repositories
 
-- Code and model: <https://github.com/kjhan0606/fdm_sink_merge>
+- Code and model: <https://github.com/kjhan0606/FDM_TOY>
 - FDM and PTA Overleaf Git repository:
   `https://git@git.overleaf.com/6a77bf12054325b31fc191eb`
 - HR5 SMBH JKAS Overleaf Git repository:

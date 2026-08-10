@@ -71,6 +71,11 @@ The transfer ledger is not yet a live wavefunction update; the coupling and
 double-counting rules are documented in
 [`docs/wave_energy_coupling.md`](docs/wave_energy_coupling.md).
 
+The numerical capture interface, corrected Koo and Boey profile definitions,
+live-wave parameter grid, and first PyUL_NBody resolution tests are documented
+in [`docs/merge_calibration.md`](docs/merge_calibration.md). These tools leave
+the separate lagRamses working tree unchanged.
+
 To combine a sink time with all three physical intervals, use:
 
 ```bash
@@ -124,10 +129,12 @@ mass and core-radius definitions.
 The repository currently implements the static-soliton three-dimensional orbit
 calculation, FDM energy and momentum transfer, Peters gravitational-wave
 times, conservative composition of the physical coalescence time, and a source
-study of the lagRamses conditions for a merger of sink particles. Koo and Boey separation curves
-are included as comparison cases. Calibration against their simulated density
-histories, the numerical-radius-to-parsec inspiral, an evolving FDM
-wavefunction, and the cosmological PTA population remain future work.
+study of the lagRamses conditions for a merger of sink particles. The Koo and
+Boey profile definitions and fitted separation curves are included as reference
+cases, and the first live-wave resolution tests have been completed. Calibration
+against their full simulated density histories, the numerical-radius-to-parsec
+inspiral, long live-wave calculations, and the cosmological PTA population
+remain future work.
 
 ## Horizon Run 5 comparison sample
 

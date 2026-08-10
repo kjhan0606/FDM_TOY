@@ -1,8 +1,8 @@
 metadata:
   purpose: literature_trend_benchmark
   source: "Boey et al. 2025, arXiv:2504.16348"
-  validated_profile_definition: false
-  warning: "This is not a quantitative benchmark until the density history and core definition are matched."
+  validated_profile_definition: true
+  warning: "This matches the initial equation-4 Schive profile, not the later pinched density history."
 model:
   name: wave_df_3d
   alpha_df: 0.341
@@ -11,14 +11,13 @@ model:
 binary:
   M1: "1.0e8 Msun"
   M2: "1.0e8 Msun"
-  separation: "1 pc"
+  separation: "3 pc"
   eccentricity: 0.0
   orbit: circular
 fdm:
   particle_mass: "1.0e-21 eV"
-  soliton_mass: "1.0e9 Msun"
-  mass_definition: total_profile
-  core_radius: "2 pc"
+  central_density: "8.110784782460214e6 Msun/pc3"
+  core_radius: "2.2 pc"
   profile: schive_fit
 integration:
   stop_separation: "0.076 pc"

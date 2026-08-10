@@ -32,6 +32,31 @@ def koo_time_between_myr(d_initial_pc: float, d_final_pc: float, q0: float) -> f
     )
 
 
+def koo_q0_pc_m5half_myr(
+    *,
+    soliton_mass_msun: float,
+    black_hole_mass_msun: float,
+    particle_mass_ev: float,
+    gamma: float = 2.192,
+) -> float:
+    """Koo et al. (2024), equation (18).
+
+    ``black_hole_mass_msun`` is the mass of either member of their equal-mass
+    binary. The effective mass is ``M_s + 2 gamma M_bh``.
+    """
+
+    values = (soliton_mass_msun, black_hole_mass_msun, particle_mass_ev, gamma)
+    if any(not np.isfinite(value) or value <= 0.0 for value in values):
+        raise ValueError("masses and gamma must be finite and positive")
+    effective_mass = soliton_mass_msun + 2.0 * gamma * black_hole_mass_msun
+    return float(
+        1.324
+        * (effective_mass / 1.0e9) ** 4
+        * (black_hole_mass_msun / 1.0e8) ** 0.5
+        * (particle_mass_ev / 1.0e-21) ** 8
+    )
+
+
 @dataclass(frozen=True)
 class BoeyFit:
     mass_ratio_percent: int

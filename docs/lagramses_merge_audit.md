@@ -42,6 +42,11 @@ can collapse into one group even when not every pair passes the direct distance
 test. Such groups must be logged as `MULTIPLE`, not interpreted as an ordered
 sequence of binary coalescences.
 
+The active source initializes `rmerge=1`. A feed-mode namelist generator in
+the same checkout writes `rmerge=4`. The value for a physical analysis must
+therefore come from the archived run namelist; neither value is a universal
+lagRamses capture radius.
+
 ## Relative-velocity gate
 
 When `vrel_merge=.true.`, the source computes COM-frame kinetic energy and

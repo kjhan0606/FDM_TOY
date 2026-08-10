@@ -2,7 +2,8 @@ metadata:
   purpose: literature_trend_benchmark
   source: "Koo et al. 2024, arXiv:2311.03412"
   validated_profile_definition: false
-  warning: "Core radius is illustrative until the paper's mass definition is matched."
+  profile_proxy: equivalent_schive_matching_total_mass_and_central_density
+  warning: "Mass and central density match Koo et al.; their evolved state is a numerical ground state rather than an analytic Schive profile."
 model:
   name: wave_df_3d
   alpha_df: 0.424
@@ -11,14 +12,13 @@ model:
 binary:
   M1: "1.0e8 Msun"
   M2: "1.0e8 Msun"
-  separation: "0.8 pc"
+  separation: "0.9 pc"
   eccentricity: 0.0
   orbit: circular
 fdm:
   particle_mass: "1.0e-21 eV"
-  soliton_mass: "1.0e9 Msun"
-  mass_definition: total_profile
-  core_radius: "2 pc"
+  central_density: "7.05e6 Msun/pc3"
+  core_radius: "2.304728369104316 pc"
   profile: schive_fit
 integration:
   stop_separation: "0.076 pc"
