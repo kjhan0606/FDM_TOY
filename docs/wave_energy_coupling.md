@@ -141,6 +141,28 @@ angular momentum to enter the wave through one rotating pattern. A significant
 departure requires additional orbital harmonics, a radial response, or both.
 The measured ratio constrains the wave source and is not imposed in advance.
 
+## Multipole potential below the resolved binary scale
+
+When the resolved calculation replaces the two SMBHs by one particle at their
+centre of mass, the particle already supplies the monopole potential of the
+binary. The internal orbit may expose its time-dependent multipoles through
+
+\[
+\delta\Phi_{\rm bin}=\Phi_1+\Phi_2-\Phi_{M_1+M_2}.
+\]
+
+The function `unresolved_binary_potential_correction` evaluates this difference
+with the same Plummer length and periodic convention for all three terms. The
+dipole vanishes when the internal positions are centred on the binary centre of
+mass. The leading far-field term then scales as the rotating quadrupole.
+
+Adding this Hermitian potential to the Schrödinger equation preserves FDM mass
+and lets the wave respond through its phase. The resulting work and torque must
+be measured. If the internal orbit also follows calibrated power and torque,
+the work produced by the multipole correction counts toward the required wave
+increment. Applying the full calibrated increment in addition would count the
+same transfer twice.
+
 These equations apply to orbit-averaged internal elements. The smooth soliton
 potential may produce reversible changes in osculating Kepler elements over an
 orbit. Such changes must not enter the fitted dissipative rates. The function

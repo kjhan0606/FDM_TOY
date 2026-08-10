@@ -6,6 +6,7 @@ from fdm_smbh_delay.interaction import (
     gauge_align_point_estimator,
     periodic_poisson_potential,
     single_bh_interaction_snapshot,
+    unresolved_binary_potential_correction,
     wave_bh_interaction_energy,
 )
 
@@ -67,3 +68,27 @@ def test_grid_force_is_negative_energy_gradient() -> None:
         finite_difference_force, rel=1.0e-5
     )
     assert centre.force_on_bh_from_grid_energy[0] < 0.0
+
+
+def test_unresolved_binary_correction_removes_the_monopole() -> None:
+    radii = np.array([20.0, 40.0])
+    grid = np.column_stack((np.zeros(2), radii, np.zeros(2)))
+    correction = unresolved_binary_potential_correction(
+        grid_positions_pc=grid,
+        centre_of_mass_pc=np.zeros(3),
+        member_displacements_pc=np.array([[0.5, 0.0, 0.0], [-0.5, 0.0, 0.0]]),
+        member_masses_msun=np.array([1.0e8, 1.0e8]),
+        plummer_radius_pc=1.0e-3,
+    )
+    assert correction[0] / correction[1] == pytest.approx(8.0, rel=2.0e-3)
+
+
+def test_zero_size_binary_has_no_multipole_correction() -> None:
+    correction = unresolved_binary_potential_correction(
+        grid_positions_pc=np.array([[1.0, 0.0, 0.0]]),
+        centre_of_mass_pc=np.zeros(3),
+        member_displacements_pc=np.zeros((2, 3)),
+        member_masses_msun=np.array([2.0, 1.0]),
+        plummer_radius_pc=0.1,
+    )
+    assert correction[0] == pytest.approx(0.0)

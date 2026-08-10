@@ -9,6 +9,73 @@ import numpy as np
 from .constants import G_INTERNAL
 
 
+def unresolved_binary_potential_correction(
+    *,
+    grid_positions_pc: np.ndarray,
+    centre_of_mass_pc: np.ndarray,
+    member_displacements_pc: np.ndarray,
+    member_masses_msun: np.ndarray,
+    plummer_radius_pc: float,
+    periodic_box_pc: float | np.ndarray | None = None,
+) -> np.ndarray:
+    """Return the binary potential after subtracting its centre-of-mass monopole.
+
+    The correction exposes the rotating multipoles of an unresolved internal
+    orbit while a single resolved particle supplies the total monopole.
+    """
+
+    grid = np.asarray(grid_positions_pc, dtype=float)
+    centre = np.asarray(centre_of_mass_pc, dtype=float)
+    displacement = np.asarray(member_displacements_pc, dtype=float)
+    masses = np.asarray(member_masses_msun, dtype=float)
+    if grid.ndim < 1 or grid.shape[-1] != 3:
+        raise ValueError("grid positions must end in a three-vector axis")
+    if centre.shape != (3,) or displacement.shape != (2, 3) or masses.shape != (2,):
+        raise ValueError("binary centre, displacements, and masses have invalid shapes")
+    if (
+        np.any(~np.isfinite(grid))
+        or np.any(~np.isfinite(centre))
+        or np.any(~np.isfinite(displacement))
+        or np.any(~np.isfinite(masses))
+    ):
+        raise ValueError("binary potential inputs must be finite")
+    if (
+        np.any(masses <= 0.0)
+        or not np.isfinite(plummer_radius_pc)
+        or plummer_radius_pc <= 0.0
+    ):
+        raise ValueError("masses and Plummer radius must be positive")
+    centre_offset = np.sum(masses[:, None] * displacement, axis=0)
+    scale = np.sum(masses) * max(
+        float(np.max(np.linalg.norm(displacement, axis=1))), 1.0
+    )
+    if np.linalg.norm(centre_offset) > 1.0e-12 * scale:
+        raise ValueError("member displacements must be centre-of-mass centred")
+
+    def relative_position(source: np.ndarray) -> np.ndarray:
+        relative = grid - source
+        if periodic_box_pc is not None:
+            box = np.asarray(periodic_box_pc, dtype=float)
+            if box.shape not in ((), (3,)):
+                raise ValueError("periodic box must be scalar or a three-vector")
+            if np.any(~np.isfinite(box)) or np.any(box <= 0.0):
+                raise ValueError("periodic box lengths must be finite and positive")
+            relative = relative - box * np.floor(relative / box + 0.5)
+        return relative
+
+    monopole_relative = relative_position(centre)
+    monopole = -G_INTERNAL * np.sum(masses) / np.sqrt(
+        np.sum(monopole_relative**2, axis=-1) + plummer_radius_pc**2
+    )
+    pair = np.zeros(grid.shape[:-1], dtype=float)
+    for mass, member_displacement in zip(masses, displacement, strict=True):
+        relative = relative_position(centre + member_displacement)
+        pair -= G_INTERNAL * mass / np.sqrt(
+            np.sum(relative**2, axis=-1) + plummer_radius_pc**2
+        )
+    return pair - monopole
+
+
 def wave_bh_interaction_energy(
     density_msun_pc3: np.ndarray,
     bh_potential_pc2_myr2: np.ndarray,
