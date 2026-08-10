@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from fdm_smbh_delay.pyul import ordered_output_paths, pyul_unit_system
+from fdm_smbh_delay.pyul import ordered_output_paths, output_index, pyul_unit_system
 
 
 def test_pyul_units_from_explicit_metadata() -> None:
@@ -33,13 +33,21 @@ def test_pyul_fallback_matches_reference_run() -> None:
 
 
 def test_ordered_output_paths(tmp_path: Path) -> None:
-    for index in (2, 0, 1):
+    for index in (1000, 2, 999, 0, 1):
         (tmp_path / f"P3D_#{index:03d}.npy").touch()
     paths = ordered_output_paths(tmp_path, "P3D_#*.npy")
     assert [path.name for path in paths] == [
         "P3D_#000.npy",
         "P3D_#001.npy",
         "P3D_#002.npy",
+        "P3D_#999.npy",
+        "P3D_#1000.npy",
     ]
+    assert output_index(paths[-1]) == 1000
     with pytest.raises(FileNotFoundError):
         ordered_output_paths(tmp_path, "missing*.npy")
+
+
+def test_output_index_requires_pyul_snapshot_name(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="no numeric index"):
+        output_index(tmp_path / "egylist.npy")

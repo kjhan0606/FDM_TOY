@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 
 import numpy as np
 
@@ -12,6 +13,7 @@ PYUL_PARSEC_M = 3.0857e16
 PYUL_SOLAR_MASS_KG = 1.989e30
 PYUL_YEAR_S = 60.0 * 60.0 * 24.0 * 365.0
 PYUL_MYR_S = 1.0e6 * PYUL_YEAR_S
+_OUTPUT_INDEX = re.compile(r"#([0-9]+)")
 
 
 @dataclass(frozen=True)
@@ -84,8 +86,17 @@ def pyul_unit_system(metadata: dict) -> PyulUnitSystem:
     )
 
 
+def output_index(path: Path) -> int:
+    """Return the numeric snapshot index embedded after ``#`` in a PyUL file."""
+
+    match = _OUTPUT_INDEX.search(path.name)
+    if match is None:
+        raise ValueError(f"PyUL output name has no numeric index: {path.name}")
+    return int(match.group(1))
+
+
 def ordered_output_paths(directory: Path, pattern: str) -> list[Path]:
-    paths = sorted(directory.glob(pattern))
+    paths = sorted(directory.glob(pattern), key=output_index)
     if not paths:
         raise FileNotFoundError(f"no files match {directory / pattern}")
     return paths
