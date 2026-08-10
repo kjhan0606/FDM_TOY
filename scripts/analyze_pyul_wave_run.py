@@ -22,6 +22,11 @@ def _finite_or_none(value: float) -> float | None:
     return float(value) if np.isfinite(value) else None
 
 
+def _first_below(time: np.ndarray, value: np.ndarray, threshold: float) -> float | None:
+    indices = np.flatnonzero(value < threshold)
+    return None if indices.size == 0 else float(time[indices[0]])
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("run", type=Path)
@@ -38,6 +43,7 @@ def main() -> int:
     mass1 = float(particles[0][0])
     mass2 = float(particles[1][0])
     plummer_radius_pc = float(config["Matter Particles"]["Plummer Radius"])
+    cell_size_pc = float(metadata["box_size_pc"]) / int(metadata["resolution"])
 
     units = pyul_unit_system(metadata)
     length_code_to_pc = units.length_pc
@@ -179,6 +185,10 @@ def main() -> int:
         np.finfo(float).tiny,
     )
     time = np.linspace(0.0, metadata["duration_myr"], len(states))
+    minimum_separation_pc = float(np.min(separation_array))
+    plummer_force_fraction = minimum_separation_pc**3 / (
+        minimum_separation_pc**2 + plummer_radius_pc**2
+    ) ** 1.5
     summary = {
         "status": "diagnosed",
         "case_id": metadata["case_id"],
@@ -187,11 +197,29 @@ def main() -> int:
         "samples": len(states),
         "initial_separation_pc": float(separation_array[0]),
         "final_separation_pc": float(separation_array[-1]),
+        "minimum_separation_pc": minimum_separation_pc,
         "fractional_separation_change": float(
             separation_array[-1] / separation_array[0] - 1.0
         ),
         "minimum_separation_over_plummer_radius": float(
-            np.min(separation_array) / plummer_radius_pc
+            minimum_separation_pc / plummer_radius_pc
+        ),
+        "cell_size_pc": cell_size_pc,
+        "plummer_radius_pc": plummer_radius_pc,
+        "initial_separation_over_cell_size": float(
+            separation_array[0] / cell_size_pc
+        ),
+        "minimum_separation_over_cell_size": float(
+            minimum_separation_pc / cell_size_pc
+        ),
+        "first_time_below_two_cell_sizes_myr": _first_below(
+            time, separation_array, 2.0 * cell_size_pc
+        ),
+        "first_time_below_one_cell_size_myr": _first_below(
+            time, separation_array, cell_size_pc
+        ),
+        "minimum_plummer_to_newtonian_mutual_force_ratio": float(
+            plummer_force_fraction
         ),
         "initial_osculating_semimajor_axis_pc": _finite_or_none(
             osculating_semimajor_axis_array[0]
