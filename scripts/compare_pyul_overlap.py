@@ -24,6 +24,25 @@ def _load(run: Path) -> np.ndarray:
     )
 
 
+def _comparison_setup(run: Path) -> dict:
+    config = json.loads((run / "config.uldm").read_text(encoding="utf-8"))
+    metadata = json.loads(
+        (run / "fdm_adapter_metadata.json").read_text(encoding="utf-8")
+    )
+    return {
+        "pyul_revision": metadata["pyul_revision"],
+        "particle_mass_ev": metadata["particle_mass_ev"],
+        "spatial_resolution": config["Spatial Resolution"],
+        "temporal_step_factor": config["Temporal Step Factor"],
+        "rk_steps": config["RK Steps"],
+        "simulation_box": config["Simulation Box"],
+        "solitons": config["ULDM Solitons"],
+        "matter_particles": config["Matter Particles"],
+        "central_mass": config["Central Mass"],
+        "uniform_field": config["Uniform Field Override"],
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("reference", type=Path)
@@ -32,6 +51,18 @@ def main() -> int:
     args = parser.parse_args()
     reference_run = args.reference.expanduser().resolve()
     comparison_run = args.comparison.expanduser().resolve()
+    reference_setup = _comparison_setup(reference_run)
+    comparison_setup = _comparison_setup(comparison_run)
+    if reference_setup != comparison_setup:
+        differing = sorted(
+            key
+            for key in reference_setup
+            if reference_setup[key] != comparison_setup[key]
+        )
+        raise ValueError(
+            "overlap comparison requires identical physical and numerical "
+            f"setups; differing fields: {', '.join(differing)}"
+        )
     reference = _load(reference_run)
     comparison = _load(comparison_run)
     overlap_end = min(
