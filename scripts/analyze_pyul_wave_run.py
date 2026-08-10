@@ -8,49 +8,13 @@ import json
 from pathlib import Path
 
 import numpy as np
-from astropy import units as u
-from astropy.constants import G
 
 from fdm_smbh_delay.interaction import coupled_hamiltonian
+from fdm_smbh_delay.pyul import ordered_output_paths, pyul_unit_system
 
 
 def _ordered_arrays(directory: Path, pattern: str) -> list[np.ndarray]:
-    paths = sorted(directory.glob(pattern))
-    if not paths:
-        raise FileNotFoundError(f"no arrays match {directory / pattern}")
-    return [np.load(path) for path in paths]
-
-
-def _pyul_units(metadata: dict) -> tuple[float, float, float, float]:
-    keys = (
-        "pyul_length_unit_m",
-        "pyul_time_unit_s",
-        "pyul_mass_unit_kg",
-        "pyul_energy_unit_j",
-    )
-    if all(key in metadata for key in keys):
-        return tuple(float(metadata[key]) for key in keys)
-    # Exact constants and normalization used by PyUL_NBody Current.py v30.37.
-    axion_mass = metadata["particle_mass_ev"] * 1.78266191e-36
-    hbar_si = 1.0545718e-34
-    parsec_m = 3.0857e16
-    gravitational_si = 6.67e-11
-    omega_m = 0.31
-    hubble_si = 67.7 / (parsec_m * 1.0e3)
-    time_unit = (3.0 * hubble_si**2 * omega_m / (8.0 * np.pi)) ** -0.5
-    length_unit = (
-        8.0
-        * np.pi
-        * hbar_si**2
-        / (3.0 * axion_mass**2 * hubble_si**2 * omega_m)
-    ) ** 0.25
-    mass_unit = (
-        (3.0 * hubble_si**2 * omega_m / (8.0 * np.pi)) ** 0.25
-        * hbar_si**1.5
-        / (axion_mass**1.5 * gravitational_si)
-    )
-    energy_unit = mass_unit * length_unit**2 / time_unit**2
-    return length_unit, time_unit, mass_unit, energy_unit
+    return [np.load(path) for path in ordered_output_paths(directory, pattern)]
 
 
 def main() -> int:
@@ -70,15 +34,13 @@ def main() -> int:
     mass2 = float(particles[1][0])
     plummer_radius_pc = float(config["Matter Particles"]["Plummer Radius"])
 
-    length_unit_m, time_unit_s, mass_unit_kg, energy_unit_j = _pyul_units(metadata)
-    length_code_to_pc = (length_unit_m * u.m).to_value(u.pc)
-    velocity_code_to_pc_myr = (
-        length_unit_m / time_unit_s * u.m / u.s
-    ).to_value(u.pc / u.Myr)
-    energy_internal_j = (1.0 * u.Msun * (u.pc / u.Myr) ** 2).to_value(u.J)
-    energy_code_to_internal = energy_unit_j / energy_internal_j
-    mass_code_to_msun = (mass_unit_kg * u.kg).to_value(u.Msun)
-    gravitational_constant = G.to_value(u.pc**3 / (u.Msun * u.Myr**2))
+    units = pyul_unit_system(metadata)
+    length_code_to_pc = units.length_pc
+    energy_code_to_internal = units.energy_msun_pc2_myr2
+    mass_code_to_msun = units.mass_msun
+    mass1_code = mass1 / mass_code_to_msun
+    mass2_code = mass2 / mass_code_to_msun
+    plummer_radius_code = plummer_radius_pc / length_code_to_pc
 
     states = _ordered_arrays(run / "Outputs" / "NBody", "NTM_#*.npy")
     saved_wave_total = (
@@ -115,27 +77,39 @@ def main() -> int:
     binary_mutual: list[float] = []
     for state in states:
         bodies = state.reshape(2, 6)
-        positions = bodies[:, :3] * length_code_to_pc
-        velocities = bodies[:, 3:] * velocity_code_to_pc_myr
-        distance = float(np.linalg.norm(positions[0] - positions[1]))
-        kinetic = 0.5 * mass1 * float(velocities[0] @ velocities[0])
-        kinetic += 0.5 * mass2 * float(velocities[1] @ velocities[1])
-        total_mass = mass1 + mass2
-        reduced_mass = mass1 * mass2 / total_mass
-        com_velocity = (mass1 * velocities[0] + mass2 * velocities[1]) / total_mass
-        com_kinetic = 0.5 * total_mass * float(com_velocity @ com_velocity)
-        relative_velocity = velocities[0] - velocities[1]
-        relative_kinetic = 0.5 * reduced_mass * float(
-            relative_velocity @ relative_velocity
+        positions_code = bodies[:, :3]
+        velocities_code = bodies[:, 3:]
+        distance_code = float(
+            np.linalg.norm(positions_code[0] - positions_code[1])
         )
-        mutual = -gravitational_constant * mass1 * mass2 / np.sqrt(
-            distance**2 + plummer_radius_pc**2
+        kinetic_code = 0.5 * mass1_code * float(
+            velocities_code[0] @ velocities_code[0]
         )
-        separation.append(distance)
-        bh_kinetic.append(kinetic)
-        bh_com_kinetic.append(com_kinetic)
-        binary_relative_kinetic.append(relative_kinetic)
-        binary_mutual.append(float(mutual))
+        kinetic_code += 0.5 * mass2_code * float(
+            velocities_code[1] @ velocities_code[1]
+        )
+        total_mass_code = mass1_code + mass2_code
+        reduced_mass_code = mass1_code * mass2_code / total_mass_code
+        com_velocity_code = (
+            mass1_code * velocities_code[0] + mass2_code * velocities_code[1]
+        ) / total_mass_code
+        com_kinetic_code = 0.5 * total_mass_code * float(
+            com_velocity_code @ com_velocity_code
+        )
+        relative_velocity_code = velocities_code[0] - velocities_code[1]
+        relative_kinetic_code = 0.5 * reduced_mass_code * float(
+            relative_velocity_code @ relative_velocity_code
+        )
+        mutual_code = -mass1_code * mass2_code / np.sqrt(
+            distance_code**2 + plummer_radius_code**2
+        )
+        separation.append(distance_code * length_code_to_pc)
+        bh_kinetic.append(kinetic_code * energy_code_to_internal)
+        bh_com_kinetic.append(com_kinetic_code * energy_code_to_internal)
+        binary_relative_kinetic.append(
+            relative_kinetic_code * energy_code_to_internal
+        )
+        binary_mutual.append(float(mutual_code * energy_code_to_internal))
 
     separation_array = np.asarray(separation)
     bh_kinetic_array = np.asarray(bh_kinetic)
