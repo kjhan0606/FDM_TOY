@@ -146,6 +146,20 @@ python scripts/analyze_pyul_line_density.py \
 The saved line passes through the soliton centre along the simulation y axis.
 It is neither a spherical density profile nor a measure of deposited energy.
 
+After several runs pass the Hamiltonian and spatial-resolution tests, their
+orbit-resolved measurements can be expressed in common physical units with
+
+```bash
+python scripts/build_wave_exchange_table.py \
+  /path/to/run_a /path/to/run_b \
+  --output results/wave_exchange_table.csv
+```
+
+The table normalizes time by the dynamical time of the soliton, energy by
+`G M1 M2 / r_core`, and angular momentum by
+`mu sqrt(G M_binary r_core)`. The table retains every orbit and records the
+separation in cell units. It does not select a fitting sample automatically.
+
 Long calculations may retain frequent SMBH and scalar-energy states while
 writing the three-dimensional density and wavefunction less often. For example,
 the following choice writes 2,049 orbital states and 33 three-dimensional field
