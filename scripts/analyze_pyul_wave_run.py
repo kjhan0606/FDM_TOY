@@ -26,26 +26,30 @@ def _first_below(time: np.ndarray, value: np.ndarray, threshold: float) -> float
 def _energy_error_over_transfer(
     combined_energy: np.ndarray, transfer_components: tuple[np.ndarray, ...]
 ) -> float:
-    return float(
-        np.max(
-            _energy_error_timeseries_over_transfer(
-                combined_energy, transfer_components
-            )
-        )
+    history = _energy_error_timeseries_over_transfer(
+        combined_energy, transfer_components
     )
+    return float(history[-1])
 
 
 def _energy_error_timeseries_over_transfer(
     combined_energy: np.ndarray, transfer_components: tuple[np.ndarray, ...]
 ) -> np.ndarray:
-    transferred_energy_scale = max(
-        *(
-            np.max(np.abs(component - component[0]))
+    transferred_energy_scale = np.maximum.reduce(
+        [
+            np.maximum.accumulate(np.abs(component - component[0]))
             for component in transfer_components
-        ),
-        np.finfo(float).tiny,
+        ]
     )
-    return np.abs(combined_energy - combined_energy[0]) / transferred_energy_scale
+    hamiltonian_error = np.maximum.accumulate(
+        np.abs(combined_energy - combined_energy[0])
+    )
+    return np.divide(
+        hamiltonian_error,
+        transferred_energy_scale,
+        out=np.zeros_like(hamiltonian_error),
+        where=transferred_energy_scale > np.finfo(float).tiny,
+    )
 
 
 def main() -> int:

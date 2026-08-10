@@ -49,10 +49,20 @@ def main() -> int:
         np.finfo(float).tiny,
     )
     if "energy_error_over_transfer" in (table.dtype.names or ()):
-        energy_error = table["energy_error_over_transfer"]
+        hamiltonian_error_history = table["energy_error_over_transfer"]
     else:
-        energy_error = np.abs(changes["Total Hamiltonian"]) / energy_scale
-    hamiltonian_error_envelope = np.maximum.accumulate(energy_error)
+        transfer_history = np.maximum.reduce(
+            [
+                np.maximum.accumulate(np.abs(component))
+                for component in transfer_components
+            ]
+        )
+        hamiltonian_error_history = np.divide(
+            np.maximum.accumulate(np.abs(changes["Total Hamiltonian"])),
+            transfer_history,
+            out=np.zeros_like(transfer_history),
+            where=transfer_history > np.finfo(float).tiny,
+        )
     styles = {
         "SMBH orbit": {"color": "#254F73", "linewidth": 1.1},
         "FDM intrinsic": {"color": "#B65E2E", "linewidth": 1.0},
@@ -106,7 +116,7 @@ def main() -> int:
     error_axis = axes[1]
     error_axis.plot(
         plot_time,
-        hamiltonian_error_envelope,
+        hamiltonian_error_history,
         color="0.15",
         linewidth=0.9,
     )
@@ -130,7 +140,7 @@ def main() -> int:
     error_axis.set_ylabel(r"$\max |\Delta H|/\Delta E_{\rm exch,max}$")
     error_axis.tick_params(top=True, right=True)
     error_axis.text(0.03, 0.91, "(b)", transform=error_axis.transAxes, va="top")
-    upper_error = max(0.012, 1.08 * float(np.max(hamiltonian_error_envelope)))
+    upper_error = max(0.012, 1.08 * float(np.max(hamiltonian_error_history)))
     error_axis.set_ylim(0.0, upper_error)
     error_axis.set_xlim(float(plot_time[0]), float(plot_time[-1]))
 
