@@ -273,7 +273,9 @@ def main() -> int:
                 * units.length_pc,
                 "central_density_msun_pc3": central_density_code
                 * units.density_msun_pc3,
-                "core_radius_pc": evolved_core_code * units.length_pc,
+                "measured_half_density_radius_pc": (
+                    evolved_core_code * units.length_pc
+                ),
                 "wave_kinetic_energy": saved_kinetic[sample]
                 * units.energy_msun_pc2_myr2,
                 "wave_self_gravity_energy": saved_self[sample]
@@ -362,9 +364,31 @@ def main() -> int:
             / initial["central_density_msun_pc3"]
             - 1.0
         ),
-        "core_radius_fractional_change": final["core_radius_pc"]
-        / initial["core_radius_pc"]
-        - 1.0,
+        "measured_half_density_radius_fractional_change": (
+            final["measured_half_density_radius_pc"]
+            / initial["measured_half_density_radius_pc"]
+            - 1.0
+        ),
+        "initial_half_density_radius_over_cell_size": (
+            initial["measured_half_density_radius_pc"]
+            / (box_pc / resolution)
+        ),
+        "final_half_density_radius_over_cell_size": (
+            final["measured_half_density_radius_pc"]
+            / (box_pc / resolution)
+        ),
+        "initial_half_density_radius_spatially_resolved": bool(
+            initial["measured_half_density_radius_pc"]
+            >= 2.0 * box_pc / resolution
+        ),
+        "final_half_density_radius_spatially_resolved": bool(
+            final["measured_half_density_radius_pc"]
+            >= 2.0 * box_pc / resolution
+        ),
+        "half_density_radius_interpretation": (
+            "a measured half-density radius below two cell widths is not "
+            "interpreted as a physical soliton-core radius"
+        ),
         "outer_mass_change_msun": final["outer_mass_msun"]
         - initial["outer_mass_msun"],
         "outer_intrinsic_energy_change": final["outer_intrinsic_energy"]

@@ -51,7 +51,7 @@ _ORBITAL_MODE_COLUMNS = tuple(f"orbital_{column}" for column in _MODE_COLUMNS)
 _WAVE_STATE_COLUMNS = (
     "wave_binary_com_offset_pc",
     "central_density_msun_pc3",
-    "core_radius_pc",
+    "measured_half_density_radius_pc",
     "outer_mass_msun",
     "outer_intrinsic_energy",
     "mass_flux_2rc_msun_myr",
@@ -274,7 +274,9 @@ def main() -> int:
                 if response is None
                 else float(response["central_density_msun_pc3"][0])
             )
-            measured_half_density_radius = wave_snapshot.pop("core_radius_pc")
+            measured_half_density_radius = wave_snapshot.pop(
+                "measured_half_density_radius_pc"
+            )
             wave_snapshot_time = wave_snapshot.pop("wave_snapshot_time_myr")
             frame_state = _orbital_frame_state(
                 wave_time_myr=wave_snapshot_time,
