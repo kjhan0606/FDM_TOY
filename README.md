@@ -166,6 +166,18 @@ python scripts/analyze_pyul_line_density.py RUN
 python scripts/build_wave_exchange_table.py RUN --output wave_exchange.csv
 ```
 
+The full evolution and a selected interval can be combined in a four-panel
+figure with
+
+```bash
+python scripts/plot_pair_separation.py RUN \
+  --output pair_separation.pdf \
+  --wave-density-panel \
+  --mark-resolution-limit \
+  --koo-reference \
+  --time-zoom-myr 0.0 0.05
+```
+
 The live calculation is physically interpretable only while its spatial and
 Hamiltonian acceptance tests pass. An orbit below two cell widths is retained
 as a numerical result but is not used as a calibrated decay rate. Long
