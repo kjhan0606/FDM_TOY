@@ -227,7 +227,9 @@ The time-step factor multiplies the solver limit. A value below one increases
 the number of wave steps and should be varied together with the spatial
 resolution when the Hamiltonian error exceeds the adopted tolerance. PyUL
 interprets `--rk-steps 36` as 36 Runge--Kutta stages per wave step, which gives
-nine RK4 substeps for the SMBHs. The run metadata records both quantities.
+nine RK4 substeps for the SMBHs. The run metadata records both quantities. The
+adapter limits FFT and NumExpr threads to the CPUs assigned to the batch task
+and records this thread count with the numerical setup.
 
 ### Immediate convergence sequence
 

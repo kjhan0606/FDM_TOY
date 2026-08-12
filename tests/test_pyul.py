@@ -2,7 +2,24 @@ from pathlib import Path
 
 import pytest
 
-from fdm_smbh_delay.pyul import ordered_output_paths, output_index, pyul_unit_system
+from fdm_smbh_delay.pyul import (
+    allocated_cpu_count,
+    ordered_output_paths,
+    output_index,
+    pyul_unit_system,
+)
+
+
+def test_allocated_cpu_count_uses_smallest_available_limit() -> None:
+    assert allocated_cpu_count(
+        scheduler_value="32", affinity_count=64, system_count=128
+    ) == 32
+
+
+def test_allocated_cpu_count_falls_back_to_one() -> None:
+    assert allocated_cpu_count(
+        scheduler_value=None, affinity_count=0, system_count=0
+    ) == 1
 
 
 def test_pyul_units_from_explicit_metadata() -> None:

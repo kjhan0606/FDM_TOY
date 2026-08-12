@@ -7,10 +7,13 @@ import argparse
 import builtins
 import csv
 import json
+import multiprocessing
 import os
 from pathlib import Path
 import subprocess
 import sys
+
+from fdm_smbh_delay.pyul import allocated_cpu_count
 
 
 def _load_case(path: Path, case_id: str) -> dict[str, str]:
@@ -130,12 +133,15 @@ def main() -> int:
 
     original_cwd = Path.cwd()
     original_input = builtins.input
+    original_cpu_count = multiprocessing.cpu_count
     evolve_globals = None
     original_save_grid = None
     try:
         os.chdir(pyul_path)
-        os.environ.setdefault("NUMEXPR_MAX_THREADS", "128")
-        os.environ.setdefault("NUMEXPR_NUM_THREADS", "64")
+        allocated_threads = allocated_cpu_count()
+        os.environ["NUMEXPR_MAX_THREADS"] = str(allocated_threads)
+        os.environ["NUMEXPR_NUM_THREADS"] = str(allocated_threads)
+        multiprocessing.cpu_count = lambda: allocated_threads
         sys.path.insert(0, str(pyul_path))
         builtins.input = lambda _prompt="": f"{particle_mass_ev:.16g}"
         # SciPy 1.15 removed the deprecated sph_harm name used by PyUL_NBody.
@@ -207,6 +213,7 @@ def main() -> int:
             "save_number": args.save_number,
             "saved_3d_states": saved_3d_states,
             "estimated_wave_steps": estimated_steps,
+            "fft_threads": allocated_threads,
             "analytic_fdm_drag": False,
             "live_wave_force_on_smbhs": True,
             "smbh_force_on_live_wave": True,
@@ -317,6 +324,7 @@ def main() -> int:
         if evolve_globals is not None and original_save_grid is not None:
             evolve_globals["save_grid"] = original_save_grid
         builtins.input = original_input
+        multiprocessing.cpu_count = original_cpu_count
         os.chdir(original_cwd)
     return 0
 
