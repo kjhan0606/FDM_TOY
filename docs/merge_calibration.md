@@ -247,6 +247,23 @@ The `256^3` calculation then halves the cell width from 0.3125 to 0.15625 pc.
 The orbital power, torque, Hamiltonian residual, separation history, and local
 wave state must agree before any row enters the physical calibration.
 
+Completed numerical variants are compared over the time interval for which
+every calculation keeps the binary separation above two cell widths:
+
+```bash
+python scripts/summarize_pyul_convergence.py \
+  baseline=/path/to/baseline_run \
+  wave_dt_half=/path/to/wave_step_repeat \
+  particle_rk18=/path/to/particle_step_repeat \
+  spatial_n256=/path/to/spatial_repeat \
+  --output results/pyul_convergence/koo_prefix_convergence_summary.json
+```
+
+The common-interval rates retain reversible orbital-phase and interaction-energy
+variations. They are therefore assessed together with the orbit-averaged power
+and torque. The comparison records numerical differences but does not assign an
+automatic convergence decision.
+
 The completed Koo-anchor smoke calculations give:
 
 | resolution | cell size [pc] | duration [yr] | wave-mass error | total-energy error | error / transferred energy |
