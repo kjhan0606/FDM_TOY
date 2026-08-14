@@ -60,6 +60,26 @@ def _write_run(path: Path, *, scale: float, time_step_factor: float) -> None:
         header=",".join(columns),
         comments="",
     )
+    orbit_columns = {
+        "start_time_myr": np.array([0.0, 0.5, 1.0, 1.5]),
+        "end_time_myr": np.array([0.5, 1.0, 1.5, 2.0]),
+        "orbital_period_myr": np.full(4, 0.5),
+        "mean_separation_pc": np.array([0.98, 0.93, 0.88, 0.83]),
+        "mean_separation_over_cell_size": np.array([3.92, 3.72, 3.52, 3.32]),
+        "orbital_power": np.full(4, -2.0 * scale),
+        "orbital_torque": np.full(4, -scale),
+        "wave_intrinsic_energy_rate": np.full(4, 3.0 * scale),
+        "wave_bh_interaction_energy_rate": np.full(4, -scale),
+        "bh_com_kinetic_energy_rate": np.zeros(4),
+        "combined_energy_residual_rate": np.full(4, 0.01 * scale),
+    }
+    np.savetxt(
+        path / "orbit_averaged_exchange.csv",
+        np.column_stack(tuple(orbit_columns.values())),
+        delimiter=",",
+        header=",".join(orbit_columns),
+        comments="",
+    )
 
 
 def test_common_interval_comparison_uses_resolved_duration(tmp_path: Path) -> None:
@@ -73,6 +93,7 @@ def test_common_interval_comparison_uses_resolved_duration(tmp_path: Path) -> No
             load_convergence_run("second", second_path),
         )
     )
+    assert result["common_interval_start_myr"] == pytest.approx(0.0)
     assert result["common_interval_end_myr"] == pytest.approx(1.5)
     second = result["runs"][1]
     assert second["common_interval"]["mean_binary_orbital_energy_rate"] == pytest.approx(-2.2)
@@ -82,6 +103,16 @@ def test_common_interval_comparison_uses_resolved_duration(tmp_path: Path) -> No
     assert second["difference_from_reference"][
         "separation_difference_over_reference_initial"
     ] == pytest.approx(-0.015)
+    assert result["common_orbit_window_start_myr"] == pytest.approx(0.0)
+    assert second["common_orbit_window"]["rates"]["orbital_power"][
+        "estimate"
+    ] == pytest.approx(-2.2)
+    assert second["common_orbit_window"][
+        "fractional_rate_difference_from_reference"
+    ]["orbital_power"] == pytest.approx(-0.1)
+    assert second["common_orbit_window"]["rates"]["wave_total_energy_rate"][
+        "estimate"
+    ] == pytest.approx(2.2)
 
 
 def test_common_interval_requires_unique_labels(tmp_path: Path) -> None:
@@ -96,3 +127,112 @@ def test_common_interval_requires_unique_labels(tmp_path: Path) -> None:
                 load_convergence_run("same", second_path),
             )
         )
+
+
+def test_metadata_values_do_not_require_legacy_config_keys(
+    tmp_path: Path,
+) -> None:
+    first_path = tmp_path / "first"
+    second_path = tmp_path / "second"
+    _write_run(first_path, scale=1.0, time_step_factor=1.0)
+    _write_run(second_path, scale=1.0, time_step_factor=0.5)
+    for path in (first_path, second_path):
+        (path / "config.uldm").write_text("{}")
+
+    result = summarize_convergence(
+        (
+            load_convergence_run("first", first_path),
+            load_convergence_run("second", second_path),
+        )
+    )
+
+    assert result["runs"][0]["time_step_factor"] == pytest.approx(1.0)
+    assert result["runs"][1]["nbody_rk4_substeps_per_wave_step"] == 9
+
+
+def test_load_requires_energy_error_column(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    _write_run(run, scale=1.0, time_step_factor=1.0)
+    table = np.genfromtxt(
+        run / "conservation_timeseries.csv", delimiter=",", names=True
+    )
+    names = [
+        name for name in table.dtype.names or ()
+        if name != "energy_error_over_transfer"
+    ]
+    np.savetxt(
+        run / "conservation_timeseries.csv",
+        np.column_stack([table[name] for name in names]),
+        delimiter=",",
+        header=",".join(names),
+        comments="",
+    )
+
+    with pytest.raises(ValueError, match="energy_error_over_transfer"):
+        load_convergence_run("run", run)
+
+
+def test_common_orbit_window_reports_actual_cycle_coverage(
+    tmp_path: Path,
+) -> None:
+    first_path = tmp_path / "first"
+    second_path = tmp_path / "second"
+    _write_run(first_path, scale=1.0, time_step_factor=1.0)
+    _write_run(second_path, scale=1.0, time_step_factor=0.5)
+    orbit_path = second_path / "orbit_averaged_exchange.csv"
+    orbit = np.genfromtxt(orbit_path, delimiter=",", names=True)
+    orbit["start_time_myr"] += 0.1
+    orbit["end_time_myr"] += 0.1
+    np.savetxt(
+        orbit_path,
+        np.column_stack([orbit[name] for name in orbit.dtype.names or ()]),
+        delimiter=",",
+        header=",".join(orbit.dtype.names or ()),
+        comments="",
+    )
+
+    result = summarize_convergence(
+        (
+            load_convergence_run("first", first_path),
+            load_convergence_run("second", second_path),
+        )
+    )
+
+    first, second = result["runs"]
+    assert result["common_orbit_window_start_myr"] == pytest.approx(0.1)
+    assert first["common_orbit_window"]["start_time_myr"] == pytest.approx(0.5)
+    assert first["common_orbit_window"]["end_time_myr"] == pytest.approx(1.5)
+    assert second["common_orbit_window"]["start_time_myr"] == pytest.approx(0.1)
+    assert second["common_orbit_window"]["end_time_myr"] == pytest.approx(1.1)
+
+
+def test_common_interval_uses_latest_input_start_time(tmp_path: Path) -> None:
+    first_path = tmp_path / "first"
+    second_path = tmp_path / "second"
+    _write_run(first_path, scale=1.0, time_step_factor=1.0)
+    _write_run(second_path, scale=1.1, time_step_factor=0.5)
+    table_path = second_path / "conservation_timeseries.csv"
+    table = np.genfromtxt(table_path, delimiter=",", names=True)
+    np.savetxt(
+        table_path,
+        np.column_stack([table[name][1:] for name in table.dtype.names or ()]),
+        delimiter=",",
+        header=",".join(table.dtype.names or ()),
+        comments="",
+    )
+
+    result = summarize_convergence(
+        (
+            load_convergence_run("first", first_path),
+            load_convergence_run("second", second_path),
+        )
+    )
+
+    assert result["common_interval_start_myr"] == pytest.approx(1.0)
+    assert result["common_interval_end_myr"] == pytest.approx(1.5)
+    assert result["runs"][0]["common_interval"][
+        "mean_binary_orbital_energy_rate"
+    ] == pytest.approx(-2.0)
+    assert result["runs"][1]["common_interval"][
+        "mean_binary_orbital_energy_rate"
+    ] == pytest.approx(-2.2)

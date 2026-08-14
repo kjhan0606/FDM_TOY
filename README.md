@@ -166,6 +166,43 @@ python scripts/analyze_pyul_line_density.py RUN
 python scripts/build_wave_exchange_table.py RUN --output wave_exchange.csv
 ```
 
+Long GPU calculations use the PyUL-compatible Torch backend. Install the
+optional dependencies with `python -m pip install -e '.[gpu]'`, export one
+initial three-dimensional state with PyUL, and launch the continuation through
+the provenance-preserving wrapper:
+
+```bash
+python scripts/launch_torch_wave_case.py REFERENCE_RUN \
+  --output results/torch_wave/koo_n512 \
+  --duration-myr 1.0 \
+  --save-number 2048 \
+  --movie-frame-number 360 \
+  --save-3d-number 32 \
+  --checkpoint-every-saves 32 \
+  --device cuda:0
+```
+
+The wrapper snapshots the uncommitted numerical source and its SHA-256 hashes
+under `RUN/torch_solver_provenance`. A resumed calculation is rejected if that
+source no longer matches, preventing two numerical implementations from being
+joined into one trajectory.
+
+Add `--save-movie-plane` to the live-wave command when a movie is required.
+This option writes the central FDM density plane at every diagnostic output
+without retaining the full three-dimensional wavefunction at the same cadence.
+After `analyze_pyul_wave_run.py` has generated the conservation history, render
+the density, SMBH trajectories, binary separation, and Hamiltonian components
+with
+
+```bash
+python scripts/render_pyul_movie.py RUN \
+  --output results/pyul_convergence/koo_n512.mp4 \
+  --poster results/pyul_convergence/koo_n512_poster.png
+```
+
+MP4 output uses the optional `video` dependencies. GIF output remains
+available when the output path has a `.gif` suffix.
+
 The full evolution and a selected interval can be combined in a four-panel
 figure with
 

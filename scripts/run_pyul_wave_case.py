@@ -73,6 +73,14 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--save-3d", action="store_true")
     parser.add_argument("--save-3d-number", type=int)
+    parser.add_argument(
+        "--save-movie-plane",
+        action="store_true",
+        help=(
+            "save the central FDM density plane at every diagnostic output; "
+            "this is sufficient for a movie without retaining every 3D state"
+        ),
+    )
     args = parser.parse_args()
 
     project_root = Path(__file__).resolve().parents[1]
@@ -171,6 +179,8 @@ def main() -> int:
         plummer_radius = max(0.001, 0.5 * cell_size)
         plummer_parameter = pyul.GenPlummer(plummer_radius, "pc")
         save_options = "Energy NBody DF 1Density Entropy Quadrupole"
+        if args.save_movie_plane:
+            save_options += " 2Density"
         if args.save_3d or args.save_3d_number is not None:
             save_options += " 3Density 3Wfn"
         estimated_steps = int(
@@ -212,6 +222,7 @@ def main() -> int:
             ),
             "save_number": args.save_number,
             "saved_3d_states": saved_3d_states,
+            "saved_movie_plane": args.save_movie_plane,
             "estimated_wave_steps": estimated_steps,
             "fft_threads": allocated_threads,
             "analytic_fdm_drag": False,

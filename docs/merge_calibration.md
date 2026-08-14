@@ -277,6 +277,54 @@ The completed Koo-anchor smoke calculations give:
 The 512-cell calculation matches Koo's `0.08 pc` spatial resolution. It is a
 short high-resolution conservation test, not a measurement of the decay time.
 
+### Torch GPU continuation and convergence pilot
+
+The Torch backend continues a three-dimensional PyUL initial state with the
+same dimensionless Schrödinger--Poisson convention. It retains the resolved
+wave force on the SMBHs and the SMBH force on the wave; analytic FDM drag
+remains disabled. The output layout is compatible with the conservation,
+orbit-averaging, line-density, sparse-wave, and movie diagnostics above.
+
+```bash
+python scripts/launch_torch_wave_case.py /path/to/pyul_initial_run \
+  --output /path/to/torch_run \
+  --duration-myr 1.0 \
+  --save-number 2048 \
+  --movie-frame-number 360 \
+  --save-3d-number 32 \
+  --checkpoint-every-saves 32 \
+  --rk4-substeps 9 \
+  --device cuda:0
+```
+
+The launcher writes `torch_solver_provenance/manifest.json` as soon as the run
+metadata appears. The manifest preserves the uncommitted Torch runner and
+operators, takes committed dependencies from the recorded adapter revision,
+and records SHA-256 hashes. A restart fails before integration if these sources
+do not match the preserved copies. Existing calculations whose uncommitted
+sources predate their metadata can be frozen explicitly with
+
+```bash
+python scripts/snapshot_torch_provenance.py /path/to/torch_run
+```
+
+The first Koo-anchor GPU comparisons give the following common-window
+differences relative to the `512^3`, unit-time-step calculation:
+
+| comparison | common interval [Myr] | separation difference / initial | orbital power | orbital torque | total wave-energy rate |
+|---|---:|---:|---:|---:|---:|
+| `512^3`, half wave step | 0.1000 | `-0.40%` | `-1.13%` | `-0.74%` | `+0.25%` |
+| `256^3`, unit wave step | 0.3721 | `-0.062%` | `+5.32%` | `-4.96%` | `-4.26%` |
+
+The half-step Hamiltonian error over transferred energy is `1.67e-4`, compared
+with `3.17e-4` for the unit-step calculation over `0.1 Myr`. Over the current
+`0.3721 Myr` spatial comparison, the corresponding errors are `3.47e-3` at
+`256^3` and `9.17e-4` at `512^3`. These results support percent-level temporal
+convergence and approximately five-percent spatial agreement over the tested
+resolved interval. They remain a provisional numerical comparison: the
+long `512^3` evolution and its final common-window analysis must finish before
+a physical calibration row is accepted.
+
 ## Interaction-energy convention
 
 The coupled Hamiltonian is

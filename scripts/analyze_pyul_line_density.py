@@ -9,7 +9,12 @@ from pathlib import Path
 
 import numpy as np
 
-from fdm_smbh_delay.pyul import ordered_output_paths, output_index, pyul_unit_system
+from fdm_smbh_delay.pyul import (
+    ordered_output_paths,
+    output_index,
+    pyul_unit_system,
+    saved_interval_count,
+)
 from fdm_smbh_delay.wave_response import windowed_dominant_frequency
 
 
@@ -33,9 +38,7 @@ def main() -> int:
     units = pyul_unit_system(metadata)
     paths = ordered_output_paths(run / "Outputs" / "1Density", "R1D_#*.npy")
     indices = np.asarray([output_index(path) for path in paths], dtype=int)
-    save_number = int(
-        metadata.get("save_number", config["Save Options"]["Number"])
-    )
+    save_number = saved_interval_count(metadata, config)
     time = float(metadata["duration_myr"]) * indices / save_number
     density = np.asarray([np.load(path) for path in paths]) * units.density_msun_pc3
     resolution = int(metadata["resolution"])

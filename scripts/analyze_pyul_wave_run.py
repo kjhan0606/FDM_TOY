@@ -11,7 +11,12 @@ import numpy as np
 
 from fdm_smbh_delay.interaction import coupled_hamiltonian
 from fdm_smbh_delay.orbital_exchange import keplerian_elements_from_relative_state
-from fdm_smbh_delay.pyul import ordered_output_paths, output_index, pyul_unit_system
+from fdm_smbh_delay.pyul import (
+    ordered_output_paths,
+    output_index,
+    pyul_unit_system,
+    saved_interval_count,
+)
 
 
 def _finite_or_none(value: float) -> float | None:
@@ -218,7 +223,7 @@ def main() -> int:
         ),
         np.finfo(float).tiny,
     )
-    save_number = int(metadata.get("save_number", config["Save Options"]["Number"]))
+    save_number = saved_interval_count(metadata, config)
     time = (
         float(metadata["duration_myr"])
         * np.asarray([output_index(path) for path in state_paths], dtype=float)

@@ -10,7 +10,12 @@ from pathlib import Path
 
 import numpy as np
 
-from fdm_smbh_delay.pyul import ordered_output_paths, output_index, pyul_unit_system
+from fdm_smbh_delay.pyul import (
+    ordered_output_paths,
+    output_index,
+    pyul_unit_system,
+    saved_interval_count,
+)
 from fdm_smbh_delay.wave_response import (
     centred_grid,
     multipole_amplitudes,
@@ -81,13 +86,22 @@ def main() -> int:
     masses_msun = np.asarray([particle[0] for particle in particles], dtype=float)
     masses_code = masses_msun / units.mass_msun
     wave_paths = ordered_output_paths(run / "Outputs" / "3Wfn", "P3D_#*.npy")
-    density_paths = ordered_output_paths(
-        run / "Outputs" / "3Density", "R3D_#*.npy"
-    )
     wave_indices = [output_index(path) for path in wave_paths]
-    density_indices = [output_index(path) for path in density_paths]
-    if wave_indices != density_indices:
-        raise ValueError("3D wavefunction and density outputs are inconsistent")
+    density_directory = run / "Outputs" / "3Density"
+    density_paths: list[Path | None]
+    try:
+        saved_density_paths = ordered_output_paths(
+            density_directory, "R3D_#*.npy"
+        )
+    except FileNotFoundError:
+        density_paths = [None] * len(wave_paths)
+        density_snapshot_source = "computed as |psi|^2 from each saved wavefunction"
+    else:
+        density_indices = [output_index(path) for path in saved_density_paths]
+        if wave_indices != density_indices:
+            raise ValueError("3D wavefunction and density outputs are inconsistent")
+        density_paths = list(saved_density_paths)
+        density_snapshot_source = "independently saved three-dimensional density"
     all_state_paths = ordered_output_paths(
         run / "Outputs" / "NBody", "NTM_#*.npy"
     )
@@ -97,9 +111,7 @@ def main() -> int:
     except KeyError as exc:
         raise ValueError("a 3D field has no matching SMBH state") from exc
     samples = len(wave_paths)
-    save_number = int(
-        metadata.get("save_number", config["Save Options"]["Number"])
-    )
+    save_number = saved_interval_count(metadata, config)
     times_myr = (
         float(metadata["duration_myr"])
         * np.asarray(wave_indices, dtype=float)
@@ -128,20 +140,28 @@ def main() -> int:
     )
     response_rows: list[dict] = []
     radial_rows: list[dict] = []
-    maximum_density_snapshot_error = 0.0
+    maximum_density_snapshot_error: float | None = None
     maximum_energy_snapshot_error = 0.0
 
     for sample, (wave_path, density_path, state_path, time_myr) in enumerate(
         zip(wave_paths, density_paths, state_paths, times_myr, strict=True)
     ):
         wavefunction = np.load(wave_path)
-        saved_density = np.load(density_path)
         density = np.abs(wavefunction) ** 2
-        density_scale = max(float(np.max(saved_density)), np.finfo(float).tiny)
-        maximum_density_snapshot_error = max(
-            maximum_density_snapshot_error,
-            float(np.max(np.abs(saved_density - density)) / density_scale),
-        )
+        if density_path is not None:
+            saved_density = np.load(density_path)
+            density_scale = max(
+                float(np.max(saved_density)), np.finfo(float).tiny
+            )
+            density_error = float(
+                np.max(np.abs(saved_density - density)) / density_scale
+            )
+            maximum_density_snapshot_error = max(
+                0.0
+                if maximum_density_snapshot_error is None
+                else maximum_density_snapshot_error,
+                density_error,
+            )
         state = np.load(state_path).reshape(len(particles), 6)
         positions_code = state[:, :3]
         binary_centre = periodic_point_centre(
@@ -357,6 +377,7 @@ def main() -> int:
             "local Schrodinger-field current; global Hamiltonian ledger remains "
             "authoritative because self-gravity is non-local"
         ),
+        "density_snapshot_source": density_snapshot_source,
         "maximum_density_snapshot_relative_error": maximum_density_snapshot_error,
         "maximum_offline_energy_relative_error": maximum_energy_snapshot_error,
         "central_density_fractional_change": (
