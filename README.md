@@ -140,6 +140,12 @@ diagnostics. Calibration against converged long calculations, the
 numerical-radius-to-parsec inspiral, and the cosmological PTA population remain
 future work.
 
+The point-mass osculating semi-major axis is an optional diagnostic. It can be
+undefined when the instantaneous state is not bound in the point-mass Kepler
+approximation, even though the binary is evolving in the extended FDM and
+softened-SMBH potential. Separation, angular momentum, and the complete
+Hamiltonian exchange remain the primary live-wave diagnostics in that case.
+
 ## Fully coupled wave calculation
 
 The live-wave calculation requires a separate checkout of the public
@@ -163,8 +169,27 @@ The corresponding orbit-resolved measurements are generated with
 python scripts/analyze_pyul_wave_run.py RUN
 python scripts/analyze_pyul_secular_exchange.py RUN
 python scripts/analyze_pyul_line_density.py RUN
+python scripts/analyze_pyul_wave_response.py RUN
 python scripts/build_wave_exchange_table.py RUN --output wave_exchange.csv
 ```
+
+The `512^3` wave-response analysis has used about 37 GB of resident memory per
+process. Run only one such analysis at a time, restrict numerical libraries to
+one thread, and checkpoint one sparse three-dimensional sample per invocation:
+
+```bash
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
+NUMEXPR_NUM_THREADS=1 \
+python scripts/analyze_pyul_wave_response.py RUN \
+  --resume --max-new-samples 1
+```
+
+Repeat the command until it produces `wave_response_timeseries.csv`,
+`wave_radial_profiles.csv`, and `wave_response_summary.json`. An interrupted
+analysis retains `wave_response_timeseries.partial.csv` and
+`wave_radial_profiles.partial.csv`; both files are required for `--resume`, and
+their sample indices and row counts are validated before another sample is
+processed.
 
 Long GPU calculations use the PyUL-compatible Torch backend. Install the
 optional dependencies with `python -m pip install -e '.[gpu]'`, export one

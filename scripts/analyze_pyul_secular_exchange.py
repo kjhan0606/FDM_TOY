@@ -14,7 +14,7 @@ from fdm_smbh_delay.empirical import (
     koo_q0_pc_m5half_myr,
     koo_separation_rate_at_separation_pc_myr,
 )
-from fdm_smbh_delay.pyul import ordered_output_paths
+from fdm_smbh_delay.pyul import ordered_output_paths, pyul_unit_system
 from fdm_smbh_delay.secular_exchange import (
     moving_block_bootstrap_rate,
     phase_cycle_average,
@@ -99,7 +99,12 @@ def main() -> int:
     )
     displacement = states[:, 0, :3] - states[:, 1, :3]
     relative_velocity = states[:, 0, 3:] - states[:, 1, 3:]
-    phase = unwrapped_orbital_phase(displacement, relative_velocity)
+    units = pyul_unit_system(metadata)
+    phase = unwrapped_orbital_phase(
+        displacement,
+        relative_velocity,
+        time=data["time_myr"] / units.time_myr,
+    )
 
     fields = {
         "separation_pc": "mean_separation_pc",
@@ -112,9 +117,13 @@ def main() -> int:
         "bh_com_kinetic_energy": "bh_com_kinetic_energy_rate",
         "combined_energy": "combined_energy_residual_rate",
     }
+    optional_nonfinite_fields = {"semimajor_axis_osculating_pc"}
     averaged = {
         source: phase_cycle_average(
-            time=data["time_myr"], phase=phase, value=data[source]
+            time=data["time_myr"],
+            phase=phase,
+            value=data[source],
+            allow_nonfinite_value=source in optional_nonfinite_fields,
         )
         for source in fields
     }
@@ -140,6 +149,11 @@ def main() -> int:
         else:
             columns.append(series.rate)
         header.append(output_name)
+    finite_semimajor_axis_cycle = np.isfinite(
+        averaged["semimajor_axis_osculating_pc"].mean_value
+    )
+    columns.append(finite_semimajor_axis_cycle.astype(int))
+    header.append("mean_semimajor_axis_osculating_finite")
     mean_separation_over_cell = (
         averaged["separation_pc"].mean_value / cell_size_pc
     )
@@ -331,6 +345,22 @@ def main() -> int:
         "initial_cycles_before_first_underresolved_orbit": int(
             initial_resolved_orbits
         ),
+        "osculating_semimajor_axis": {
+            "role": (
+                "point-mass Kepler diagnostic; undefined values are retained "
+                "when the instantaneous relative state is not point-mass bound"
+            ),
+            "finite_input_samples": int(
+                np.count_nonzero(
+                    np.isfinite(data["semimajor_axis_osculating_pc"])
+                )
+            ),
+            "total_input_samples": int(data.shape[0]),
+            "cycles_with_finite_mean": int(
+                np.count_nonzero(finite_semimajor_axis_cycle)
+            ),
+            "total_cycles": int(reference.cycle_index.size),
+        },
         "median_orbital_power_over_frequency_times_torque": (
             None
             if np.all(~np.isfinite(exchange_mode_ratio))

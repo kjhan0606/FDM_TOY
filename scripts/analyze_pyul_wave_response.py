@@ -7,6 +7,7 @@ import argparse
 import csv
 import json
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -27,13 +28,89 @@ from fdm_smbh_delay.wave_response import (
 )
 
 
-def _write_rows(path: Path, rows: list[dict]) -> None:
+def _write_rows(path: Path, rows: list[dict[str, Any]]) -> None:
     if not rows:
         raise ValueError(f"cannot write empty table {path}")
-    with path.open("w", encoding="utf-8", newline="") as stream:
+    temporary = path.with_name(f".{path.name}.tmp")
+    with temporary.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
+    temporary.replace(path)
+
+
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    temporary.replace(path)
+
+
+def _read_rows(path: Path) -> list[dict[str, Any]]:
+    with path.open(encoding="utf-8", newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    parsed: list[dict[str, Any]] = []
+    for row in rows:
+        parsed.append(
+            {
+                key: int(float(value)) if key == "sample" else float(value)
+                for key, value in row.items()
+            }
+        )
+    return parsed
+
+
+def _resume_rows(
+    *,
+    response_path: Path,
+    radial_path: Path,
+    radial_bins: int,
+    times_myr: np.ndarray,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if response_path.exists() != radial_path.exists():
+        raise ValueError("wave-response checkpoint tables are incomplete")
+    if not response_path.exists():
+        return [], []
+    response_rows = _read_rows(response_path)
+    radial_rows = _read_rows(radial_path)
+    response_completed = len(response_rows)
+    radial_completed, radial_remainder = divmod(len(radial_rows), radial_bins)
+    if radial_remainder:
+        raise ValueError("wave-response radial checkpoint has the wrong size")
+    if max(response_completed, radial_completed) > times_myr.size:
+        raise ValueError("wave-response checkpoint exceeds the configured samples")
+    if [row["sample"] for row in response_rows] != list(
+        range(response_completed)
+    ):
+        raise ValueError("wave-response checkpoint samples are not contiguous")
+    if not np.allclose(
+        [row["time_myr"] for row in response_rows],
+        times_myr[:response_completed],
+        rtol=0.0,
+        atol=1.0e-14,
+    ):
+        raise ValueError("wave-response checkpoint times do not match the run")
+    expected_radial_samples = np.repeat(np.arange(radial_completed), radial_bins)
+    if not np.array_equal(
+        [row["sample"] for row in radial_rows], expected_radial_samples
+    ):
+        raise ValueError("wave-response radial checkpoint samples are inconsistent")
+    if not np.allclose(
+        [row["time_myr"] for row in radial_rows],
+        np.repeat(times_myr[:radial_completed], radial_bins),
+        rtol=0.0,
+        atol=1.0e-14,
+    ):
+        raise ValueError("wave-response radial checkpoint times do not match the run")
+    if abs(response_completed - radial_completed) > 1:
+        raise ValueError("wave-response checkpoint tables differ by multiple samples")
+
+    # Each table is replaced atomically, but the pair cannot be replaced in a
+    # single filesystem operation.  If termination lands between the two
+    # replaces, discard the one-table lead and recompute that sample.
+    completed = min(response_completed, radial_completed)
+    return response_rows[:completed], radial_rows[: radial_bins * completed]
 
 
 def _core_radius(radius: np.ndarray, density: np.ndarray, central: float) -> float:
@@ -60,9 +137,13 @@ def main() -> int:
     parser.add_argument("run", type=Path)
     parser.add_argument("--radial-bins", type=int, default=64)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--max-new-samples", type=int)
     args = parser.parse_args()
     if args.radial_bins < 16:
         raise ValueError("at least 16 radial bins are required")
+    if args.max_new_samples is not None and args.max_new_samples < 1:
+        raise ValueError("--max-new-samples must be positive")
 
     run = args.run.expanduser().resolve()
     output = run if args.output is None else args.output.expanduser().resolve()
@@ -117,6 +198,8 @@ def main() -> int:
         * np.asarray(wave_indices, dtype=float)
         / save_number
     )
+    partial_response_path = output / "wave_response_timeseries.partial.csv"
+    partial_radial_path = output / "wave_radial_profiles.partial.csv"
     saved_kinetic_all = np.load(run / "Outputs" / "ekandqlist.npy")
     saved_self_all = np.load(run / "Outputs" / "egpsilist.npy")
     saved_cross_all = np.load(run / "Outputs" / "egpcmlist.npy")
@@ -138,16 +221,39 @@ def main() -> int:
     shell_geometric_volumes = 4.0 * np.pi / 3.0 * (
         radial_edges[1:] ** 3 - radial_edges[:-1] ** 3
     )
-    response_rows: list[dict] = []
-    radial_rows: list[dict] = []
-    maximum_density_snapshot_error: float | None = None
-    maximum_energy_snapshot_error = 0.0
+    response_rows: list[dict[str, Any]] = []
+    radial_rows: list[dict[str, Any]] = []
+    if args.resume:
+        response_rows, radial_rows = _resume_rows(
+            response_path=partial_response_path,
+            radial_path=partial_radial_path,
+            radial_bins=args.radial_bins,
+            times_myr=times_myr,
+        )
+    completed_samples = len(response_rows)
+    stop_sample = (
+        samples
+        if args.max_new_samples is None
+        else min(samples, completed_samples + args.max_new_samples)
+    )
+    if completed_samples:
+        print(
+            json.dumps(
+                {"resumed_samples": completed_samples, "total_samples": samples}
+            ),
+            flush=True,
+        )
 
     for sample, (wave_path, density_path, state_path, time_myr) in enumerate(
         zip(wave_paths, density_paths, state_paths, times_myr, strict=True)
     ):
+        if sample < completed_samples:
+            continue
+        if sample >= stop_sample:
+            break
         wavefunction = np.load(wave_path)
         density = np.abs(wavefunction) ** 2
+        density_error = np.nan
         if density_path is not None:
             saved_density = np.load(density_path)
             density_scale = max(
@@ -155,12 +261,6 @@ def main() -> int:
             )
             density_error = float(
                 np.max(np.abs(saved_density - density)) / density_scale
-            )
-            maximum_density_snapshot_error = max(
-                0.0
-                if maximum_density_snapshot_error is None
-                else maximum_density_snapshot_error,
-                density_error,
             )
         state = np.load(state_path).reshape(len(particles), 6)
         positions_code = state[:, :3]
@@ -264,8 +364,7 @@ def main() -> int:
             abs(saved_cross[sample]),
             np.finfo(float).tiny,
         )
-        maximum_energy_snapshot_error = max(
-            maximum_energy_snapshot_error,
+        offline_energy_error = max(
             abs(offline_kinetic - saved_kinetic[sample]) / energy_scale,
             abs(offline_self - saved_self[sample]) / energy_scale,
             abs(offline_cross - saved_cross[sample]) / energy_scale,
@@ -296,6 +395,8 @@ def main() -> int:
                 "measured_half_density_radius_pc": (
                     evolved_core_code * units.length_pc
                 ),
+                "density_snapshot_relative_error": density_error,
+                "offline_energy_relative_error": offline_energy_error,
                 "wave_kinetic_energy": saved_kinetic[sample]
                 * units.energy_msun_pc2_myr2,
                 "wave_self_gravity_energy": saved_self[sample]
@@ -361,10 +462,39 @@ def main() -> int:
                 }
             )
 
-    _write_rows(output / "wave_response_timeseries.csv", response_rows)
-    _write_rows(output / "wave_radial_profiles.csv", radial_rows)
+        _write_rows(partial_response_path, response_rows)
+        _write_rows(partial_radial_path, radial_rows)
+        print(
+            json.dumps(
+                {"completed_samples": sample + 1, "total_samples": samples}
+            ),
+            flush=True,
+        )
+
+    if len(response_rows) < samples:
+        print(
+            json.dumps(
+                {
+                    "checkpointed_samples": len(response_rows),
+                    "total_samples": samples,
+                    "status": "partial",
+                }
+            ),
+            flush=True,
+        )
+        return 0
+
+    final_response_path = output / "wave_response_timeseries.csv"
+    final_radial_path = output / "wave_radial_profiles.csv"
+    _write_rows(final_response_path, response_rows)
+    _write_rows(final_radial_path, radial_rows)
     initial = response_rows[0]
     final = response_rows[-1]
+    finite_density_errors = [
+        row["density_snapshot_relative_error"]
+        for row in response_rows
+        if np.isfinite(row["density_snapshot_relative_error"])
+    ]
     summary = {
         "status": "diagnosed",
         "run": str(run),
@@ -378,8 +508,12 @@ def main() -> int:
             "authoritative because self-gravity is non-local"
         ),
         "density_snapshot_source": density_snapshot_source,
-        "maximum_density_snapshot_relative_error": maximum_density_snapshot_error,
-        "maximum_offline_energy_relative_error": maximum_energy_snapshot_error,
+        "maximum_density_snapshot_relative_error": (
+            None if not finite_density_errors else max(finite_density_errors)
+        ),
+        "maximum_offline_energy_relative_error": max(
+            row["offline_energy_relative_error"] for row in response_rows
+        ),
         "central_density_fractional_change": (
             final["central_density_msun_pc3"]
             / initial["central_density_msun_pc3"]
@@ -464,9 +598,9 @@ def main() -> int:
                 else None
             ),
         }
-    (output / "wave_response_summary.json").write_text(
-        json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    _write_json(output / "wave_response_summary.json", summary)
+    partial_response_path.unlink(missing_ok=True)
+    partial_radial_path.unlink(missing_ok=True)
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
 

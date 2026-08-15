@@ -232,6 +232,9 @@ def main() -> int:
             names=True,
             ndmin=1,
         )
+        has_semimajor_axis_validity = (
+            "mean_semimajor_axis_osculating_finite" in (table.dtype.names or ())
+        )
         response_path = run / "wave_response_timeseries.csv"
         response = (
             np.genfromtxt(response_path, delimiter=",", names=True, ndmin=1)
@@ -353,6 +356,13 @@ def main() -> int:
                         "mean_semimajor_axis_osculating_pc"
                     ]
                     / core_radius,
+                    "mean_semimajor_axis_osculating_finite": int(
+                        cycle["mean_semimajor_axis_osculating_finite"]
+                        if has_semimajor_axis_validity
+                        else np.isfinite(
+                            cycle["mean_semimajor_axis_osculating_pc"]
+                        )
+                    ),
                     "mean_eccentricity_osculating": cycle[
                         "mean_eccentricity_osculating"
                     ],
@@ -440,6 +450,10 @@ def main() -> int:
             "requires the initial resolved interval to pass the Hamiltonian "
             "limit; calibration still requires convergence between spatial and "
             "temporal resolutions"
+        ),
+        "osculating_semimajor_axis": (
+            "point-mass Kepler diagnostic; undefined cycle means remain NaN "
+            "and are identified by mean_semimajor_axis_osculating_finite=0"
         ),
         "exchange_mode_diagnostic": (
             "power/(orbital frequency times torque) equals one for exchange "

@@ -230,8 +230,16 @@ while true; do
 
   if [[ -f "${run}/torch_run_summary.json" ]]; then
     if (
+      [[ -f "${run}/Finalization/finalization.failed" ]] \
+      && ! tmux has-session -t "${finalizer_session}" 2>/dev/null
+    ); then
+      record "n512 finalizer failure marker found; exiting without automatic retry"
+      exit 76
+    fi
+    if (
       ! tmux has-session -t "${run_session}" 2>/dev/null \
       && [[ ! -f "${run}/Finalization/finalization.complete" ]] \
+      && [[ ! -f "${run}/Finalization/finalization.failed" ]] \
       && ! tmux has-session -t "${finalizer_session}" 2>/dev/null
     ); then
       start_finalizer
