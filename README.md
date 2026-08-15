@@ -212,6 +212,22 @@ under `RUN/torch_solver_provenance`. A resumed calculation is rejected if that
 source no longer matches, preventing two numerical implementations from being
 joined into one trajectory.
 
+The intermediate `384^3` spatial-convergence run on `syn101` uses a dedicated
+manual tripwire:
+
+```bash
+tmux new-session -d -s fdm_n384_monitor \
+  'exec bash scripts/monitor_syn101_n384.sh 0'
+```
+
+The monitor refuses an occupied GPU, stops the managed calculation when a
+foreign Slurm job or GPU process appears, and does not retry a failed evolution
+or finalizer. GPU ownership is checked through the solver PID marker and
+`nvidia-smi`; no general process scan is used. After the evolution, the monitor
+runs only conservation, orbit-averaged exchange, line-density, and three-level
+spatial-convergence measurements. The memory-intensive three-dimensional wave
+response remains a separate operation.
+
 Add `--save-movie-plane` to the live-wave command when a movie is required.
 This option writes the central FDM density plane at every diagnostic output
 without retaining the full three-dimensional wavefunction at the same cadence.

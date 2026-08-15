@@ -41,6 +41,17 @@ def main() -> int:
 
     runner = project / "scripts" / "run_torch_wave_case.py"
     process = subprocess.Popen([sys.executable, str(runner), *arguments])
+    pid_marker_value = os.environ.get("FDM_SOLVER_PID_FILE")
+    pid_marker = (
+        None
+        if not pid_marker_value
+        else Path(pid_marker_value).expanduser().resolve()
+    )
+    if pid_marker is not None:
+        pid_marker.parent.mkdir(parents=True, exist_ok=True)
+        temporary = pid_marker.with_name(f".{pid_marker.name}.tmp")
+        temporary.write_text(f"{process.pid}\n", encoding="utf-8")
+        os.replace(temporary, pid_marker)
 
     def forward_signal(signum: int, _frame) -> None:
         if process.poll() is None:
@@ -59,6 +70,9 @@ def main() -> int:
             process.terminate()
         process.wait()
         raise
+    finally:
+        if pid_marker is not None:
+            pid_marker.unlink(missing_ok=True)
     return process.wait()
 
 
