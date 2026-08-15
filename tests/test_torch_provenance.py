@@ -10,6 +10,7 @@ PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT / "scripts"))
 
 from launch_torch_wave_case import _output_argument  # noqa: E402
+import launch_torch_wave_case  # noqa: E402
 import snapshot_torch_provenance  # noqa: E402
 from snapshot_torch_provenance import _snapshot_run  # noqa: E402
 
@@ -20,6 +21,57 @@ def test_output_argument_accepts_both_cli_forms(tmp_path: Path) -> None:
     assert _output_argument([f"--output={expected}", "reference"]) == expected
     with pytest.raises(ValueError, match="--output"):
         _output_argument(["reference"])
+
+
+def test_solver_pid_marker_remains_until_wait(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "run"
+    marker = tmp_path / "solver.pid"
+
+    class FakeProcess:
+        pid = 12345
+
+        def poll(self):
+            output.mkdir(exist_ok=True)
+            (output / "fdm_adapter_metadata.json").write_text("{}")
+            return None
+
+        def wait(self):
+            assert marker.read_text() == f"{self.pid}\n"
+            return 0
+
+        def terminate(self):
+            raise AssertionError("the successful solver must not be terminated")
+
+        def send_signal(self, _signum):
+            raise AssertionError("the test does not send a signal")
+
+    process = FakeProcess()
+    monkeypatch.setenv("FDM_SOLVER_PID_FILE", str(marker))
+    monkeypatch.setattr(
+        launch_torch_wave_case.subprocess,
+        "Popen",
+        lambda _arguments: process,
+    )
+    monkeypatch.setattr(
+        launch_torch_wave_case,
+        "_snapshot_run",
+        lambda _project, _output: {},
+    )
+    monkeypatch.setattr(
+        launch_torch_wave_case.signal,
+        "signal",
+        lambda _signum, _handler: None,
+    )
+    monkeypatch.setattr(
+        launch_torch_wave_case.sys,
+        "argv",
+        ["launch_torch_wave_case.py", "reference", "--output", str(output)],
+    )
+
+    assert launch_torch_wave_case.main() == 0
+    assert not marker.exists()
 
 
 def test_source_snapshot_is_repeatable_and_immutable(

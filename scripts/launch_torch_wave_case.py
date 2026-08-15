@@ -65,6 +65,7 @@ def main() -> int:
             time.sleep(0.1)
         if metadata.is_file():
             _snapshot_run(project, output)
+        return process.wait()
     except BaseException:
         if process.poll() is None:
             process.terminate()
@@ -73,7 +74,6 @@ def main() -> int:
     finally:
         if pid_marker is not None:
             pid_marker.unlink(missing_ok=True)
-    return process.wait()
 
 
 if __name__ == "__main__":
