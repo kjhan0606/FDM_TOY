@@ -4,6 +4,7 @@ import pytest
 
 from fdm_smbh_delay.calibration import (
     component_masses,
+    exchange_calibration_eligibility,
     literature_anchor_cases,
     run_specifications,
     structured_parameter_cases,
@@ -18,6 +19,60 @@ def test_component_masses_preserve_total_and_q() -> None:
     )
     assert mass1 + mass2 == pytest.approx(1.0e8)
     assert mass2 / mass1 == pytest.approx(0.3)
+
+
+def test_exchange_calibration_eligibility_separates_phase_selection() -> None:
+    secular_only = exchange_calibration_eligibility(
+        before_first_underresolved_orbit=True,
+        initial_resolved_energy_conservation_passed=True,
+        half_density_radius_spatially_resolved=True,
+        wave_mode_time_offset_over_orbital_period=0.75,
+    )
+    assert secular_only.secular
+    assert not secular_only.phase_dependent
+
+    phase_eligible = exchange_calibration_eligibility(
+        before_first_underresolved_orbit=True,
+        initial_resolved_energy_conservation_passed=True,
+        half_density_radius_spatially_resolved=True,
+        wave_mode_time_offset_over_orbital_period=-0.5,
+    )
+    assert phase_eligible.secular
+    assert phase_eligible.phase_dependent
+
+
+@pytest.mark.parametrize(
+    "failed_requirement",
+    [
+        "before_first_underresolved_orbit",
+        "initial_resolved_energy_conservation_passed",
+        "half_density_radius_spatially_resolved",
+    ],
+)
+def test_exchange_calibration_eligibility_requires_all_secular_checks(
+    failed_requirement: str,
+) -> None:
+    arguments = {
+        "before_first_underresolved_orbit": True,
+        "initial_resolved_energy_conservation_passed": True,
+        "half_density_radius_spatially_resolved": True,
+        "wave_mode_time_offset_over_orbital_period": 0.0,
+    }
+    arguments[failed_requirement] = False
+    eligibility = exchange_calibration_eligibility(**arguments)
+    assert not eligibility.secular
+    assert not eligibility.phase_dependent
+
+
+def test_exchange_calibration_eligibility_rejects_invalid_limit() -> None:
+    with pytest.raises(ValueError, match="non-negative"):
+        exchange_calibration_eligibility(
+            before_first_underresolved_orbit=True,
+            initial_resolved_energy_conservation_passed=True,
+            half_density_radius_spatially_resolved=True,
+            wave_mode_time_offset_over_orbital_period=0.0,
+            maximum_wave_mode_time_offset_over_orbital_period=float("nan"),
+        )
 
 
 def test_literature_anchor_initial_conditions() -> None:

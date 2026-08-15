@@ -10,6 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
+from fdm_smbh_delay.calibration import exchange_calibration_eligibility
 from fdm_smbh_delay.exchange_scaling import (
     exchange_scales,
     schrodinger_poisson_similarity_parameter,
@@ -188,7 +189,21 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("runs", type=Path, nargs="+")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--maximum-wave-mode-offset-orbits",
+        type=float,
+        default=0.5,
+        help=(
+            "largest absolute wave-snapshot time offset, in local orbital "
+            "periods, admitted to phase-dependent calibration"
+        ),
+    )
     args = parser.parse_args()
+    if (
+        not np.isfinite(args.maximum_wave_mode_offset_orbits)
+        or args.maximum_wave_mode_offset_orbits < 0.0
+    ):
+        raise ValueError("the maximum wave-mode offset must be non-negative")
     rows: list[dict[str, float | int | str]] = []
     for run_argument in args.runs:
         run = run_argument.expanduser().resolve()
@@ -333,6 +348,23 @@ def main() -> int:
             spatially_resolved = bool(
                 cycle["mean_separation_over_cell_size"] >= 2.0
             )
+            eligibility = exchange_calibration_eligibility(
+                before_first_underresolved_orbit=bool(
+                    initial_resolved[row_index]
+                ),
+                initial_resolved_energy_conservation_passed=(
+                    initial_resolved_energy_passed
+                ),
+                half_density_radius_spatially_resolved=bool(
+                    wave_state["half_density_radius_spatially_resolved"]
+                ),
+                wave_mode_time_offset_over_orbital_period=wave_snapshot[
+                    "wave_mode_sample_time_offset_over_orbital_period"
+                ],
+                maximum_wave_mode_time_offset_over_orbital_period=(
+                    args.maximum_wave_mode_offset_orbits
+                ),
+            )
             rows.append(
                 {
                     "case_id": metadata["case_id"],
@@ -420,6 +452,10 @@ def main() -> int:
                         initial_resolved[row_index]
                         and initial_resolved_energy_passed
                     ),
+                    "secular_calibration_eligible": int(eligibility.secular),
+                    "phase_dependent_calibration_eligible": int(
+                        eligibility.phase_dependent
+                    ),
                     **wave_state,
                     **frame_state,
                     **orbital_modes,
@@ -448,9 +484,20 @@ def main() -> int:
             "rows are retained without deletion; provisional numerical "
             "acceptance ends at the first orbit below two cell widths and "
             "requires the initial resolved interval to pass the Hamiltonian "
-            "limit; calibration still requires convergence between spatial and "
-            "temporal resolutions"
+            "limit; secular calibration additionally requires a resolved "
+            "measured half-density radius, and calibration still requires "
+            "convergence between spatial and temporal resolutions"
         ),
+        "phase_dependent_selection": {
+            "maximum_absolute_wave_snapshot_time_offset_over_orbital_period": (
+                args.maximum_wave_mode_offset_orbits
+            ),
+            "requirement": (
+                "the secular row must be eligible and the nearest saved "
+                "three-dimensional wave state must satisfy the time-offset "
+                "limit"
+            ),
+        },
         "osculating_semimajor_axis": (
             "point-mass Kepler diagnostic; undefined cycle means remain NaN "
             "and are identified by mean_semimajor_axis_osculating_finite=0"

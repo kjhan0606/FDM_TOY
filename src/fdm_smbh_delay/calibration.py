@@ -64,6 +64,48 @@ class WaveRunSpecification:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class ExchangeCalibrationEligibility:
+    secular: bool
+    phase_dependent: bool
+
+
+def exchange_calibration_eligibility(
+    *,
+    before_first_underresolved_orbit: bool,
+    initial_resolved_energy_conservation_passed: bool,
+    half_density_radius_spatially_resolved: bool,
+    wave_mode_time_offset_over_orbital_period: float,
+    maximum_wave_mode_time_offset_over_orbital_period: float = 0.5,
+) -> ExchangeCalibrationEligibility:
+    """Classify secular and phase-dependent live-wave calibration rows.
+
+    Secular power and torque require a resolved binary, a resolved measured
+    core, and an accepted Hamiltonian ledger.  A complex wave-mode coefficient
+    additionally requires a nearby three-dimensional state because its phase
+    cannot be assigned from a temporally distant snapshot.
+    """
+
+    maximum_offset = float(
+        maximum_wave_mode_time_offset_over_orbital_period
+    )
+    if not np.isfinite(maximum_offset) or maximum_offset < 0.0:
+        raise ValueError("the maximum wave-mode time offset must be non-negative")
+    secular = bool(
+        before_first_underresolved_orbit
+        and initial_resolved_energy_conservation_passed
+        and half_density_radius_spatially_resolved
+    )
+    offset = float(wave_mode_time_offset_over_orbital_period)
+    phase_dependent = bool(
+        secular and np.isfinite(offset) and abs(offset) <= maximum_offset
+    )
+    return ExchangeCalibrationEligibility(
+        secular=secular,
+        phase_dependent=phase_dependent,
+    )
+
+
 def component_masses(
     *, soliton_mass_msun: float, binary_to_soliton_mass: float, mass_ratio_q: float
 ) -> tuple[float, float]:
