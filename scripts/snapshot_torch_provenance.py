@@ -91,6 +91,12 @@ def _snapshot_run(project: Path, run: Path) -> dict[str, Any]:
 
     for relative in _COMMITTED_DEPENDENCY_PATHS:
         content = _git_blob(project, revision, relative)
+        current = (project / relative).read_bytes()
+        if current != content:
+            raise ValueError(
+                f"current numerical dependency differs from the preserved "
+                f"launch revision: {relative}"
+            )
         target = destination / "source" / relative
         _publish_immutable(target, content)
         records.append(

@@ -14,8 +14,8 @@ from fdm_smbh_delay.pyul import (
     ordered_output_paths,
     output_index,
     pyul_unit_system,
-    saved_interval_count,
 )
+from fdm_smbh_delay.run_metadata import saved_interval_count
 from fdm_smbh_delay.wave_response import (
     centred_grid,
     multipole_amplitudes,

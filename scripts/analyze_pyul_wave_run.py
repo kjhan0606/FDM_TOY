@@ -15,8 +15,8 @@ from fdm_smbh_delay.pyul import (
     ordered_output_paths,
     output_index,
     pyul_unit_system,
-    saved_interval_count,
 )
+from fdm_smbh_delay.run_metadata import saved_interval_count
 
 
 def _finite_or_none(value: float) -> float | None:

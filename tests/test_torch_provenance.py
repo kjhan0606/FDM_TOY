@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import subprocess
 import sys
 
 import pytest
@@ -26,13 +25,14 @@ def test_output_argument_accepts_both_cli_forms(tmp_path: Path) -> None:
 def test_source_snapshot_is_repeatable_and_immutable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    revision = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=PROJECT,
-        check=True,
-        text=True,
-        stdout=subprocess.PIPE,
-    ).stdout.strip()
+    revision = "recorded-launch-revision"
+    monkeypatch.setattr(
+        snapshot_torch_provenance,
+        "_git_blob",
+        lambda project, requested_revision, relative: (
+            project / relative
+        ).read_bytes(),
+    )
     run = tmp_path / "run"
     run.mkdir()
     (run / "config.uldm").write_text("{}")
@@ -71,4 +71,28 @@ def test_source_snapshot_is_repeatable_and_immutable(
     )
     frozen.write_text("changed")
     with pytest.raises(FileExistsError, match="refusing to replace"):
+        _snapshot_run(PROJECT, run)
+
+
+def test_source_snapshot_rejects_changed_committed_dependency(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "config.uldm").write_text("{}")
+    (run / "fdm_adapter_metadata.json").write_text(
+        json.dumps(
+            {
+                "backend": "pytorch_cpu",
+                "adapter_revision": "recorded-launch-revision",
+            }
+        )
+    )
+    monkeypatch.setattr(
+        snapshot_torch_provenance,
+        "_git_blob",
+        lambda project, revision, relative: b"different launch-time source",
+    )
+
+    with pytest.raises(ValueError, match="current numerical dependency differs"):
         _snapshot_run(PROJECT, run)

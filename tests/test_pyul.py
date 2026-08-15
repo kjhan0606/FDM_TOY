@@ -7,7 +7,6 @@ from fdm_smbh_delay.pyul import (
     ordered_output_paths,
     output_index,
     pyul_unit_system,
-    saved_interval_count,
 )
 
 
@@ -69,17 +68,3 @@ def test_ordered_output_paths(tmp_path: Path) -> None:
 def test_output_index_requires_pyul_snapshot_name(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="no numeric index"):
         output_index(tmp_path / "egylist.npy")
-
-
-def test_saved_interval_count_prefers_metadata() -> None:
-    assert saved_interval_count(
-        {"save_number": 512}, {"Save Options": {"Number": 32}}
-    ) == 512
-
-
-def test_saved_interval_count_supports_legacy_config() -> None:
-    assert saved_interval_count({}, {"Save Options": {"Number": 32}}) == 32
-    with pytest.raises(ValueError, match="omit"):
-        saved_interval_count({}, {})
-    with pytest.raises(ValueError, match="positive"):
-        saved_interval_count({"save_number": 0}, {})
