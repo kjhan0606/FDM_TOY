@@ -277,7 +277,7 @@ The completed Koo-anchor smoke calculations give:
 The 512-cell calculation matches Koo's `0.08 pc` spatial resolution. It is a
 short high-resolution conservation test, not a measurement of the decay time.
 
-### Torch GPU continuation and convergence pilot
+### Torch GPU continuation and convergence results
 
 The Torch backend continues a three-dimensional PyUL initial state with the
 same dimensionless Schrödinger--Poisson convention. It retains the resolved
@@ -308,22 +308,31 @@ sources predate their metadata can be frozen explicitly with
 python scripts/snapshot_torch_provenance.py /path/to/torch_run
 ```
 
-The first Koo-anchor GPU comparisons give the following common-window
-differences relative to the `512^3`, unit-time-step calculation:
+The long `512^3` Koo-anchor calculation completed `1 Myr` with analytic FDM
+drag disabled. The separation changed from `0.9 pc` to `0.2874 pc`, and the
+maximum Hamiltonian error was `0.2035%` of the transferred energy. Its binary
+remained above two cell widths throughout the calculation. The long `256^3`
+calculation first crossed that numerical boundary at `0.85498 Myr`.
 
-| comparison | common interval [Myr] | separation difference / initial | orbital power | orbital torque | total wave-energy rate |
-|---|---:|---:|---:|---:|---:|
-| `512^3`, half wave step | 0.1000 | `-0.40%` | `-1.13%` | `-0.74%` | `+0.25%` |
-| `256^3`, unit wave step | 0.3721 | `-0.062%` | `+5.32%` | `-4.96%` | `-4.26%` |
+The completed common-window comparisons are:
 
-The half-step Hamiltonian error over transferred energy is `1.67e-4`, compared
-with `3.17e-4` for the unit-step calculation over `0.1 Myr`. Over the current
-`0.3721 Myr` spatial comparison, the corresponding errors are `3.47e-3` at
-`256^3` and `9.17e-4` at `512^3`. These results support percent-level temporal
-convergence and approximately five-percent spatial agreement over the tested
-resolved interval. They remain a provisional numerical comparison: the
-long `512^3` evolution and its final common-window analysis must finish before
-a physical calibration row is accepted.
+| comparison and reference | common interval [Myr] | separation difference / initial | mean orbital power | mean orbital torque | final-window orbital power | final-window orbital torque |
+|---|---:|---:|---:|---:|---:|---:|
+| `512^3`, half wave step vs unit step | 0.1000 | `-0.405%` | `-0.661%` | `-0.661%` | `-1.13%` | `-0.744%` |
+| `512^3`, 18 vs 9 SMBH RK4 substeps | 0.1000 | `-0.0516%` | `-0.0093%` | `-0.0360%` | `-0.0215%` | `-0.0464%` |
+| `256^3` vs `512^3`, unit step | 0.1000 | `+2.58%` | `-5.79%` | `-3.59%` | `-3.35%` | `-4.49%` |
+| `256^3` vs `512^3`, unit step | 0.8550 | `+1.54%` | `+5.44%` | `+0.076%` | `+32.9%` | `+14.5%` |
+| `256^3`, half vs unit wave step | 0.8550 | `-1.52%` | `-0.966%` | `-0.511%` | `-14.3%` | `-16.6%` |
+
+The final-window estimates use complete orbits near the end of the common
+resolved interval. Their broad variations exceed the cumulative separation
+and interval-mean differences. The maximum Hamiltonian errors over transferred
+energy are `0.6829%` for the unit-step `256^3` calculation and `0.2587%` for
+its half-step repeat, both below the adopted one-percent limit. The numerical
+ledger and cumulative inspiral therefore pass, but the late local power and
+torque are not yet spatially or temporally converged. An intermediate `384^3`
+calculation must establish the resolution trend before a physical calibration
+row is accepted.
 
 ## Interaction-energy convention
 
