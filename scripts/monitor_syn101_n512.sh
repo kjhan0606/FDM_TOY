@@ -21,6 +21,17 @@ managed_sessions=(
   fdm_conv_n512_rk18
   fdm_conv_n256_dt05
 )
+declare -A gpu_session=(
+  [0]="${run_session}"
+  [1]=fdm_anchor_koo06
+  [2]=fdm_anchor_koo15
+  [3]=fdm_anchor_boey02
+  [4]=fdm_anchor_boey05
+  [5]=fdm_anchor_boey10
+  [6]=fdm_conv_n512_rk18
+  [7]=fdm_conv_n256_dt05
+)
+yield_marker_dir=${result_root}/logs/fdm_syn101_yielded
 poll_seconds=5
 owner=$(id -un)
 node=$(hostname -s)
@@ -30,7 +41,7 @@ if [[ ${node} != syn101 ]]; then
   exit 2
 fi
 
-mkdir -p "$(dirname "${monitor_log}")"
+mkdir -p "$(dirname "${monitor_log}")" "${yield_marker_dir}"
 exec 9>"${lock}"
 if ! flock -n 9; then
   printf '%s | n512 tripwire lock is held by another monitor\n' \
@@ -57,32 +68,90 @@ foreign_slurm_use() {
   return 1
 }
 
-foreign_gpu_use() {
-  local process_uuid pid process_owner
-  while IFS=',' read -r process_uuid pid; do
-    process_uuid=${process_uuid//[[:space:]]/}
+pid_descends_from() {
+  local child=$1 ancestor=$2 parent
+  while [[ ${child} =~ ^[0-9]+$ ]] && (( child > 1 )); do
+    if [[ ${child} == "${ancestor}" ]]; then
+      return 0
+    fi
+    parent=$(ps -o ppid= -p "${child}" 2>/dev/null || true)
+    parent=${parent//[[:space:]]/}
+    if [[ -z ${parent} || ${parent} == "${child}" ]]; then
+      break
+    fi
+    child=${parent}
+  done
+  return 1
+}
+
+pid_belongs_to_session() {
+  local pid=$1 session=$2 pane_pid
+  while read -r pane_pid; do
+    pane_pid=${pane_pid//[[:space:]]/}
+    if [[ -n ${pane_pid} ]] && pid_descends_from "${pid}" "${pane_pid}"; then
+      return 0
+    fi
+  done < <(tmux list-panes -t "${session}" -F '#{pane_pid}' 2>/dev/null || true)
+  return 1
+}
+
+stop_managed_session() {
+  local session=$1 gpu=$2 reason=$3 attempt
+  local marker=${yield_marker_dir}/${session}
+  if ! tmux has-session -t "${session}" 2>/dev/null; then
+    return
+  fi
+  printf '%s\n' "$(date '+%F %T %Z') | GPU ${gpu} | ${reason}" > "${marker}"
+  record "yielding ${session} on GPU ${gpu}: ${reason}"
+  tmux send-keys -t "${session}" C-c
+  for attempt in $(seq 1 5); do
+    if ! tmux has-session -t "${session}" 2>/dev/null; then
+      record "${session} released GPU ${gpu}"
+      return
+    fi
+    sleep 1
+  done
+  tmux kill-session -t "${session}" 2>/dev/null || true
+  record "forcibly closed ${session} after 5 seconds"
+}
+
+yield_gpu_collisions() {
+  local index uuid app_uuid pid session process_owner process_command key
+  declare -A uuid_index=()
+  declare -A yielded=()
+
+  while IFS=',' read -r index uuid; do
+    index=${index//[[:space:]]/}
+    uuid=${uuid//[[:space:]]/}
+    [[ -n ${index} && -n ${uuid} ]] && uuid_index["${uuid}"]=${index}
+  done < <(
+    nvidia-smi --query-gpu=index,uuid --format=csv,noheader,nounits \
+      2>/dev/null || true
+  )
+
+  while IFS=',' read -r app_uuid pid; do
+    app_uuid=${app_uuid//[[:space:]]/}
     pid=${pid//[[:space:]]/}
-    if [[ -z ${pid} ]]; then
+    index=${uuid_index[${app_uuid}]:-}
+    session=${gpu_session[${index}]:-}
+    if (
+      [[ -z ${pid} || -z ${session} || -n ${yielded[${session}]:-} ]] \
+      || ! tmux has-session -t "${session}" 2>/dev/null \
+      || pid_belongs_to_session "${pid}" "${session}"
+    ); then
       continue
     fi
     process_owner=$(ps -o user= -p "${pid}" 2>/dev/null || true)
     process_owner=${process_owner//[[:space:]]/}
-    if [[ -n ${process_owner} && ${process_owner} != "${owner}" ]]; then
-      printf 'foreign GPU process %s on %s is owned by %s' \
-        "${pid}" "${process_uuid}" "${process_owner}"
-      return 0
-    fi
+    process_command=$(ps -o args= -p "${pid}" 2>/dev/null || true)
+    key=${session}
+    yielded["${key}"]=1
+    stop_managed_session "${session}" "${index}" \
+      "unmanaged PID ${pid} owner=${process_owner:-unknown} command=${process_command:-unknown}"
   done < <(
     nvidia-smi --query-compute-apps=gpu_uuid,pid \
       --format=csv,noheader,nounits 2>/dev/null || true
   )
-  return 1
-}
-
-conflict_reason() {
-  foreign_slurm_use && return 0
-  foreign_gpu_use && return 0
-  return 1
 }
 
 managed_session_active() {
@@ -121,6 +190,10 @@ stop_managed_runs() {
 }
 
 start_run() {
+  if [[ -f ${yield_marker_dir}/${run_session} ]]; then
+    record "not restarting n512: GPU 0 was yielded to another session"
+    return
+  fi
   record "starting n512 checkpoint continuation manually on syn101 GPU 0"
   tmux new-session -d -s "${run_session}" \
     "bash ${repository}/scripts/run_syn101_n512_1myr.sh >> ${progress_log} 2>> ${error_log}"
@@ -147,12 +220,13 @@ record "manual n512 monitor active; foreign-use polling interval=${poll_seconds}
 status_counter=0
 while true; do
   reason=''
-  if reason=$(conflict_reason); then
-    record "foreign use detected: ${reason}"
+  if reason=$(foreign_slurm_use); then
+    record "foreign Slurm use detected: ${reason}"
     stop_managed_runs "${reason}"
     record "manual monitor exiting to release syn101"
     exit 75
   fi
+  yield_gpu_collisions
 
   if [[ -f "${run}/torch_run_summary.json" ]]; then
     if (
@@ -169,8 +243,19 @@ while true; do
       record "n512 finalization and all managed manual work complete"
       exit 0
     fi
-  elif ! tmux has-session -t "${run_session}" 2>/dev/null; then
+  elif (
+    ! tmux has-session -t "${run_session}" 2>/dev/null \
+    && [[ ! -f ${yield_marker_dir}/${run_session} ]]
+  ); then
     start_run
+  fi
+
+  if (
+    [[ -f ${yield_marker_dir}/${run_session} ]] \
+    && ! managed_session_active
+  ); then
+    record "all remaining work completed or yielded; monitor exiting"
+    exit 75
   fi
 
   if (( status_counter == 0 )); then
