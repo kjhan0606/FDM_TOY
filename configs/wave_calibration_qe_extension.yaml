@@ -31,7 +31,7 @@ similarity_scaling:
     this parameter and every other dimensionless state variable agree.
 
 numerics:
-  # This resolves a/r_c=0.05 by >2 Plummer radii at n=256. A separate
+  # This resolves a/r_c=0.05 by >2 Plummer radii at n=384. A separate
   # doubled-box control is required before promoting the pilot to production.
   box_over_core_radius: 12.0
   resolutions_by_tier:
