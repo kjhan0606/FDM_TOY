@@ -128,6 +128,26 @@ def _core_radius(radius: np.ndarray, density: np.ndarray, central: float) -> flo
     return float(x0 + (0.5 * central - y0) * (x1 - x0) / (y1 - y0))
 
 
+def _sampled_shell_mean(
+    values: np.ndarray,
+    bin_index: np.ndarray,
+    valid: np.ndarray,
+    radial_bins: int,
+) -> np.ndarray:
+    """Average over sampled Cartesian cells instead of ideal shell volumes."""
+
+    indices = bin_index[valid]
+    counts = np.bincount(indices, minlength=radial_bins)
+    totals = np.bincount(
+        indices,
+        weights=np.asarray(values)[valid],
+        minlength=radial_bins,
+    )
+    means = np.full(radial_bins, np.nan, dtype=float)
+    np.divide(totals, counts, out=means, where=counts > 0)
+    return means
+
+
 def _nearest(values: np.ndarray, target: float) -> int:
     return int(np.argmin(np.abs(values - target)))
 
@@ -218,9 +238,6 @@ def main() -> int:
     radial_edges = np.linspace(0.0, maximum_radius_code, args.radial_bins + 1)
     radial_centres = 0.5 * (radial_edges[:-1] + radial_edges[1:])
     shell_widths = np.diff(radial_edges)
-    shell_geometric_volumes = 4.0 * np.pi / 3.0 * (
-        radial_edges[1:] ** 3 - radial_edges[:-1] ** 3
-    )
     response_rows: list[dict[str, Any]] = []
     radial_rows: list[dict[str, Any]] = []
     if args.resume:
@@ -312,7 +329,12 @@ def main() -> int:
         shell_cross = sum_shell(wave_cross_density)
         shell_mass_flux = sum_shell(radial_mass_current) / shell_widths
         shell_energy_flux = sum_shell(radial_energy_current) / shell_widths
-        shell_density = shell_mass / shell_geometric_volumes
+        shell_density = _sampled_shell_mean(
+            density,
+            bin_index,
+            valid,
+            args.radial_bins,
+        )
         central_selection = radius < cell_code
         central_density_code = float(np.mean(density[central_selection]))
         evolved_core_code = _core_radius(

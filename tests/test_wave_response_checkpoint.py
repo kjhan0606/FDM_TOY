@@ -13,7 +13,21 @@ assert _SPEC is not None and _SPEC.loader is not None
 _MODULE = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_MODULE)
 _resume_rows = _MODULE._resume_rows
+_sampled_shell_mean = _MODULE._sampled_shell_mean
 _write_rows = _MODULE._write_rows
+
+
+def test_cartesian_shell_mean_does_not_dilute_sparse_inner_shells() -> None:
+    values = np.asarray([7.0, 7.0, 3.0, 3.0])
+    bins = np.asarray([0, 1, 2, 2])
+    means = _sampled_shell_mean(
+        values,
+        bins,
+        np.asarray([True, True, True, True]),
+        4,
+    )
+    np.testing.assert_allclose(means[:3], [7.0, 7.0, 3.0])
+    assert np.isnan(means[3])
 
 
 def test_wave_response_checkpoint_round_trip(tmp_path) -> None:
