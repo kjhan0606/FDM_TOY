@@ -16,6 +16,10 @@ from .exchange_scaling import (
 )
 from .subgrid_calibration import (
     ACCEPTED_STATUS,
+    MAXIMUM_ACCEPTED_ENERGY_ERROR_OVER_TRANSFER,
+    MAXIMUM_ACCEPTED_SPATIAL_SYSTEMATIC_FRACTION,
+    MINIMUM_ACCEPTED_COMPLETE_ORBITS,
+    MINIMUM_ACCEPTED_CORE_RADIUS_CELLS,
     SubgridCalibrationRow,
 )
 
@@ -140,10 +144,14 @@ def _matched_run(bin_row: dict, label: str) -> dict:
 def build_source_rows(
     source: CalibrationSource,
     *,
-    maximum_spatial_systematic_fraction: float = 0.20,
-    maximum_energy_error_over_transfer: float = 0.01,
-    minimum_complete_orbits_per_bin: int = 8,
-    minimum_core_radius_cells: float = 2.0,
+    maximum_spatial_systematic_fraction: float = (
+        MAXIMUM_ACCEPTED_SPATIAL_SYSTEMATIC_FRACTION
+    ),
+    maximum_energy_error_over_transfer: float = (
+        MAXIMUM_ACCEPTED_ENERGY_ERROR_OVER_TRANSFER
+    ),
+    minimum_complete_orbits_per_bin: int = MINIMUM_ACCEPTED_COMPLETE_ORBITS,
+    minimum_core_radius_cells: float = MINIMUM_ACCEPTED_CORE_RADIUS_CELLS,
 ) -> SourceBuildResult:
     """Accept bins that pass spatial, Hamiltonian, and core sampling gates."""
 
@@ -158,9 +166,13 @@ def build_source_rows(
     if (
         np.any(~np.isfinite(limits))
         or maximum_spatial_systematic_fraction < 0.0
+        or maximum_spatial_systematic_fraction
+        > MAXIMUM_ACCEPTED_SPATIAL_SYSTEMATIC_FRACTION
         or maximum_energy_error_over_transfer <= 0.0
-        or minimum_core_radius_cells <= 0.0
-        or minimum_complete_orbits_per_bin < 2
+        or maximum_energy_error_over_transfer
+        > MAXIMUM_ACCEPTED_ENERGY_ERROR_OVER_TRANSFER
+        or minimum_core_radius_cells < MINIMUM_ACCEPTED_CORE_RADIUS_CELLS
+        or minimum_complete_orbits_per_bin < MINIMUM_ACCEPTED_COMPLETE_ORBITS
     ):
         raise ValueError("subgrid acceptance limits are invalid")
 
@@ -349,10 +361,14 @@ def write_calibration_table(
     sources: Iterable[CalibrationSource],
     *,
     output: Path,
-    maximum_spatial_systematic_fraction: float = 0.20,
-    maximum_energy_error_over_transfer: float = 0.01,
-    minimum_complete_orbits_per_bin: int = 8,
-    minimum_core_radius_cells: float = 2.0,
+    maximum_spatial_systematic_fraction: float = (
+        MAXIMUM_ACCEPTED_SPATIAL_SYSTEMATIC_FRACTION
+    ),
+    maximum_energy_error_over_transfer: float = (
+        MAXIMUM_ACCEPTED_ENERGY_ERROR_OVER_TRANSFER
+    ),
+    minimum_complete_orbits_per_bin: int = MINIMUM_ACCEPTED_COMPLETE_ORBITS,
+    minimum_core_radius_cells: float = MINIMUM_ACCEPTED_CORE_RADIUS_CELLS,
 ) -> dict:
     """Publish a CSV followed by a checksum-bearing commit sidecar.
 

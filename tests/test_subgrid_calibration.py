@@ -377,3 +377,19 @@ def test_row_rejects_unaccepted_or_underresolved_measurements() -> None:
                 "comparison_complete_orbits": 7,
             }
         )
+    with pytest.raises(ValueError, match="outside the accepted range"):
+        SubgridCalibrationRow(
+            **{
+                **_row(
+                    mass_fraction=0.04,
+                    bin_index=0,
+                    lower=0.2,
+                    upper=0.4,
+                    centre=0.3,
+                    power=-1.0,
+                    torque=-2.0,
+                    systematic=0.05,
+                ).__dict__,
+                "orbital_power_spatial_systematic_fraction": 0.21,
+            }
+        )

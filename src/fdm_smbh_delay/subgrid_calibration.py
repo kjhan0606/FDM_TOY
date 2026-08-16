@@ -20,6 +20,10 @@ from .orbital_exchange import (
 
 ACCEPTED_STATUS = "accepted_with_spatial_systematic"
 ACCEPTED_TABLE_STATUS = "accepted_subgrid_calibration_table"
+MAXIMUM_ACCEPTED_SPATIAL_SYSTEMATIC_FRACTION = 0.20
+MAXIMUM_ACCEPTED_ENERGY_ERROR_OVER_TRANSFER = 0.01
+MINIMUM_ACCEPTED_COMPLETE_ORBITS = 8
+MINIMUM_ACCEPTED_CORE_RADIUS_CELLS = 2.0
 
 
 def _sha256(path: Path) -> str:
@@ -96,10 +100,12 @@ class SubgridCalibrationRow:
             self.separation_bin_index < 0
             or self.reference_resolution <= self.comparison_resolution
             or self.comparison_resolution <= 0
-            or self.reference_complete_orbits < 8
-            or self.comparison_complete_orbits < 8
-            or self.reference_minimum_half_density_radius_over_cell_size < 2.0
-            or self.comparison_minimum_half_density_radius_over_cell_size < 2.0
+            or self.reference_complete_orbits < MINIMUM_ACCEPTED_COMPLETE_ORBITS
+            or self.comparison_complete_orbits < MINIMUM_ACCEPTED_COMPLETE_ORBITS
+            or self.reference_minimum_half_density_radius_over_cell_size
+            < MINIMUM_ACCEPTED_CORE_RADIUS_CELLS
+            or self.comparison_minimum_half_density_radius_over_cell_size
+            < MINIMUM_ACCEPTED_CORE_RADIUS_CELLS
         ):
             raise ValueError("subgrid row numerical metadata are invalid")
         systematic = np.asarray(
@@ -109,8 +115,12 @@ class SubgridCalibrationRow:
                 self.wave_total_spatial_systematic_fraction,
             ]
         )
-        if np.any(systematic < 0.0):
-            raise ValueError("spatial systematic fractions must be non-negative")
+        if np.any(systematic < 0.0) or np.any(
+            systematic > MAXIMUM_ACCEPTED_SPATIAL_SYSTEMATIC_FRACTION
+        ):
+            raise ValueError(
+                "spatial systematic fractions lie outside the accepted range"
+            )
 
 
 @dataclass(frozen=True)
@@ -373,9 +383,62 @@ class SubgridCalibrationTable:
         profiles = sorted({row.profile_id for row in table.rows})
         if summary.get("profiles") != profiles:
             raise ValueError("subgrid release profile list does not match")
+        acceptance = summary.get("acceptance")
+        if not isinstance(acceptance, dict):
+            raise ValueError("subgrid release acceptance criteria are absent")
+        try:
+            maximum_spatial = float(
+                acceptance["maximum_spatial_systematic_fraction"]
+            )
+            maximum_energy_error = float(
+                acceptance["maximum_energy_error_over_transfer"]
+            )
+            minimum_orbits = int(
+                acceptance["minimum_complete_orbits_per_bin"]
+            )
+            minimum_core_cells = float(acceptance["minimum_core_radius_cells"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                "subgrid release acceptance criteria are invalid"
+            ) from error
+        acceptance_values = np.asarray(
+            [maximum_spatial, maximum_energy_error, minimum_core_cells],
+            dtype=float,
+        )
+        if (
+            np.any(~np.isfinite(acceptance_values))
+            or maximum_spatial
+            > MAXIMUM_ACCEPTED_SPATIAL_SYSTEMATIC_FRACTION
+            or maximum_energy_error
+            > MAXIMUM_ACCEPTED_ENERGY_ERROR_OVER_TRANSFER
+            or minimum_orbits < MINIMUM_ACCEPTED_COMPLETE_ORBITS
+            or minimum_core_cells < MINIMUM_ACCEPTED_CORE_RADIUS_CELLS
+            or acceptance.get("extrapolation") != "prohibited"
+        ):
+            raise ValueError("subgrid release acceptance criteria are unsafe")
         sources = summary.get("sources")
         if not isinstance(sources, list) or not sources:
             raise ValueError("subgrid release provenance sources are absent")
+        accepted_rows = 0
+        for source in sources:
+            if not isinstance(source, dict):
+                raise ValueError("subgrid release provenance source is invalid")
+            source_sha256 = source.get("source_sha256")
+            source_rows = source.get("accepted_bins")
+            if (
+                not source.get("profile_id")
+                or not source.get("source_case_id")
+                or not source.get("convergence_summary")
+                or not isinstance(source_sha256, str)
+                or len(source_sha256) != 64
+                or not isinstance(source_rows, int)
+                or source_rows < 0
+                or not isinstance(source.get("rejected_bins"), list)
+            ):
+                raise ValueError("subgrid release provenance source is invalid")
+            accepted_rows += source_rows
+        if accepted_rows != len(table.rows):
+            raise ValueError("subgrid release provenance row count does not close")
         return table
 
     def _mass_plane(

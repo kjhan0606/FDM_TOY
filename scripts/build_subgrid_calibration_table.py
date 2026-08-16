@@ -6,6 +6,12 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from fdm_smbh_delay.subgrid_calibration import (
+    MAXIMUM_ACCEPTED_ENERGY_ERROR_OVER_TRANSFER,
+    MAXIMUM_ACCEPTED_SPATIAL_SYSTEMATIC_FRACTION,
+    MINIMUM_ACCEPTED_COMPLETE_ORBITS,
+    MINIMUM_ACCEPTED_CORE_RADIUS_CELLS,
+)
 from fdm_smbh_delay.subgrid_table_builder import (
     CalibrationSource,
     write_calibration_table,
@@ -27,13 +33,25 @@ def main() -> int:
     parser.add_argument("--source", action="append", required=True, type=_source)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument(
-        "--maximum-spatial-systematic-fraction", type=float, default=0.20
+        "--maximum-spatial-systematic-fraction",
+        type=float,
+        default=MAXIMUM_ACCEPTED_SPATIAL_SYSTEMATIC_FRACTION,
     )
     parser.add_argument(
-        "--maximum-energy-error-over-transfer", type=float, default=0.01
+        "--maximum-energy-error-over-transfer",
+        type=float,
+        default=MAXIMUM_ACCEPTED_ENERGY_ERROR_OVER_TRANSFER,
     )
-    parser.add_argument("--minimum-complete-orbits-per-bin", type=int, default=8)
-    parser.add_argument("--minimum-core-radius-cells", type=float, default=2.0)
+    parser.add_argument(
+        "--minimum-complete-orbits-per-bin",
+        type=int,
+        default=MINIMUM_ACCEPTED_COMPLETE_ORBITS,
+    )
+    parser.add_argument(
+        "--minimum-core-radius-cells",
+        type=float,
+        default=MINIMUM_ACCEPTED_CORE_RADIUS_CELLS,
+    )
     arguments = parser.parse_args()
     write_calibration_table(
         arguments.source,

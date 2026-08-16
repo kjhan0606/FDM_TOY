@@ -214,6 +214,15 @@ def test_builder_requires_wave_response_for_both_resolutions(
         build_source_rows(CalibrationSource("boey2025", path))
 
 
+def test_builder_rejects_relaxed_production_gates(tmp_path: Path) -> None:
+    path = _write_summary(tmp_path)
+    with pytest.raises(ValueError, match="acceptance limits are invalid"):
+        build_source_rows(
+            CalibrationSource("boey2025", path),
+            maximum_spatial_systematic_fraction=0.21,
+        )
+
+
 def test_writer_is_loadable_by_the_runtime_table(tmp_path: Path) -> None:
     path = _write_summary(tmp_path)
     output = tmp_path / "subgrid.csv"
@@ -251,4 +260,32 @@ def test_release_loader_requires_a_commit_sidecar(tmp_path: Path) -> None:
     write_calibration_table([CalibrationSource("boey2025", path)], output=output)
     output.with_suffix(".summary.json").unlink()
     with pytest.raises(ValueError, match="commit sidecar is absent"):
+        SubgridCalibrationTable.from_release(output)
+
+
+def test_release_loader_rejects_relaxed_acceptance_criteria(
+    tmp_path: Path,
+) -> None:
+    path = _write_summary(tmp_path)
+    output = tmp_path / "subgrid.csv"
+    write_calibration_table([CalibrationSource("boey2025", path)], output=output)
+    summary_path = output.with_suffix(".summary.json")
+    summary = json.loads(summary_path.read_text())
+    summary["acceptance"]["maximum_spatial_systematic_fraction"] = 0.21
+    summary_path.write_text(json.dumps(summary))
+    with pytest.raises(ValueError, match="acceptance criteria are unsafe"):
+        SubgridCalibrationTable.from_release(output)
+
+
+def test_release_loader_rejects_a_provenance_count_mismatch(
+    tmp_path: Path,
+) -> None:
+    path = _write_summary(tmp_path)
+    output = tmp_path / "subgrid.csv"
+    write_calibration_table([CalibrationSource("boey2025", path)], output=output)
+    summary_path = output.with_suffix(".summary.json")
+    summary = json.loads(summary_path.read_text())
+    summary["sources"][0]["accepted_bins"] = 0
+    summary_path.write_text(json.dumps(summary))
+    with pytest.raises(ValueError, match="provenance row count does not close"):
         SubgridCalibrationTable.from_release(output)
