@@ -228,6 +228,21 @@ runs only conservation, orbit-averaged exchange, line-density, and three-level
 spatial-convergence measurements. The memory-intensive three-dimensional wave
 response remains a separate operation.
 
+The Boey `384^3` spatial repeats use a separate guarded sequence:
+
+```bash
+tmux new-session -d -s fdm_boey_n384_guard \
+  'exec python scripts/run_guarded_syn101_boey_n384.py --gpu-index 0'
+```
+
+The sequence evolves the 2, 5, and 10 percent cases in that order. A one-time
+preflight requires an idle GPU and no foreign Slurm allocation on `syn101`.
+The guard then keeps one `nvidia-smi pmon` stream and one `squeue --iterate`
+stream instead of launching repeated process scans. An unmanaged GPU process,
+a foreign Slurm allocation, a telemetry failure, or a termination signal stops
+only the managed process group. A later invocation resumes an incomplete case
+from its atomic Torch checkpoint and skips every completed case.
+
 Add `--save-movie-plane` to the live-wave command when a movie is required.
 This option writes the central FDM density plane at every diagnostic output
 without retaining the full three-dimensional wavefunction at the same cadence.
