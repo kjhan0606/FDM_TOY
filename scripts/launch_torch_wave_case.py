@@ -46,10 +46,10 @@ def main() -> int:
         _exec_solver(project, arguments)
     output = _output_argument(arguments)
     metadata = output / "fdm_adapter_metadata.json"
+    metadata_was_present = metadata.is_file()
 
-    if metadata.is_file():
+    if metadata_was_present:
         _snapshot_run(project, output)
-        _exec_solver(project, arguments)
 
     pid_marker = _pid_marker(output)
     runner = project / "scripts" / "run_torch_wave_case.py"
@@ -70,7 +70,7 @@ def main() -> int:
     try:
         while process.poll() is None and not metadata.is_file():
             time.sleep(0.1)
-        if metadata.is_file():
+        if not metadata_was_present and metadata.is_file():
             _snapshot_run(project, output)
         return process.wait()
     except BaseException:

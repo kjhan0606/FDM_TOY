@@ -87,6 +87,109 @@ def test_solver_pid_marker_remains_until_wait(
     assert not marker.exists()
 
 
+def test_existing_metadata_resume_publishes_child_pid_until_wait(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "run"
+    output.mkdir()
+    (output / "fdm_adapter_metadata.json").write_text("{}")
+    marker = tmp_path / "solver.pid"
+    events: list[str] = []
+
+    class FakeProcess:
+        pid = 23456
+
+        def poll(self):
+            return None
+
+        def wait(self):
+            events.append("wait")
+            assert marker.read_text() == f"{self.pid}\n"
+            return 0
+
+        def terminate(self):
+            raise AssertionError("the successful resumed solver must not terminate")
+
+        def send_signal(self, _signum):
+            raise AssertionError("the test does not send a signal")
+
+    def snapshot(_project, snapshot_output):
+        assert snapshot_output == output.resolve()
+        events.append("snapshot")
+        return {}
+
+    def popen(_arguments):
+        assert events == ["snapshot"]
+        assert not marker.exists()
+        events.append("popen")
+        return FakeProcess()
+
+    monkeypatch.setenv("FDM_SOLVER_PID_FILE", str(marker))
+    monkeypatch.setattr(launch_torch_wave_case, "_snapshot_run", snapshot)
+    monkeypatch.setattr(launch_torch_wave_case.subprocess, "Popen", popen)
+    monkeypatch.setattr(
+        launch_torch_wave_case,
+        "_exec_solver",
+        lambda *_args: pytest.fail("resume must use the marker-aware wrapper"),
+    )
+    monkeypatch.setattr(
+        launch_torch_wave_case.signal,
+        "signal",
+        lambda _signum, _handler: None,
+    )
+    monkeypatch.setattr(
+        launch_torch_wave_case.sys,
+        "argv",
+        [
+            "launch_torch_wave_case.py",
+            "reference",
+            "--output",
+            str(output),
+            "--resume",
+        ],
+    )
+
+    assert launch_torch_wave_case.main() == 0
+    assert events == ["snapshot", "popen", "wait"]
+    assert not marker.exists()
+
+
+def test_existing_metadata_spawn_failure_does_not_publish_stale_pid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "run"
+    output.mkdir()
+    (output / "fdm_adapter_metadata.json").write_text("{}")
+    marker = tmp_path / "solver.pid"
+
+    monkeypatch.setenv("FDM_SOLVER_PID_FILE", str(marker))
+    monkeypatch.setattr(
+        launch_torch_wave_case,
+        "_snapshot_run",
+        lambda _project, _output: {},
+    )
+
+    def fail_spawn(_arguments):
+        raise OSError("solver spawn failed")
+
+    monkeypatch.setattr(launch_torch_wave_case.subprocess, "Popen", fail_spawn)
+    monkeypatch.setattr(
+        launch_torch_wave_case.sys,
+        "argv",
+        [
+            "launch_torch_wave_case.py",
+            "reference",
+            "--output",
+            str(output),
+            "--resume",
+        ],
+    )
+
+    with pytest.raises(OSError, match="spawn failed"):
+        launch_torch_wave_case.main()
+    assert not marker.exists()
+
+
 def test_source_snapshot_is_repeatable_and_immutable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
