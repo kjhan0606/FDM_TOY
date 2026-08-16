@@ -123,6 +123,57 @@ class SubgridCalibrationRow:
             )
 
 
+def summarize_calibrated_domains(
+    rows: Iterable[SubgridCalibrationRow],
+) -> list[dict]:
+    """Return deterministic mass-plane domains and maximum systematics."""
+
+    grouped: dict[tuple[str, float], list[SubgridCalibrationRow]] = {}
+    for row in rows:
+        grouped.setdefault(
+            (row.profile_id, row.binary_to_soliton_mass), []
+        ).append(row)
+    domains = []
+    for (profile_id, mass_fraction), group in sorted(grouped.items()):
+        ordered = sorted(group, key=lambda row: row.separation_bin_index)
+        domains.append(
+            {
+                "profile_id": profile_id,
+                "schrodinger_poisson_similarity_parameter": ordered[
+                    0
+                ].schrodinger_poisson_similarity_parameter,
+                "binary_to_soliton_mass": mass_fraction,
+                "source_case_ids": sorted(
+                    {row.source_case_id for row in ordered}
+                ),
+                "accepted_separation_bin_indices": [
+                    row.separation_bin_index for row in ordered
+                ],
+                "minimum_separation_over_core_radius": min(
+                    row.lower_separation_over_core_radius for row in ordered
+                ),
+                "maximum_separation_over_core_radius": max(
+                    row.upper_separation_over_core_radius for row in ordered
+                ),
+                "maximum_spatial_systematic_fraction": {
+                    "orbital_power": max(
+                        row.orbital_power_spatial_systematic_fraction
+                        for row in ordered
+                    ),
+                    "orbital_torque": max(
+                        row.orbital_torque_spatial_systematic_fraction
+                        for row in ordered
+                    ),
+                    "wave_total_energy_rate": max(
+                        row.wave_total_spatial_systematic_fraction
+                        for row in ordered
+                    ),
+                },
+            }
+        )
+    return domains
+
+
 @dataclass(frozen=True)
 class InterpolatedSubgridRates:
     """Dimensionless exchange rates at one point inside the measured domain."""
@@ -425,6 +476,7 @@ class SubgridCalibrationTable:
                 raise ValueError("subgrid release provenance source is invalid")
             source_sha256 = source.get("source_sha256")
             source_rows = source.get("accepted_bins")
+            input_files = source.get("inputs")
             if (
                 not source.get("profile_id")
                 or not source.get("source_case_id")
@@ -434,11 +486,55 @@ class SubgridCalibrationTable:
                 or not isinstance(source_rows, int)
                 or source_rows < 0
                 or not isinstance(source.get("rejected_bins"), list)
+                or not isinstance(input_files, list)
+                or not input_files
             ):
                 raise ValueError("subgrid release provenance source is invalid")
+            input_roles = []
+            for input_file in input_files:
+                if not isinstance(input_file, dict):
+                    raise ValueError(
+                        "subgrid release provenance input is invalid"
+                    )
+                input_sha256 = input_file.get("sha256")
+                if (
+                    not input_file.get("role")
+                    or not input_file.get("path")
+                    or not isinstance(input_sha256, str)
+                    or len(input_sha256) != 64
+                ):
+                    raise ValueError(
+                        "subgrid release provenance input is invalid"
+                    )
+                input_roles.append(input_file["role"])
+            if len(input_roles) != len(set(input_roles)):
+                raise ValueError("subgrid release provenance roles are duplicated")
+            required_roles = {
+                "convergence_summary",
+                "reference_metadata",
+                "reference_config",
+                "reference_wave_response",
+                "comparison_metadata",
+                "comparison_config",
+                "comparison_wave_response",
+            }
+            if set(input_roles) != required_roles:
+                raise ValueError("subgrid release provenance roles are incomplete")
+            convergence_sha256 = next(
+                input_file["sha256"]
+                for input_file in input_files
+                if input_file["role"] == "convergence_summary"
+            )
+            if source_sha256 != convergence_sha256:
+                raise ValueError(
+                    "subgrid release convergence checksum does not match"
+                )
             accepted_rows += source_rows
         if accepted_rows != len(table.rows):
             raise ValueError("subgrid release provenance row count does not close")
+        domains = summary.get("calibrated_domains")
+        if domains != summarize_calibrated_domains(table.rows):
+            raise ValueError("subgrid release calibrated domains do not match")
         return table
 
     def _mass_plane(

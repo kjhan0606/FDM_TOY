@@ -231,6 +231,31 @@ def test_writer_is_loadable_by_the_runtime_table(tmp_path: Path) -> None:
     )
     assert summary["rows"] == 1
     assert summary["sources"][0]["accepted_bins"] == 1
+    assert len(summary["sources"][0]["inputs"]) == 7
+    assert all(
+        len(record["sha256"]) == 64
+        for record in summary["sources"][0]["inputs"]
+    )
+    assert summary["calibrated_domains"] == [
+        {
+            "profile_id": "boey2025",
+            "schrodinger_poisson_similarity_parameter": (
+                summary["calibrated_domains"][0][
+                    "schrodinger_poisson_similarity_parameter"
+                ]
+            ),
+            "binary_to_soliton_mass": 0.04,
+            "source_case_ids": ["boey_each02pct"],
+            "accepted_separation_bin_indices": [0],
+            "minimum_separation_over_core_radius": 0.2,
+            "maximum_separation_over_core_radius": 0.4,
+            "maximum_spatial_systematic_fraction": {
+                "orbital_power": 0.10,
+                "orbital_torque": 0.10,
+                "wave_total_energy_rate": 0.10,
+            },
+        }
+    ]
     assert len(summary["table"]["sha256"]) == 64
     assert output.with_suffix(".summary.json").is_file()
     loaded = SubgridCalibrationTable.from_release(output)
@@ -288,4 +313,18 @@ def test_release_loader_rejects_a_provenance_count_mismatch(
     summary["sources"][0]["accepted_bins"] = 0
     summary_path.write_text(json.dumps(summary))
     with pytest.raises(ValueError, match="provenance row count does not close"):
+        SubgridCalibrationTable.from_release(output)
+
+
+def test_release_loader_requires_complete_input_provenance(
+    tmp_path: Path,
+) -> None:
+    path = _write_summary(tmp_path)
+    output = tmp_path / "subgrid.csv"
+    write_calibration_table([CalibrationSource("boey2025", path)], output=output)
+    summary_path = output.with_suffix(".summary.json")
+    summary = json.loads(summary_path.read_text())
+    summary["sources"][0]["inputs"] = summary["sources"][0]["inputs"][:-1]
+    summary_path.write_text(json.dumps(summary))
+    with pytest.raises(ValueError, match="provenance roles are incomplete"):
         SubgridCalibrationTable.from_release(output)

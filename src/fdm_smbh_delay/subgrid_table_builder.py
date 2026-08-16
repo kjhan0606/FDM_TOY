@@ -21,6 +21,7 @@ from .subgrid_calibration import (
     MINIMUM_ACCEPTED_COMPLETE_ORBITS,
     MINIMUM_ACCEPTED_CORE_RADIUS_CELLS,
     SubgridCalibrationRow,
+    summarize_calibrated_domains,
 )
 
 
@@ -36,6 +37,7 @@ class SourceBuildResult:
     source_case_id: str
     convergence_summary: str
     source_sha256: str
+    input_files: tuple[dict, ...]
     accepted_rows: tuple[SubgridCalibrationRow, ...]
     rejected_bins: tuple[dict, ...]
 
@@ -139,6 +141,15 @@ def _matched_run(bin_row: dict, label: str) -> dict:
     if len(matches) != 1:
         raise ValueError(f"matched bin does not contain one {label} row")
     return matches[0]
+
+
+def _input_record(role: str, path: Path) -> dict:
+    resolved = path.expanduser().resolve()
+    return {
+        "role": role,
+        "path": str(resolved),
+        "sha256": _sha256(resolved),
+    }
 
 
 def build_source_rows(
@@ -352,6 +363,27 @@ def build_source_rows(
         source_case_id=reference["case_id"],
         convergence_summary=str(path),
         source_sha256=_sha256(path),
+        input_files=(
+            _input_record("convergence_summary", path),
+            _input_record(
+                "reference_metadata",
+                reference_run / "fdm_adapter_metadata.json",
+            ),
+            _input_record("reference_config", reference_run / "config.uldm"),
+            _input_record(
+                "reference_wave_response",
+                reference_run / "wave_response_timeseries.csv",
+            ),
+            _input_record(
+                "comparison_metadata",
+                comparison_run / "fdm_adapter_metadata.json",
+            ),
+            _input_record("comparison_config", comparison_run / "config.uldm"),
+            _input_record(
+                "comparison_wave_response",
+                comparison_run / "wave_response_timeseries.csv",
+            ),
+        ),
         accepted_rows=tuple(accepted),
         rejected_bins=tuple(rejected),
     )
@@ -422,6 +454,7 @@ def write_calibration_table(
         "schema_version": 1,
         "rows": len(rows),
         "profiles": sorted({row.profile_id for row in rows}),
+        "calibrated_domains": summarize_calibrated_domains(rows),
         "table": {
             "file": output.name,
             "sha256": table_sha256,
@@ -444,6 +477,7 @@ def write_calibration_table(
                 "source_case_id": result.source_case_id,
                 "convergence_summary": result.convergence_summary,
                 "source_sha256": result.source_sha256,
+                "inputs": list(result.input_files),
                 "accepted_bins": len(result.accepted_rows),
                 "rejected_bins": list(result.rejected_bins),
             }
