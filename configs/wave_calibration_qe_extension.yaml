@@ -17,7 +17,7 @@ cases:
   - {case_id: qe_q030_e000_a020, tier: 1, mass_ratio_q: 0.3, eccentricity: 0.0, binary_to_soliton_mass: 0.10, semi_major_axis_over_core_radius: 0.20}
   - {case_id: qe_q010_e000_a020, tier: 1, mass_ratio_q: 0.1, eccentricity: 0.0, binary_to_soliton_mass: 0.10, semi_major_axis_over_core_radius: 0.20}
   - {case_id: qe_q100_e030_a020, tier: 1, mass_ratio_q: 1.0, eccentricity: 0.3, binary_to_soliton_mass: 0.10, semi_major_axis_over_core_radius: 0.20}
-  - {case_id: qe_q100_e060_a020, tier: 1, mass_ratio_q: 1.0, eccentricity: 0.6, binary_to_soliton_mass: 0.10, semi_major_axis_over_core_radius: 0.20}
+  - {case_id: qe_q100_e060_a020, tier: 2, mass_ratio_q: 1.0, eccentricity: 0.6, binary_to_soliton_mass: 0.10, semi_major_axis_over_core_radius: 0.20}
   - {case_id: qe_q030_e030_a020, tier: 1, mass_ratio_q: 0.3, eccentricity: 0.3, binary_to_soliton_mass: 0.10, semi_major_axis_over_core_radius: 0.20}
   - {case_id: qe_q100_e000_a010, tier: 2, mass_ratio_q: 1.0, eccentricity: 0.0, binary_to_soliton_mass: 0.10, semi_major_axis_over_core_radius: 0.10}
   - {case_id: qe_q100_e000_a005, tier: 3, mass_ratio_q: 1.0, eccentricity: 0.0, binary_to_soliton_mass: 0.10, semi_major_axis_over_core_radius: 0.05}
@@ -31,13 +31,16 @@ similarity_scaling:
     this parameter and every other dimensionless state variable agree.
 
 numerics:
-  # This resolves a/r_c=0.05 by >2 Plummer radii at n=384. A separate
-  # doubled-box control is required before promoting the pilot to production.
+  # Every run must retain an orbit-mean separation of at least two cells and a
+  # Kepler pericentre of at least two Plummer radii. A separate doubled-box
+  # control is required before promoting the pilot to production.
   box_over_core_radius: 12.0
+  minimum_kepler_mean_separation_cells: 2.0
+  minimum_pericentre_separation_plummer_radii: 2.0
   resolutions_by_tier:
     1: [128, 256]
     2: [256, 512]
-    3: [384, 512]
+    3: [512, 768]
 
 energy_accounting:
   interaction_energy: integral_rho_phi_bh_dv_counted_once

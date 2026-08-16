@@ -77,6 +77,14 @@ def main() -> int:
         cases,
         box_over_core_radius=float(numerics["box_over_core_radius"]),
         resolutions_by_tier=resolutions,
+        minimum_kepler_mean_separation_cells=float(
+            numerics.get("minimum_kepler_mean_separation_cells", 0.0)
+        ),
+        minimum_pericentre_separation_plummer_radii=float(
+            numerics.get(
+                "minimum_pericentre_separation_plummer_radii", 0.0
+            )
+        ),
     )
     args.output.mkdir(parents=True, exist_ok=True)
     case_rows = [case.as_dict() for case in cases]

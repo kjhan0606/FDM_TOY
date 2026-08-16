@@ -393,8 +393,9 @@ def _matched_separation_bins(
         "aggregate_fractional_rate_differences_from_reference": aggregate,
         "interpretation": (
             "duration-weighted complete-orbit rates are compared at matched "
-            "physical separation; rows after the first two-cell crossing are "
-            "excluded even if a later oscillation re-enters the resolved range"
+            "physical separation; rows after the first complete orbit whose "
+            "mean separation falls below two cell widths are excluded even if "
+            "a later orbit re-enters the resolved range"
         ),
     }
 

@@ -127,3 +127,56 @@ def test_explicit_qe_design_preserves_apocentre_and_small_axis() -> None:
         case.semi_major_axis_pc * 1.3
     )
     assert case.semi_major_axis_over_core_radius == pytest.approx(0.05)
+
+
+def test_small_separation_run_grid_rejects_an_underresolved_coarse_run() -> None:
+    cases = designed_parameter_cases(
+        [
+            {
+                "case_id": "qe_q030_e030_a005",
+                "tier": 3,
+                "mass_ratio_q": 0.3,
+                "eccentricity": 0.3,
+                "binary_to_soliton_mass": 0.1,
+                "semi_major_axis_over_core_radius": 0.05,
+            }
+        ]
+    )
+    with pytest.raises(ValueError, match="qe_q030_e030_a005_n384"):
+        run_specifications(
+            cases,
+            box_over_core_radius=12.0,
+            resolutions_by_tier={3: [384, 512]},
+            minimum_kepler_mean_separation_cells=2.0,
+            minimum_pericentre_separation_plummer_radii=2.0,
+        )
+
+
+def test_small_separation_run_grid_records_spatial_margins() -> None:
+    cases = designed_parameter_cases(
+        [
+            {
+                "case_id": "qe_q030_e030_a005",
+                "tier": 3,
+                "mass_ratio_q": 0.3,
+                "eccentricity": 0.3,
+                "binary_to_soliton_mass": 0.1,
+                "semi_major_axis_over_core_radius": 0.05,
+            }
+        ]
+    )
+    runs = run_specifications(
+        cases,
+        box_over_core_radius=12.0,
+        resolutions_by_tier={3: [512, 768]},
+        minimum_kepler_mean_separation_cells=2.0,
+        minimum_pericentre_separation_plummer_radii=2.0,
+    )
+    assert [run.effective_grid_cells for run in runs] == [512, 768]
+    assert all(run.spatial_acceptance_passed for run in runs)
+    assert runs[0].kepler_mean_separation_over_cell_size == pytest.approx(
+        2.2293333333
+    )
+    assert runs[0].pericentre_separation_over_plummer_radius == pytest.approx(
+        2.9866666667
+    )
