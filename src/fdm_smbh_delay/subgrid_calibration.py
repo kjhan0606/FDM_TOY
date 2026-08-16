@@ -160,6 +160,7 @@ class CalibratedOrbitalStep:
     """One finite target-rate update with explicit conservation residuals."""
 
     rates: PhysicalSubgridRates
+    residual: ResidualOrbitalRates
     exchange: FiniteOrbitalExchangeStep
     energy_closure_error: float
     angular_momentum_closure_error: float
@@ -640,14 +641,29 @@ def advance_calibrated_exchange(
     semimajor_axis_pc: float,
     eccentricity: float,
     time_step_myr: float,
+    resolved_orbital_power: float = 0.0,
+    resolved_orbital_torque: float = 0.0,
 ) -> CalibratedOrbitalStep:
+    """Apply only the calibrated exchange absent from the resolved wake.
+
+    For an unresolved calculation the resolved rates retain their zero
+    defaults. A live-wave calculation must supply its measured work and torque;
+    these are subtracted from the target before the finite orbital update so
+    the same FDM exchange is not applied twice.
+    """
+
+    residual = residual_orbital_rates(
+        rates,
+        resolved_orbital_power=resolved_orbital_power,
+        resolved_orbital_torque=resolved_orbital_torque,
+    )
     exchange = advance_keplerian_exchange(
         mass1_msun=mass1_msun,
         mass2_msun=mass2_msun,
         semimajor_axis_pc=semimajor_axis_pc,
         eccentricity=eccentricity,
-        orbital_power=rates.orbital_power,
-        orbital_torque=rates.orbital_torque,
+        orbital_power=residual.residual_orbital_power,
+        orbital_torque=residual.residual_orbital_torque,
         time_step_myr=time_step_myr,
     )
     energy_closure = (
@@ -669,6 +685,7 @@ def advance_calibrated_exchange(
     )
     return CalibratedOrbitalStep(
         rates=rates,
+        residual=residual,
         exchange=exchange,
         energy_closure_error=float(energy_closure),
         angular_momentum_closure_error=float(angular_momentum_closure),

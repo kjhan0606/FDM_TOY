@@ -338,6 +338,11 @@ Production code should load this pair with
 row count, profile list, and CSV SHA-256. `from_csv` is reserved for
 exploratory data and test fixtures. No interpolation is permitted outside the
 accepted mass and separation ranges or across a rejected separation bin.
+`advance_calibrated_exchange` accepts the orbital power and torque already
+measured from a resolved wake and applies only the residual relative to the
+calibrated target. Leave those arguments at zero only when the FDM response is
+unresolved; applying the full target on top of a live wake would count the same
+exchange twice.
 
 ## Horizon Run 5 comparison sample
 

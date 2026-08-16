@@ -307,6 +307,43 @@ def test_residual_rates_remove_resolved_work_without_double_counting() -> None:
     )
 
 
+def test_finite_update_applies_only_exchange_absent_from_the_resolved_wake() -> None:
+    rates = physical_subgrid_rates(
+        _table(),
+        profile_id="boey2025",
+        mass1_msun=2.0e7,
+        mass2_msun=2.0e7,
+        soliton_mass_msun=1.0e9,
+        core_radius_pc=2.0,
+        separation_pc=0.8,
+    )
+    time_step = 1.0e-8
+    step = advance_calibrated_exchange(
+        rates,
+        mass1_msun=2.0e7,
+        mass2_msun=2.0e7,
+        semimajor_axis_pc=0.8,
+        eccentricity=0.1,
+        time_step_myr=time_step,
+        resolved_orbital_power=0.25 * rates.orbital_power,
+        resolved_orbital_torque=0.40 * rates.orbital_torque,
+    )
+    assert step.residual.residual_orbital_power == pytest.approx(
+        0.75 * rates.orbital_power
+    )
+    assert step.residual.residual_orbital_torque == pytest.approx(
+        0.60 * rates.orbital_torque
+    )
+    assert step.exchange.wave_energy_increment == pytest.approx(
+        -step.residual.residual_orbital_power * time_step
+    )
+    assert step.exchange.wave_angular_momentum_increment == pytest.approx(
+        -step.residual.residual_orbital_torque * time_step
+    )
+    assert abs(step.energy_closure_relative_to_exchange) < 1.0e-10
+    assert abs(step.angular_momentum_closure_relative_to_exchange) < 1.0e-10
+
+
 def test_row_rejects_unaccepted_or_underresolved_measurements() -> None:
     with pytest.raises(ValueError, match="spatial convergence gate"):
         SubgridCalibrationRow(
