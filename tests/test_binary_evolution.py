@@ -144,7 +144,8 @@ def test_uncalibrated_fdm_state_is_not_silently_extrapolated() -> None:
         config=BinaryEvolutionConfig(10.0, 0.1, 0.01),
     )
     assert result.status == "uncalibrated"
-    assert result.environment_fdm_segment.status == "missing"
+    assert result.environment_fdm_segment.status == "censored"
+    assert result.environment_fdm_segment.reason == result.reason
 
 
 def test_legacy_fdm_adapter_rejects_unmeasured_q_and_e() -> None:

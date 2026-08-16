@@ -6,10 +6,13 @@ from dataclasses import asdict, dataclass
 import hashlib
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 import numpy as np
 import yaml
+
+from .delay_budget import DelaySegment
 
 
 ZOOM_SCHEMA_VERSION = 1
@@ -516,6 +519,40 @@ class KpcDelayCalibrationTable:
         ids = [row.physics.physics_id for row in rows]
         if len(ids) != len(set(ids)):
             raise ValueError("kpc delay calibration physics points are duplicated")
+        for row in rows:
+            values = np.asarray(
+                [
+                    row.simulated_kpc_to_hard_delay_myr,
+                    row.analytic_kpc_to_hard_delay_myr,
+                    row.multiplicative_delay_correction,
+                    row.resolution_systematic_fraction,
+                ],
+                dtype=float,
+            )
+            if (
+                np.any(~np.isfinite(values))
+                or np.any(values[:3] <= 0.0)
+                or values[3] < 0.0
+            ):
+                raise ValueError("kpc delay calibration row has invalid numeric values")
+            expected = (
+                row.simulated_kpc_to_hard_delay_myr
+                / row.analytic_kpc_to_hard_delay_myr
+            )
+            if not np.isclose(
+                row.multiplicative_delay_correction,
+                expected,
+                rtol=1.0e-12,
+                atol=0.0,
+            ):
+                raise ValueError("kpc delay calibration correction is inconsistent")
+            if (
+                not isinstance(row.source_case_id, str)
+                or not row.source_case_id.strip()
+                or not isinstance(row.source_sha256, str)
+                or re.fullmatch(r"[0-9a-fA-F]{64}", row.source_sha256) is None
+            ):
+                raise ValueError("kpc delay calibration provenance is incomplete")
         self.rows = rows
 
     def lookup(self, physics: ZoomPhysicsPoint) -> KpcDelayCalibrationRow:
@@ -525,3 +562,65 @@ class KpcDelayCalibrationTable:
                 "requested kpc delay point is uncalibrated; extrapolation is prohibited"
             )
         return matches[0]
+
+    def calibrated_delay_segment(
+        self,
+        physics: ZoomPhysicsPoint,
+        analytic_baseline_delay_myr: float,
+        *,
+        name: str = "kpc_to_pc",
+    ) -> DelaySegment:
+        """Apply an accepted exact-point correction without extrapolation.
+
+        A point absent from the accepted table is an explicit censored physical
+        result. Malformed baseline inputs are caller errors and raise
+        ``ValueError`` rather than being confused with missing calibration
+        support.
+        """
+
+        if isinstance(analytic_baseline_delay_myr, bool):
+            raise ValueError("analytic baseline delay must be finite and positive")
+        try:
+            baseline = float(analytic_baseline_delay_myr)
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                "analytic baseline delay must be finite and positive"
+            ) from error
+        if not np.isfinite(baseline) or baseline <= 0.0:
+            raise ValueError("analytic baseline delay must be finite and positive")
+        try:
+            row = self.lookup(physics)
+        except ValueError:
+            return DelaySegment(
+                name,
+                "censored",
+                None,
+                reason=(
+                    "requested physical point is outside accepted kpc-delay "
+                    "support; extrapolation is prohibited"
+                ),
+            )
+        return DelaySegment(
+            name,
+            "complete",
+            baseline * row.multiplicative_delay_correction,
+            reason="accepted exact-point galaxy-merger zoom correction",
+            source_case_id=row.source_case_id,
+            source_sha256=row.source_sha256,
+        )
+
+
+def apply_kpc_delay_calibration(
+    table: KpcDelayCalibrationTable,
+    *,
+    physics: ZoomPhysicsPoint,
+    analytic_baseline_delay_myr: float,
+    name: str = "kpc_to_pc",
+) -> DelaySegment:
+    """Public functional wrapper for exact-point kpc-delay calibration."""
+
+    return table.calibrated_delay_segment(
+        physics,
+        analytic_baseline_delay_myr,
+        name=name,
+    )

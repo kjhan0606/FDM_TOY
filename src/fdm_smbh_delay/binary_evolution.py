@@ -178,7 +178,7 @@ def calibrated_qe_fdm_rate_provider(
     soliton_mass_msun: float,
     core_radius_pc: float,
 ) -> FDMRateProvider:
-    """Adapt an accepted schema-v3 table without q, e, or a extrapolation.
+    """Adapt an accepted schema-v4 table without q, e, or a extrapolation.
 
     The table admits interpolation only when measured ``(q, e)`` planes
     bracket the state and share mass/separation support. Converting a failure to
@@ -380,13 +380,23 @@ class BinaryEvolutionResult:
                 "timeout",
                 None,
                 elapsed_lower_bound_myr=self.final_state.elapsed_myr,
+                reason=self.reason,
             )
-        if self.status in {"checkpoint", "uncalibrated"}:
+        if self.status == "checkpoint":
             return DelaySegment(
                 "environment_fdm_to_gw",
                 "missing",
                 None,
                 elapsed_lower_bound_myr=self.final_state.elapsed_myr,
+                reason=self.reason,
+            )
+        if self.status == "uncalibrated":
+            return DelaySegment(
+                "environment_fdm_to_gw",
+                "censored",
+                None,
+                elapsed_lower_bound_myr=self.final_state.elapsed_myr,
+                reason=self.reason,
             )
         return DelaySegment("environment_fdm_to_gw", "invalid", None)
 

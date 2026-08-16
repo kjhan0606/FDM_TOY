@@ -9,6 +9,7 @@ from fdm_smbh_delay.zoom_calibration import (
     KpcDelayCalibrationTable,
     ZoomPhysicsPoint,
     accepted_kpc_delay_row,
+    apply_kpc_delay_calibration,
     build_zoom_grid,
     compare_zoom_resolution_pair,
     read_zoom_result,
@@ -128,6 +129,45 @@ def test_resolution_pair_builds_exact_point_delay_row(tmp_path) -> None:
     unmeasured = replace(fine_case.physics, mass_ratio_q=0.7)
     with pytest.raises(ValueError, match="extrapolation is prohibited"):
         table.lookup(unmeasured)
+
+    calibrated = apply_kpc_delay_calibration(
+        table,
+        physics=fine_case.physics,
+        analytic_baseline_delay_myr=50.0,
+    )
+    assert calibrated.status == "complete"
+    assert calibrated.delay_myr == pytest.approx(40.0)
+    assert calibrated.source_case_id == row.source_case_id
+    assert calibrated.source_sha256 == row.source_sha256
+    assert len(calibrated.source_sha256) == 64
+
+    outside_support = table.calibrated_delay_segment(unmeasured, 50.0)
+    assert outside_support.status == "censored"
+    assert outside_support.delay_myr is None
+    assert "extrapolation is prohibited" in (outside_support.reason or "")
+
+    malformed = replace(row, source_sha256="not-a-sha256")
+    with pytest.raises(ValueError, match="provenance is incomplete"):
+        KpcDelayCalibrationTable((malformed,))
+
+
+@pytest.mark.parametrize("baseline", [0.0, -1.0, float("nan"), float("inf"), True])
+def test_kpc_delay_consumer_rejects_invalid_baseline(tmp_path, baseline) -> None:
+    grid = build_zoom_grid(_specification())
+    coarse_case, fine_case = grid.cases[:2]
+    coarse_path = tmp_path / "coarse.json"
+    fine_path = tmp_path / "fine.json"
+    _write_result(coarse_path, coarse_case, delay_scale=1.1)
+    _write_result(fine_path, fine_case, delay_scale=1.0)
+    row = accepted_kpc_delay_row(
+        compare_zoom_resolution_pair(
+            read_zoom_result(fine_path, fine_case),
+            read_zoom_result(coarse_path, coarse_case),
+        )
+    )
+    table = KpcDelayCalibrationTable((row,))
+    with pytest.raises(ValueError, match="finite and positive"):
+        table.calibrated_delay_segment(fine_case.physics, baseline)
 
 
 def test_underresolved_transition_rejects_zoom_pair(tmp_path) -> None:
