@@ -27,10 +27,14 @@ EX_SOFTWARE = 70
 EX_TEMPFAIL = 75
 EX_CONFIG = 78
 
-# The manifest's uniform-grid estimates are 16 GiB at n512 and 54 GiB at
-# n768.  Full evolution retains additional fields and FFT workspaces, so the
-# guarded production floors require substantially more physical memory.
-MIN_TOTAL_MEMORY_MIB = {512: 48 * 1024, 768: 80 * 1024}
+# The n512 solver has a measured 19,326 MiB A10 footprint.  A 22 GiB total
+# floor admits the 23,028 MiB A10 while the 21 GiB free floor preserves more
+# than 2 GiB above that observation.  The n768 manifest estimate is 54 GiB;
+# it remains restricted to an 80 GiB-class GPU with 64 GiB actually free.
+# These floors complement, rather than replace, the NVML process collision
+# guard before and during every owned stage.
+MIN_TOTAL_MEMORY_MIB = {512: 22 * 1024, 768: 80 * 1024}
+MIN_FREE_MEMORY_MIB = {512: 21 * 1024, 768: 64 * 1024}
 GPU_STAGES = {"seed", "torch"}
 
 
@@ -47,6 +51,8 @@ class GpuMonitor(Protocol):
 
     def total_memory_mib(self) -> int: ...
 
+    def free_memory_mib(self) -> int: ...
+
     def close(self) -> None: ...
 
 
@@ -61,7 +67,7 @@ class NvmlGpuMonitor(NvmlComputeProcesses):
         ]
         self._library.nvmlDeviceGetMemoryInfo.restype = ctypes.c_int
 
-    def total_memory_mib(self) -> int:
+    def _memory_info(self) -> _MemoryInfo:
         info = _MemoryInfo()
         self._check(
             self._library.nvmlDeviceGetMemoryInfo(
@@ -69,7 +75,13 @@ class NvmlGpuMonitor(NvmlComputeProcesses):
             ),
             "nvmlDeviceGetMemoryInfo",
         )
-        return int(info.total // (1024 * 1024))
+        return info
+
+    def total_memory_mib(self) -> int:
+        return int(self._memory_info().total // (1024 * 1024))
+
+    def free_memory_mib(self) -> int:
+        return int(self._memory_info().free // (1024 * 1024))
 
 
 class DuplicateRunner(RuntimeError):
@@ -208,6 +220,8 @@ class GuardedQeRunner:
         poll_seconds: float,
         interrupt_grace_seconds: float,
         marker_timeout_seconds: float = 60.0,
+        wait_until_gpu_empty: bool = False,
+        gpu_empty_timeout_seconds: float | None = None,
         plan_builder: Callable[..., list[RunPlanRow]] = build_plan,
         monitor_factory: Callable[[int], GpuMonitor] = NvmlGpuMonitor,
         popen_factory: Callable[..., subprocess.Popen] = subprocess.Popen,
@@ -222,6 +236,8 @@ class GuardedQeRunner:
         self.poll_seconds = poll_seconds
         self.interrupt_grace_seconds = interrupt_grace_seconds
         self.marker_timeout_seconds = marker_timeout_seconds
+        self.wait_until_gpu_empty = wait_until_gpu_empty
+        self.gpu_empty_timeout_seconds = gpu_empty_timeout_seconds
         self.plan_builder = plan_builder
         self.monitor_factory = monitor_factory
         self.popen_factory = popen_factory
@@ -320,15 +336,30 @@ class GuardedQeRunner:
             raise ValueError("Torch solver PID marker is invalid")
         return solver_pid
 
-    def _memory_preflight(self, row: RunPlanRow, monitor: GpuMonitor) -> str | None:
-        required = MIN_TOTAL_MEMORY_MIB.get(row.resolution)
-        if required is None:
+    def _memory_preflight(
+        self, row: RunPlanRow, monitor: GpuMonitor
+    ) -> tuple[str, int, str] | None:
+        required_total = MIN_TOTAL_MEMORY_MIB.get(row.resolution)
+        required_free = MIN_FREE_MEMORY_MIB.get(row.resolution)
+        if required_total is None or required_free is None:
             return None
-        available = monitor.total_memory_mib()
-        if available < required:
+        total = monitor.total_memory_mib()
+        if total < required_total:
             return (
-                f"n{row.resolution} requires at least {required} MiB total GPU "
-                f"memory; NVML reported {available} MiB"
+                "memory_capacity_censored",
+                EX_CONFIG,
+                f"n{row.resolution} requires at least {required_total} MiB "
+                f"total GPU memory; NVML reported {total} MiB; this GPU is "
+                "outside the guarded run's supported capacity",
+            )
+        free = monitor.free_memory_mib()
+        if free < required_free:
+            return (
+                "preflight_memory_busy",
+                EX_TEMPFAIL,
+                f"n{row.resolution} requires at least {required_free} MiB "
+                f"free GPU memory; NVML reported {free} MiB of {total} MiB; "
+                "retry only after the GPU is empty",
             )
         return None
 
@@ -382,6 +413,38 @@ class GuardedQeRunner:
         monitor = self.monitor_factory(self.gpu_index)
         try:
             occupied = sorted(monitor.pids())
+            if occupied and self.wait_until_gpu_empty:
+                deadline = (
+                    None
+                    if self.gpu_empty_timeout_seconds is None
+                    else self.monotonic() + self.gpu_empty_timeout_seconds
+                )
+                self._write_stage_status(
+                    row,
+                    stage,
+                    status="waiting_for_gpu_empty",
+                    pid=None,
+                    started_at=started_at,
+                    exit_code=None,
+                    detail=(
+                        "NVML compute PIDs remain active; the guarded runner "
+                        f"will not signal or replace them: {occupied}"
+                    ),
+                )
+                while occupied:
+                    if deadline is not None and self.monotonic() >= deadline:
+                        self._write_stage_status(
+                            row,
+                            stage,
+                            status="gpu_empty_wait_timeout",
+                            pid=None,
+                            started_at=started_at,
+                            exit_code=EX_TEMPFAIL,
+                            detail=f"NVML compute PIDs still active: {occupied}",
+                        )
+                        return EX_TEMPFAIL
+                    self.sleep(self.poll_seconds)
+                    occupied = sorted(monitor.pids())
             if occupied:
                 detail = f"GPU preflight found compute PIDs {occupied}"
                 self._write_stage_status(
@@ -394,18 +457,19 @@ class GuardedQeRunner:
                     detail=detail,
                 )
                 return EX_TEMPFAIL
-            memory_error = self._memory_preflight(row, monitor)
-            if memory_error is not None:
+            memory_failure = self._memory_preflight(row, monitor)
+            if memory_failure is not None:
+                memory_status, memory_code, memory_detail = memory_failure
                 self._write_stage_status(
                     row,
                     stage,
-                    status="memory_rejected",
+                    status=memory_status,
                     pid=None,
                     started_at=started_at,
-                    exit_code=EX_CONFIG,
-                    detail=memory_error,
+                    exit_code=memory_code,
+                    detail=memory_detail,
                 )
-                return EX_CONFIG
+                return memory_code
 
             marker = self._pid_marker(row) if stage == "torch" else None
             if marker is not None:
@@ -582,6 +646,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--poll-seconds", type=float, default=10.0)
     parser.add_argument("--interrupt-grace-seconds", type=float, default=30.0)
     parser.add_argument("--marker-timeout-seconds", type=float, default=60.0)
+    parser.add_argument(
+        "--wait-until-gpu-empty",
+        action="store_true",
+        help=(
+            "wait on the NVML compute-process list before preflight; never "
+            "signal a process that was already using the GPU"
+        ),
+    )
+    parser.add_argument("--gpu-empty-timeout-seconds", type=float)
     parser.add_argument("--wait-for-path", type=Path)
     parser.add_argument(
         "--wait-guard-status",
@@ -609,6 +682,18 @@ def main() -> int:
         parser.error("--interrupt-grace-seconds must be nonnegative")
     if arguments.marker_timeout_seconds <= 0.0:
         parser.error("--marker-timeout-seconds must be positive")
+    if (
+        arguments.gpu_empty_timeout_seconds is not None
+        and arguments.gpu_empty_timeout_seconds <= 0.0
+    ):
+        parser.error("--gpu-empty-timeout-seconds must be positive")
+    if (
+        arguments.gpu_empty_timeout_seconds is not None
+        and not arguments.wait_until_gpu_empty
+    ):
+        parser.error(
+            "--gpu-empty-timeout-seconds requires --wait-until-gpu-empty"
+        )
     if arguments.wait_cadence_seconds < 5.0:
         parser.error("--wait-cadence-seconds must be at least five")
     if arguments.wait_timeout_seconds is not None and arguments.wait_timeout_seconds <= 0:
@@ -663,6 +748,8 @@ def main() -> int:
             poll_seconds=arguments.poll_seconds,
             interrupt_grace_seconds=arguments.interrupt_grace_seconds,
             marker_timeout_seconds=arguments.marker_timeout_seconds,
+            wait_until_gpu_empty=arguments.wait_until_gpu_empty,
+            gpu_empty_timeout_seconds=arguments.gpu_empty_timeout_seconds,
         )
         return runner.run(None if arguments.run_ids is None else set(arguments.run_ids))
     finally:

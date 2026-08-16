@@ -15,6 +15,7 @@ import run_guarded_qe_plan  # noqa: E402
 from run_guarded_qe_plan import (  # noqa: E402
     EX_CONFIG,
     EX_TEMPFAIL,
+    MIN_FREE_MEMORY_MIB,
     MIN_TOTAL_MEMORY_MIB,
     DuplicateRunner,
     GuardedQeRunner,
@@ -25,9 +26,18 @@ from run_guarded_qe_plan import (  # noqa: E402
 
 
 class FakeMonitor:
-    def __init__(self, *, pids: set[int] | None = None, memory_mib: int = 100_000):
+    def __init__(
+        self,
+        *,
+        pids: set[int] | None = None,
+        memory_mib: int = 100_000,
+        free_memory_mib: int | None = None,
+    ):
         self.compute_pids = set() if pids is None else set(pids)
         self.memory_mib = memory_mib
+        self.free_mib = (
+            memory_mib if free_memory_mib is None else free_memory_mib
+        )
         self.closed = False
 
     def pids(self) -> set[int]:
@@ -35,6 +45,9 @@ class FakeMonitor:
 
     def total_memory_mib(self) -> int:
         return self.memory_mib
+
+    def free_memory_mib(self) -> int:
+        return self.free_mib
 
     def close(self) -> None:
         self.closed = True
@@ -156,6 +169,10 @@ def _runner(
     guard_function=None,
     stop_process=None,
     resolutions=None,
+    wait_until_gpu_empty: bool = False,
+    gpu_empty_timeout_seconds: float | None = None,
+    sleep=None,
+    monotonic=None,
 ) -> GuardedQeRunner:
     return GuardedQeRunner(
         planner_inputs=PlannerInputs(
@@ -170,6 +187,8 @@ def _runner(
         poll_seconds=0.01,
         interrupt_grace_seconds=0.0,
         marker_timeout_seconds=1.0,
+        wait_until_gpu_empty=wait_until_gpu_empty,
+        gpu_empty_timeout_seconds=gpu_empty_timeout_seconds,
         plan_builder=_builder(tmp_path, states, resolutions),
         monitor_factory=(
             (lambda _index: FakeMonitor())
@@ -189,7 +208,12 @@ def _runner(
             if stop_process is None
             else stop_process
         ),
-        sleep=lambda _seconds: None,
+        sleep=(lambda _seconds: None) if sleep is None else sleep,
+        monotonic=(
+            run_guarded_qe_plan.time.monotonic
+            if monotonic is None
+            else monotonic
+        ),
     )
 
 
@@ -388,7 +412,7 @@ def test_crashed_torch_stage_is_resumed_on_the_next_invocation(tmp_path: Path) -
 
 
 @pytest.mark.parametrize("resolution", [512, 768])
-def test_memory_gate_rejects_below_conservative_resolution_floor(
+def test_total_memory_gate_censors_unsupported_gpu_capacity(
     tmp_path: Path, resolution: int
 ) -> None:
     run_id = f"case_n{resolution}"
@@ -396,7 +420,7 @@ def test_memory_gate_rejects_below_conservative_resolution_floor(
     monitor = FakeMonitor(memory_mib=MIN_TOTAL_MEMORY_MIB[resolution] - 1)
 
     def forbidden_popen(*_args, **_kwargs):
-        raise AssertionError("memory rejection must happen before launch")
+        raise AssertionError("capacity rejection must happen before launch")
 
     runner = _runner(
         tmp_path,
@@ -409,8 +433,142 @@ def test_memory_gate_rejects_below_conservative_resolution_floor(
     status = json.loads(
         (tmp_path / f"logs/status/{run_id}.seed.json").read_text()
     )
-    assert status["status"] == "memory_rejected"
+    assert status["status"] == "memory_capacity_censored"
     assert str(MIN_TOTAL_MEMORY_MIB[resolution]) in status["detail"]
+
+
+def test_a10_capacity_and_free_floor_admit_n512(tmp_path: Path) -> None:
+    states = {"case_n512": _state()}
+    monitor = FakeMonitor(memory_mib=23_028, free_memory_mib=23_000)
+    popen = FakePopenFactory(states)
+    runner = _runner(
+        tmp_path,
+        states,
+        resolutions={"case_n512": 512},
+        monitor_factory=lambda _index: monitor,
+        popen_factory=popen,
+    )
+
+    assert runner.run() == 0
+    assert [(run_id, stage) for run_id, stage, _args in popen.calls] == [
+        ("case_n512", "seed"),
+        ("case_n512", "torch"),
+    ]
+
+
+def test_n512_free_memory_shortfall_is_retryable(tmp_path: Path) -> None:
+    states = {"case_n512": _state()}
+    monitor = FakeMonitor(
+        memory_mib=23_028,
+        free_memory_mib=MIN_FREE_MEMORY_MIB[512] - 1,
+    )
+
+    def forbidden_popen(*_args, **_kwargs):
+        raise AssertionError("free-memory rejection must happen before launch")
+
+    runner = _runner(
+        tmp_path,
+        states,
+        resolutions={"case_n512": 512},
+        monitor_factory=lambda _index: monitor,
+        popen_factory=forbidden_popen,
+    )
+
+    assert runner.run() == EX_TEMPFAIL
+    status = json.loads(
+        (tmp_path / "logs/status/case_n512.seed.json").read_text()
+    )
+    assert status["status"] == "preflight_memory_busy"
+    assert str(MIN_FREE_MEMORY_MIB[512]) in status["detail"]
+
+
+def test_a10_explicitly_censors_n768(tmp_path: Path) -> None:
+    states = {"case_n768": _state()}
+    monitor = FakeMonitor(memory_mib=23_028, free_memory_mib=23_000)
+
+    def forbidden_popen(*_args, **_kwargs):
+        raise AssertionError("n768 must not launch on an A10")
+
+    runner = _runner(
+        tmp_path,
+        states,
+        resolutions={"case_n768": 768},
+        monitor_factory=lambda _index: monitor,
+        popen_factory=forbidden_popen,
+    )
+
+    assert runner.run() == EX_CONFIG
+    status = json.loads(
+        (tmp_path / "logs/status/case_n768.seed.json").read_text()
+    )
+    assert status["status"] == "memory_capacity_censored"
+    assert "81920 MiB" in status["detail"]
+
+
+def test_a100_waits_for_foreign_pid_to_exit_before_n768_launch(
+    tmp_path: Path,
+) -> None:
+    states = {"case_n768": _state(seed=True)}
+    popen = FakePopenFactory(states)
+    sleeps: list[float] = []
+
+    class SequencedMonitor(FakeMonitor):
+        def __init__(self) -> None:
+            super().__init__(memory_mib=81_920, free_memory_mib=81_000)
+            self.samples = [{3_091_477}, set()]
+
+        def pids(self) -> set[int]:
+            return set(self.samples.pop(0)) if self.samples else set()
+
+    monitor = SequencedMonitor()
+    runner = _runner(
+        tmp_path,
+        states,
+        resolutions={"case_n768": 768},
+        monitor_factory=lambda _index: monitor,
+        popen_factory=popen,
+        wait_until_gpu_empty=True,
+        sleep=sleeps.append,
+    )
+
+    assert runner.run() == 0
+    assert sleeps == [0.01]
+    assert [(run_id, stage) for run_id, stage, _args in popen.calls] == [
+        ("case_n768", "torch")
+    ]
+
+
+def test_gpu_empty_wait_timeout_is_retryable_without_launch(tmp_path: Path) -> None:
+    states = {"case_n768": _state(seed=True)}
+    monitor = FakeMonitor(
+        pids={3_091_477},
+        memory_mib=81_920,
+        free_memory_mib=18_000,
+    )
+    monotonic_samples = iter((10.0, 11.0))
+
+    def forbidden_popen(*_args, **_kwargs):
+        raise AssertionError("occupied GPU wait must not launch a child")
+
+    runner = _runner(
+        tmp_path,
+        states,
+        resolutions={"case_n768": 768},
+        monitor_factory=lambda _index: monitor,
+        popen_factory=forbidden_popen,
+        wait_until_gpu_empty=True,
+        gpu_empty_timeout_seconds=0.5,
+        monotonic=lambda: next(monotonic_samples),
+    )
+
+    assert runner.run() == EX_TEMPFAIL
+    assert monitor.closed
+    status = json.loads(
+        (tmp_path / "logs/status/case_n768.torch.json").read_text()
+    )
+    assert status["status"] == "gpu_empty_wait_timeout"
+    assert status["exit_code"] == EX_TEMPFAIL
+    assert "3091477" in status["detail"]
 
 
 def test_only_explicitly_selected_run_ids_are_executed(tmp_path: Path) -> None:

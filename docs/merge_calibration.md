@@ -161,6 +161,36 @@ common `(separation,eccentricity)` support, the affected bin remains
 resource and resolution design; absent that evidence the runtime must not
 interpolate or extrapolate through the missing bin.
 
+The guarded q-e queue uses observed device-memory profiles rather than the
+uniform-grid estimate alone. An `n=512` stage requires at least 22 GiB total
+and 21 GiB free: this admits a 23,028 MiB A10 while retaining more than 2 GiB
+above the measured 19,326 MiB solver footprint. An `n=768` stage requires an
+80 GiB-class device and at least 64 GiB free. It is therefore
+`memory_capacity_censored` on an A10 and must be routed to an 80 GiB GPU.
+Insufficient free memory on an otherwise supported GPU is instead the
+retryable status `preflight_memory_busy`.
+
+For a shared 80 GiB GPU, `--wait-until-gpu-empty` polls only the NVML compute
+process list. It neither scans the host process table nor signals a process
+that already owns the GPU. After the device becomes empty, the free-memory
+floor is checked and the normal mid-run collision guard remains active. An
+optional `--gpu-empty-timeout-seconds` converts an overlong wait into the
+retryable `gpu_empty_wait_timeout` status.
+
+```bash
+python scripts/run_guarded_qe_plan.py \
+  --manifest results/wave_calibration_qe_extension/run_manifest.csv \
+  --cases results/wave_calibration_qe_extension/physical_cases.csv \
+  --initial-root /path/to/pyul_initial \
+  --torch-root /path/to/torch \
+  --pyul-path /path/to/PyUL_NBody \
+  --log-root /path/to/logs \
+  --run-id qe_q100_e060_a020_n768 \
+  --gpu-index 0 \
+  --wait-until-gpu-empty \
+  --gpu-empty-timeout-seconds 43200
+```
+
 New live-wave metadata records `mass_ratio_q`, `initial_eccentricity`,
 `semi_major_axis_pc`, and `initial_separation_pc`. The eccentricity must come
 from this provenance because the apocentre initializer includes the soliton's
