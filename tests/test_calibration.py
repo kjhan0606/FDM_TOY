@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import csv
+import json
+from pathlib import Path
+import subprocess
+import sys
+
 import pytest
 
 from fdm_smbh_delay.calibration import (
@@ -180,3 +186,68 @@ def test_small_separation_run_grid_records_spatial_margins() -> None:
     assert runs[0].pericentre_separation_over_plummer_radius == pytest.approx(
         2.9866666667
     )
+
+
+def test_qe_extension_adds_eight_finer_runs_without_replacing_pilots(
+    tmp_path: Path,
+) -> None:
+    project = Path(__file__).resolve().parents[1]
+    output = tmp_path / "qe_extension"
+    subprocess.run(
+        [
+            sys.executable,
+            str(project / "scripts" / "generate_wave_calibration_grid.py"),
+            str(project / "configs" / "wave_calibration_qe_extension.yaml"),
+            "--output",
+            str(output),
+        ],
+        cwd=project,
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    with (output / "run_manifest.csv").open(
+        encoding="utf-8", newline=""
+    ) as stream:
+        rows = list(csv.DictReader(stream))
+    summary = json.loads((output / "summary.json").read_text())
+
+    legacy_resolutions = {
+        "qe_q100_e000_a020": (128, 256),
+        "qe_q030_e000_a020": (128, 256),
+        "qe_q010_e000_a020": (128, 256),
+        "qe_q100_e030_a020": (128, 256),
+        "qe_q100_e060_a020": (256, 512),
+        "qe_q030_e030_a020": (128, 256),
+        "qe_q100_e000_a010": (256, 512),
+        "qe_q100_e000_a005": (512, 768),
+        "qe_q030_e030_a010": (256, 512),
+        "qe_q030_e030_a005": (512, 768),
+    }
+    legacy_ids = {
+        f"{case_id}_n{resolution}"
+        for case_id, resolutions in legacy_resolutions.items()
+        for resolution in resolutions
+    }
+    added_ids = {
+        "qe_q100_e000_a020_n512",
+        "qe_q030_e000_a020_n512",
+        "qe_q010_e000_a020_n512",
+        "qe_q100_e030_a020_n512",
+        "qe_q100_e060_a020_n768",
+        "qe_q030_e030_a020_n512",
+        "qe_q100_e000_a010_n768",
+        "qe_q030_e030_a010_n768",
+    }
+    rows_by_id = {row["run_id"]: row for row in rows}
+
+    assert summary["run_count"] == 28
+    assert summary["runs_by_tier"] == {"1": 15, "2": 9, "3": 4}
+    assert len(rows) == 28
+    assert set(rows_by_id) == legacy_ids | added_ids
+    assert legacy_ids <= set(rows_by_id)
+    assert all(
+        rows_by_id[run_id]["spatial_acceptance_passed"] == "True"
+        for run_id in added_ids
+    )
+    assert not any(run_id.endswith("_n1024") for run_id in rows_by_id)

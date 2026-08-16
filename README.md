@@ -90,6 +90,27 @@ fdm-smbh-compose \
 
 The command returns no `true_merge_time_myr` if an interval is missing,
 invalid, or censored. Missing physics is never interpreted as zero delay.
+`uncalibrated`, `outside-support`, and `stalled` FDM summaries are composed as
+explicitly censored intervals, distinct from absent inputs. The JSON result
+lists both `missing_segments` and `censored_segments`; its additive `segments`
+records retain per-interval reasons and source provenance.
+
+An accepted galaxy-merger zoom table can correct an analytic kpc-to-pc
+baseline only at the exact physical point represented by a table row:
+
+```python
+from fdm_smbh_delay.zoom_calibration import apply_kpc_delay_calibration
+
+kpc_segment = apply_kpc_delay_calibration(
+    table,
+    physics=event_physics,
+    analytic_baseline_delay_myr=analytic_delay_myr,
+)
+```
+
+The returned complete segment retains the zoom source case and SHA-256. An
+unmeasured physical point returns a censored segment; the consumer never
+interpolates or extrapolates the zoom correction.
 
 ## Example configuration
 
@@ -375,12 +396,17 @@ python scripts/summarize_pyul_convergence.py \
 
 The JSON retains both the same-time comparison and the matched-separation
 bootstrap intervals. The latter prevents a difference in binary separation or
-orbital phase from being assigned directly to spatial resolution.
+orbital phase from being assigned directly to spatial resolution. Bootstrap
+blocks are capped at half the selected cycles, so the minimum eight-orbit
+sample retains at least two independent block lengths.
 
 Subgrid release rows must also keep the Hamiltonian drift below one percent in
 each run's initial contiguous spatially resolved interval, resolve the measured
-half-density radius by at least two cells in both runs, and keep each power,
-torque, and total-wave rate spatial difference below 20 percent. The full-run
+half-density radius by at least two cells in both runs, keep the resolution-pair
+absolute mean-eccentricity mismatch at or below 0.02, and keep each power,
+torque, and total-wave rate spatial difference below 20 percent. The 0.02
+eccentricity cap is one fifteenth of the q-e design's minimum plane spacing and
+may only be tightened. The full-run
 maximum Hamiltonian drift remains in the convergence JSON as a diagnostic but
 does not reject a bin solely because a later, already underresolved tail drifts.
 Rejected bins remain in the provenance summary but cannot be loaded by the
@@ -402,7 +428,10 @@ cannot validate against the previous summary even when the numerical rows are
 unchanged. `from_csv` is reserved for
 exploratory data and test fixtures. No interpolation is permitted outside the
 accepted mass-ratio, eccentricity, binary-mass, and separation ranges or across
-a rejected separation bin. A v3 table interpolates piecewise linearly in
+a rejected separation bin. Higher-resolution failure or insufficient joint
+separation-eccentricity support remains unresolved/censored; it must not trigger
+automatic n=1024 expansion or extrapolation. A v4 table interpolates piecewise
+linearly in
 `(q,e)` only when every bracketing plane independently supplies the required
 mass-separation support. The outer half of an accepted edge bin uses that bin's
 measured value, while every interpolated systematic is the maximum of all

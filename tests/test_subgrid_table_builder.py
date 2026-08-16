@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -193,6 +195,7 @@ def test_builder_accepts_only_bins_below_the_systematic_limit(
     assert row.dimensionless_orbital_torque == pytest.approx(-2.0)
     assert row.dimensionless_wave_total_energy_rate == pytest.approx(1.0)
     assert row.orbital_power_spatial_systematic_fraction == pytest.approx(0.10)
+    assert row.absolute_mean_eccentricity_mismatch == pytest.approx(0.0)
     assert row.reference_minimum_half_density_radius_over_cell_size > 2.0
     assert row.comparison_minimum_half_density_radius_over_cell_size > 2.0
     assert "orbital_power exceeds the spatial systematic limit" in (
@@ -267,6 +270,33 @@ def test_builder_rejects_relaxed_production_gates(tmp_path: Path) -> None:
             maximum_spatial_systematic_fraction=0.21,
         )
 
+    with pytest.raises(ValueError, match="acceptance limits are invalid"):
+        build_source_rows(
+            CalibrationSource("boey2025", path),
+            maximum_eccentricity_mismatch=0.021,
+        )
+
+
+def test_builder_rejects_mismatched_mean_eccentricity(tmp_path: Path) -> None:
+    path = _write_summary(tmp_path)
+    summary = json.loads(path.read_text())
+    for separation_bin in summary["matched_separation"]["bins"]:
+        separation_bin["runs"][1]["mean_eccentricity_osculating"] = 0.251
+    path.write_text(json.dumps(summary))
+
+    result = build_source_rows(CalibrationSource("boey2025", path))
+
+    assert not result.accepted_rows
+    assert all(
+        "mean eccentricity mismatch exceeds the acceptance limit"
+        in row["reasons"]
+        for row in result.rejected_bins
+    )
+    assert all(
+        row["absolute_mean_eccentricity_mismatch"] == pytest.approx(0.021)
+        for row in result.rejected_bins
+    )
+
 
 def test_builder_rejects_a_softened_binary_separation(tmp_path: Path) -> None:
     path = _write_summary(tmp_path)
@@ -289,7 +319,7 @@ def test_writer_is_loadable_by_the_runtime_table(tmp_path: Path) -> None:
         [CalibrationSource("boey2025", path)], output=output
     )
     assert summary["rows"] == 1
-    assert summary["schema_version"] == 3
+    assert summary["schema_version"] == 4
     assert len(summary["release_input_sha256"]) == 64
     assert summary["table"]["release_input_sha256"] == summary[
         "release_input_sha256"
@@ -309,6 +339,9 @@ def test_writer_is_loadable_by_the_runtime_table(tmp_path: Path) -> None:
     assert summary["acceptance"][
         "minimum_separation_over_plummer_radius"
     ] == pytest.approx(2.0)
+    assert summary["acceptance"][
+        "maximum_eccentricity_mismatch"
+    ] == pytest.approx(0.02)
     assert len(summary["sources"][0]["inputs"]) == 7
     assert all(
         len(record["sha256"]) == 64
@@ -334,6 +367,7 @@ def test_writer_is_loadable_by_the_runtime_table(tmp_path: Path) -> None:
                 "orbital_torque": 0.10,
                 "wave_total_energy_rate": 0.10,
             },
+            "maximum_absolute_mean_eccentricity_mismatch": 0.0,
         }
     ]
     assert len(summary["table"]["sha256"]) == 64
@@ -506,6 +540,79 @@ def test_release_loader_rejects_relaxed_acceptance_criteria(
     summary_path.write_text(json.dumps(summary))
     with pytest.raises(ValueError, match="acceptance criteria are unsafe"):
         SubgridCalibrationTable.from_release(output)
+
+
+def test_release_loader_rejects_relaxed_eccentricity_criterion(
+    tmp_path: Path,
+) -> None:
+    path = _write_summary(tmp_path)
+    output = tmp_path / "subgrid.csv"
+    write_calibration_table([CalibrationSource("boey2025", path)], output=output)
+    summary_path = output.with_suffix(".summary.json")
+    summary = json.loads(summary_path.read_text())
+    summary["acceptance"]["maximum_eccentricity_mismatch"] = 0.021
+    summary_path.write_text(json.dumps(summary))
+    with pytest.raises(ValueError, match="acceptance criteria are unsafe"):
+        SubgridCalibrationTable.from_release(output)
+
+
+def test_release_loader_applies_recorded_eccentricity_limit_to_rows(
+    tmp_path: Path,
+) -> None:
+    path = _write_summary(tmp_path)
+    output = tmp_path / "subgrid.csv"
+    write_calibration_table(
+        [CalibrationSource("boey2025", path)],
+        output=output,
+        maximum_eccentricity_mismatch=0.01,
+    )
+    with output.open(encoding="utf-8", newline="") as stream:
+        reader = csv.DictReader(stream)
+        fieldnames = reader.fieldnames
+        records = list(reader)
+    assert fieldnames is not None
+    records[0]["absolute_mean_eccentricity_mismatch"] = "0.015"
+    with output.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(records)
+
+    summary_path = output.with_suffix(".summary.json")
+    summary = json.loads(summary_path.read_text())
+    summary["table"]["sha256"] = hashlib.sha256(output.read_bytes()).hexdigest()
+    summary_path.write_text(json.dumps(summary))
+
+    with pytest.raises(
+        ValueError,
+        match="row exceeds the recorded eccentricity acceptance criterion",
+    ):
+        SubgridCalibrationTable.from_release(output)
+
+
+def test_cli_rejects_relaxed_eccentricity_criterion(tmp_path: Path) -> None:
+    path = _write_summary(tmp_path)
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "build_subgrid_calibration_table.py"
+    )
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--source",
+            f"boey2025={path}",
+            "--output",
+            str(tmp_path / "subgrid.csv"),
+            "--maximum-eccentricity-mismatch",
+            "0.021",
+        ],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    assert completed.returncode != 0
+    assert "subgrid acceptance limits are invalid" in completed.stderr
 
 
 def test_release_loader_rejects_a_provenance_count_mismatch(

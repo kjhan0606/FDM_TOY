@@ -17,11 +17,13 @@ from .exchange_scaling import (
 from .subgrid_calibration import (
     ACCEPTED_STATUS,
     CALIBRATION_INTERPOLATION_SPECIFICATION,
+    MAXIMUM_ACCEPTED_ECCENTRICITY_MISMATCH,
     MAXIMUM_ACCEPTED_ENERGY_ERROR_OVER_TRANSFER,
     MAXIMUM_ACCEPTED_SPATIAL_SYSTEMATIC_FRACTION,
     MINIMUM_ACCEPTED_COMPLETE_ORBITS,
     MINIMUM_ACCEPTED_CORE_RADIUS_CELLS,
     MINIMUM_ACCEPTED_SEPARATION_OVER_PLUMMER_RADIUS,
+    SUBGRID_CALIBRATION_SCHEMA_VERSION,
     SubgridCalibrationRow,
     summarize_calibrated_domains,
 )
@@ -194,7 +196,7 @@ def _release_input_sha256(acceptance: dict, results: list[SourceBuildResult]) ->
         ),
     )
     payload = {
-        "schema_version": 3,
+        "schema_version": SUBGRID_CALIBRATION_SCHEMA_VERSION,
         "acceptance": acceptance,
         "sources": sources,
     }
@@ -213,18 +215,22 @@ def build_source_rows(
     maximum_energy_error_over_transfer: float = (
         MAXIMUM_ACCEPTED_ENERGY_ERROR_OVER_TRANSFER
     ),
+    maximum_eccentricity_mismatch: float = (
+        MAXIMUM_ACCEPTED_ECCENTRICITY_MISMATCH
+    ),
     minimum_complete_orbits_per_bin: int = MINIMUM_ACCEPTED_COMPLETE_ORBITS,
     minimum_core_radius_cells: float = MINIMUM_ACCEPTED_CORE_RADIUS_CELLS,
     minimum_separation_over_plummer_radius: float = (
         MINIMUM_ACCEPTED_SEPARATION_OVER_PLUMMER_RADIUS
     ),
 ) -> SourceBuildResult:
-    """Accept bins that pass spatial, Hamiltonian, and core sampling gates."""
+    """Accept bins that pass spatial, eccentricity, ledger, and core gates."""
 
     limits = np.asarray(
         [
             maximum_spatial_systematic_fraction,
             maximum_energy_error_over_transfer,
+            maximum_eccentricity_mismatch,
             minimum_core_radius_cells,
             minimum_separation_over_plummer_radius,
         ],
@@ -238,6 +244,9 @@ def build_source_rows(
         or maximum_energy_error_over_transfer <= 0.0
         or maximum_energy_error_over_transfer
         > MAXIMUM_ACCEPTED_ENERGY_ERROR_OVER_TRANSFER
+        or maximum_eccentricity_mismatch < 0.0
+        or maximum_eccentricity_mismatch
+        > MAXIMUM_ACCEPTED_ECCENTRICITY_MISMATCH
         or minimum_core_radius_cells < MINIMUM_ACCEPTED_CORE_RADIUS_CELLS
         or minimum_separation_over_plummer_radius
         < MINIMUM_ACCEPTED_SEPARATION_OVER_PLUMMER_RADIUS
@@ -322,6 +331,17 @@ def build_source_rows(
         reference_bin = _matched_run(bin_row, reference_summary["label"])
         comparison_bin = _matched_run(bin_row, comparison_summary["label"])
         reasons = list(global_reasons)
+        eccentricity_mismatch = abs(
+            float(reference_bin["mean_eccentricity_osculating"])
+            - float(comparison_bin["mean_eccentricity_osculating"])
+        )
+        if (
+            not np.isfinite(eccentricity_mismatch)
+            or eccentricity_mismatch > maximum_eccentricity_mismatch
+        ):
+            reasons.append(
+                "mean eccentricity mismatch exceeds the acceptance limit"
+            )
         for run_bin in (reference_bin, comparison_bin):
             if int(run_bin["complete_orbits"]) < minimum_complete_orbits_per_bin:
                 reasons.append(
@@ -383,6 +403,9 @@ def build_source_rows(
                     "separation_bin_index": int(bin_row["bin"]),
                     "reasons": sorted(set(reasons)),
                     "spatial_systematic_fraction": systematic,
+                    "absolute_mean_eccentricity_mismatch": (
+                        eccentricity_mismatch
+                    ),
                     "reference_minimum_half_density_radius_over_cell_size": (
                         reference_core_cells
                     ),
@@ -456,6 +479,7 @@ def build_source_rows(
                 comparison_minimum_half_density_radius_over_cell_size=(
                     comparison_core_cells
                 ),
+                absolute_mean_eccentricity_mismatch=eccentricity_mismatch,
                 convergence_status=ACCEPTED_STATUS,
             )
         )
@@ -500,6 +524,9 @@ def write_calibration_table(
     maximum_energy_error_over_transfer: float = (
         MAXIMUM_ACCEPTED_ENERGY_ERROR_OVER_TRANSFER
     ),
+    maximum_eccentricity_mismatch: float = (
+        MAXIMUM_ACCEPTED_ECCENTRICITY_MISMATCH
+    ),
     minimum_complete_orbits_per_bin: int = MINIMUM_ACCEPTED_COMPLETE_ORBITS,
     minimum_core_radius_cells: float = MINIMUM_ACCEPTED_CORE_RADIUS_CELLS,
     minimum_separation_over_plummer_radius: float = (
@@ -523,6 +550,7 @@ def write_calibration_table(
             maximum_energy_error_over_transfer=(
                 maximum_energy_error_over_transfer
             ),
+            maximum_eccentricity_mismatch=maximum_eccentricity_mismatch,
             minimum_complete_orbits_per_bin=minimum_complete_orbits_per_bin,
             minimum_core_radius_cells=minimum_core_radius_cells,
             minimum_separation_over_plummer_radius=(
@@ -550,6 +578,7 @@ def write_calibration_table(
         "maximum_energy_error_over_transfer": (
             maximum_energy_error_over_transfer
         ),
+        "maximum_eccentricity_mismatch": maximum_eccentricity_mismatch,
         "minimum_complete_orbits_per_bin": minimum_complete_orbits_per_bin,
         "minimum_core_radius_cells": minimum_core_radius_cells,
         "minimum_separation_over_plummer_radius": (
@@ -580,7 +609,7 @@ def write_calibration_table(
     os.replace(temporary, output)
     summary = {
         "status": "accepted_subgrid_calibration_table",
-        "schema_version": 3,
+        "schema_version": SUBGRID_CALIBRATION_SCHEMA_VERSION,
         "release_input_sha256": release_input_sha256,
         "rows": len(rows),
         "profiles": sorted({row.profile_id for row in rows}),

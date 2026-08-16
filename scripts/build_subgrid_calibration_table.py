@@ -7,6 +7,7 @@ import argparse
 from pathlib import Path
 
 from fdm_smbh_delay.subgrid_calibration import (
+    MAXIMUM_ACCEPTED_ECCENTRICITY_MISMATCH,
     MAXIMUM_ACCEPTED_ENERGY_ERROR_OVER_TRANSFER,
     MAXIMUM_ACCEPTED_SPATIAL_SYSTEMATIC_FRACTION,
     MINIMUM_ACCEPTED_COMPLETE_ORBITS,
@@ -43,6 +44,15 @@ def main() -> int:
         default=MAXIMUM_ACCEPTED_ENERGY_ERROR_OVER_TRANSFER,
     )
     parser.add_argument(
+        "--maximum-eccentricity-mismatch",
+        type=float,
+        default=MAXIMUM_ACCEPTED_ECCENTRICITY_MISMATCH,
+        help=(
+            "maximum absolute difference between resolution-pair mean "
+            "eccentricities; production releases cap this at 0.02"
+        ),
+    )
+    parser.add_argument(
         "--minimum-complete-orbits-per-bin",
         type=int,
         default=MINIMUM_ACCEPTED_COMPLETE_ORBITS,
@@ -61,6 +71,9 @@ def main() -> int:
         ),
         maximum_energy_error_over_transfer=(
             arguments.maximum_energy_error_over_transfer
+        ),
+        maximum_eccentricity_mismatch=(
+            arguments.maximum_eccentricity_mismatch
         ),
         minimum_complete_orbits_per_bin=(
             arguments.minimum_complete_orbits_per_bin

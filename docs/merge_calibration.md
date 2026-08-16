@@ -123,8 +123,10 @@ planes, and separation interpolation may cross only contiguous accepted bins.
 Missing support, gaps, and all extrapolation stop the bound-binary calculation
 with an uncalibrated result.
 
-The first sparse extension contains ten physical cases and twenty resolution
-runs. Six cases sample distinct `(q,e)` planes at `a/r_c=0.20`. The circular
+The production-candidate sparse extension contains ten physical cases and 28
+resolution runs. It preserves the original 20 pilot run IDs and adds one
+adjacent finer resolution for each of the eight tier-1/2 cases. Six cases
+sample distinct `(q,e)` planes at `a/r_c=0.20`. The circular
 equal-mass plane and the `(q,e)=(0.3,0.3)` plane also reach `a/r_c=0.10` and
 `0.05`, corresponding to `0.22` and `0.11 pc` for the Boey-profile anchor.
 
@@ -134,13 +136,30 @@ python scripts/generate_wave_calibration_grid.py \
   --output results/wave_calibration_qe_extension
 ```
 
-The `128/256`, `256/512`, and smallest-axis `384/512` pairs are a pilot
-hierarchy, not accepted table rows. The table builder requires at least eight complete orbits, a resolved
+The tier hierarchy is `128/256/512`, `256/512/768`, and, at the smallest
+axis, `512/768`. These calculations remain candidates rather than accepted
+table rows. The table builder requires at least eight complete orbits, a resolved
 half-density radius, Hamiltonian error below the production limit, agreement
-of power and torque across the resolution pair, and a minimum binary
+of power and torque across the resolution pair, an absolute resolution-pair
+mean-eccentricity mismatch no larger than 0.02, and a minimum binary
 separation greater than two Plummer radii. The compact 12-core-radius box also
 requires a doubled-box control before these cases can be promoted to a
 production release.
+
+The eccentricity limit is absolute because eccentricity is an interpolation
+axis and a fractional measure is undefined for circular binaries. The value
+0.02 is one fifteenth of the design's minimum 0.3 spacing between eccentricity
+planes, so a matched-separation bin cannot silently compare different local
+eccentricity states. The eight-orbit moving-block bootstrap caps its block at
+half the available cycles, guaranteeing at least two independent block
+lengths instead of producing a zero-width interval when `N=8`.
+
+No workflow may append `n=1024` automatically. If an adjacent higher-resolution
+pair still fails a production gate, or if the calculations have insufficient
+common `(separation,eccentricity)` support, the affected bin remains
+`unresolved/censored`. A further calculation requires a separately reviewed
+resource and resolution design; absent that evidence the runtime must not
+interpolate or extrapolate through the missing bin.
 
 New live-wave metadata records `mass_ratio_q`, `initial_eccentricity`,
 `semi_major_axis_pc`, and `initial_separation_pc`. The eccentricity must come

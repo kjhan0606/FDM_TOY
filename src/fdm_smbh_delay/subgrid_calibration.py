@@ -21,8 +21,15 @@ from .orbital_exchange import (
 
 ACCEPTED_STATUS = "accepted_with_spatial_systematic"
 ACCEPTED_TABLE_STATUS = "accepted_subgrid_calibration_table"
+SUBGRID_CALIBRATION_SCHEMA_VERSION = 4
 MAXIMUM_ACCEPTED_SPATIAL_SYSTEMATIC_FRACTION = 0.20
 MAXIMUM_ACCEPTED_ENERGY_ERROR_OVER_TRANSFER = 0.01
+# Eccentricity is an explicit interpolation axis, so a resolution pair must
+# sample the same local e state rather than merely the same separation.  The
+# absolute 0.02 cap is one fifteenth of the sparse q-e design's minimum 0.3
+# plane spacing; it is well below an interpolation interval, remains defined
+# at e=0, and may only be tightened by release builders.
+MAXIMUM_ACCEPTED_ECCENTRICITY_MISMATCH = 0.02
 MINIMUM_ACCEPTED_COMPLETE_ORBITS = 8
 MINIMUM_ACCEPTED_CORE_RADIUS_CELLS = 2.0
 MINIMUM_ACCEPTED_SEPARATION_OVER_PLUMMER_RADIUS = 2.0
@@ -82,6 +89,7 @@ class SubgridCalibrationRow:
     comparison_minimum_half_density_radius_over_cell_size: float
     mass_ratio_q: float = 1.0
     reference_eccentricity: float = 0.0
+    absolute_mean_eccentricity_mismatch: float = 0.0
     convergence_status: str = ACCEPTED_STATUS
 
     def __post_init__(self) -> None:
@@ -102,6 +110,7 @@ class SubgridCalibrationRow:
                 self.comparison_minimum_half_density_radius_over_cell_size,
                 self.mass_ratio_q,
                 self.reference_eccentricity,
+                self.absolute_mean_eccentricity_mismatch,
             ],
             dtype=float,
         )
@@ -148,6 +157,14 @@ class SubgridCalibrationRow:
         ):
             raise ValueError(
                 "spatial systematic fractions lie outside the accepted range"
+            )
+        if not (
+            0.0
+            <= self.absolute_mean_eccentricity_mismatch
+            <= MAXIMUM_ACCEPTED_ECCENTRICITY_MISMATCH
+        ):
+            raise ValueError(
+                "mean eccentricity mismatch lies outside the accepted range"
             )
 
 
@@ -210,6 +227,9 @@ def summarize_calibrated_domains(
                         for row in ordered
                     ),
                 },
+                "maximum_absolute_mean_eccentricity_mismatch": max(
+                    row.absolute_mean_eccentricity_mismatch for row in ordered
+                ),
             }
         )
     return domains
@@ -523,6 +543,10 @@ class SubgridCalibrationTable:
                     reference_eccentricity=float(
                         record.get("reference_eccentricity") or 0.0
                     ),
+                    absolute_mean_eccentricity_mismatch=float(
+                        record.get("absolute_mean_eccentricity_mismatch")
+                        or 0.0
+                    ),
                     convergence_status=record["convergence_status"],
                 )
             )
@@ -554,7 +578,7 @@ class SubgridCalibrationTable:
         schema_version = summary.get("schema_version")
         if (
             summary.get("status") != ACCEPTED_TABLE_STATUS
-            or schema_version not in (2, 3)
+            or schema_version not in (2, 3, 4)
         ):
             raise ValueError("subgrid release status or schema is invalid")
         table_metadata = summary.get("table")
@@ -612,6 +636,11 @@ class SubgridCalibrationTable:
             maximum_energy_error = float(
                 acceptance["maximum_energy_error_over_transfer"]
             )
+            maximum_eccentricity_mismatch = (
+                float(acceptance["maximum_eccentricity_mismatch"])
+                if schema_version >= 4
+                else 0.0
+            )
             minimum_orbits = int(
                 acceptance["minimum_complete_orbits_per_bin"]
             )
@@ -627,6 +656,7 @@ class SubgridCalibrationTable:
             [
                 maximum_spatial,
                 maximum_energy_error,
+                maximum_eccentricity_mismatch,
                 minimum_core_cells,
                 minimum_separation_over_plummer,
             ],
@@ -638,16 +668,33 @@ class SubgridCalibrationTable:
             > MAXIMUM_ACCEPTED_SPATIAL_SYSTEMATIC_FRACTION
             or maximum_energy_error
             > MAXIMUM_ACCEPTED_ENERGY_ERROR_OVER_TRANSFER
+            or (
+                schema_version >= 4
+                and (
+                    maximum_eccentricity_mismatch < 0.0
+                    or maximum_eccentricity_mismatch
+                    > MAXIMUM_ACCEPTED_ECCENTRICITY_MISMATCH
+                )
+            )
             or minimum_orbits < MINIMUM_ACCEPTED_COMPLETE_ORBITS
             or minimum_core_cells < MINIMUM_ACCEPTED_CORE_RADIUS_CELLS
             or (
-                schema_version == 3
+                schema_version >= 3
                 and minimum_separation_over_plummer
                 < MINIMUM_ACCEPTED_SEPARATION_OVER_PLUMMER_RADIUS
             )
             or acceptance.get("extrapolation") != "prohibited"
         ):
             raise ValueError("subgrid release acceptance criteria are unsafe")
+        if schema_version >= 4 and any(
+            row.absolute_mean_eccentricity_mismatch
+            > maximum_eccentricity_mismatch
+            for row in table.rows
+        ):
+            raise ValueError(
+                "subgrid release row exceeds the recorded eccentricity "
+                "acceptance criterion"
+            )
         sources = summary.get("sources")
         if not isinstance(sources, list) or not sources:
             raise ValueError("subgrid release provenance sources are absent")
@@ -719,7 +766,22 @@ class SubgridCalibrationTable:
                 {
                     key: value
                     for key, value in domain.items()
-                    if key not in {"mass_ratio_q", "reference_eccentricity"}
+                    if key
+                    not in {
+                        "mass_ratio_q",
+                        "reference_eccentricity",
+                        "maximum_absolute_mean_eccentricity_mismatch",
+                    }
+                }
+                for domain in expected_domains
+            ]
+        elif schema_version == 3:
+            expected_domains = [
+                {
+                    key: value
+                    for key, value in domain.items()
+                    if key
+                    != "maximum_absolute_mean_eccentricity_mismatch"
                 }
                 for domain in expected_domains
             ]

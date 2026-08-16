@@ -41,6 +41,14 @@ _ORBIT_TABLE_RATE_FIELDS = tuple(
     field for field in _ORBIT_RATE_FIELDS if field != "wave_total_energy_rate"
 )
 
+# Eight cycles are long enough to retain the correlation scale used by the
+# production orbit gate.  The half-sample cap is equally important: a block
+# spanning the entire minimum eight-orbit sample has only one independent
+# placement and produces a spuriously zero-width interval.  Capping at N//2
+# guarantees at least two non-overlapping block lengths for every accepted
+# sample without weakening the eight-orbit acceptance requirement.
+_TARGET_ORBIT_RATE_BOOTSTRAP_BLOCK_LENGTH = 8
+
 
 def _read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
@@ -75,18 +83,28 @@ def _bootstrap_orbit_rates(
     orbit: np.ndarray, selection: np.ndarray
 ) -> dict[str, dict[str, float]]:
     duration = np.asarray(orbit["orbital_period_myr"][selection], dtype=float)
+    block_length = min(
+        _TARGET_ORBIT_RATE_BOOTSTRAP_BLOCK_LENGTH,
+        selection.size // 2,
+    )
+    if block_length < 1:
+        raise ValueError("orbit-rate bootstrap requires at least two cycles")
     rates: dict[str, dict[str, float]] = {}
     for field in _ORBIT_RATE_FIELDS:
         interval = moving_block_bootstrap_rate(
             rate=_orbit_rate_values(orbit, selection, field),
             duration=duration,
-            block_length=min(8, selection.size),
+            block_length=block_length,
             samples=2000,
         )
         rates[field] = {
             "estimate": interval.estimate,
             "lower_95": interval.lower_95,
             "upper_95": interval.upper_95,
+            "bootstrap_block_length_orbits": interval.block_length,
+            "bootstrap_samples": interval.samples,
+            "minimum_independent_blocks": selection.size
+            // interval.block_length,
         }
     return rates
 

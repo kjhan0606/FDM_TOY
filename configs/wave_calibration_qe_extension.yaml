@@ -38,8 +38,13 @@ numerics:
   minimum_kepler_mean_separation_cells: 2.0
   minimum_pericentre_separation_plummer_radii: 2.0
   resolutions_by_tier:
-    1: [128, 256]
-    2: [256, 512]
+    # Keep every completed pilot run and add exactly one adjacent finer level
+    # for the eight tier-1/2 cases whose pilot pair lacked common support or
+    # failed the 20-percent spatial gate.  n=1024 is deliberately absent:
+    # failure of the added pair remains unresolved/censored, not an automatic
+    # request for a larger calculation.
+    1: [128, 256, 512]
+    2: [256, 512, 768]
     3: [512, 768]
 
 energy_accounting:

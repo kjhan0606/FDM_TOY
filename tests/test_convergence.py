@@ -4,7 +4,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from fdm_smbh_delay.convergence import load_convergence_run, summarize_convergence
+from fdm_smbh_delay.convergence import (
+    _bootstrap_orbit_rates,
+    load_convergence_run,
+    summarize_convergence,
+)
 
 
 def _write_run(path: Path, *, scale: float, time_step_factor: float) -> None:
@@ -145,6 +149,36 @@ def test_common_interval_comparison_uses_resolved_duration(tmp_path: Path) -> No
     assert aggregate[
         "maximum_absolute_fractional_difference"
     ] == pytest.approx(0.1)
+
+
+def test_eight_orbit_bootstrap_keeps_two_independent_blocks() -> None:
+    fields = [
+        ("orbital_period_myr", float),
+        *(
+            (field, float)
+            for field in (
+                "orbital_power",
+                "orbital_torque",
+                "wave_intrinsic_energy_rate",
+                "wave_bh_interaction_energy_rate",
+                "bh_com_kinetic_energy_rate",
+                "combined_energy_residual_rate",
+            )
+        ),
+    ]
+    orbit = np.zeros(8, dtype=fields)
+    orbit["orbital_period_myr"] = 1.0
+    varying_rate = np.arange(1.0, 9.0)
+    for field in orbit.dtype.names or ():
+        if field != "orbital_period_myr":
+            orbit[field] = varying_rate
+
+    rates = _bootstrap_orbit_rates(orbit, np.arange(8))
+
+    for interval in rates.values():
+        assert interval["bootstrap_block_length_orbits"] == 4
+        assert interval["minimum_independent_blocks"] == 2
+        assert interval["lower_95"] < interval["upper_95"]
 
 
 def test_matched_separation_requires_positive_bin_count(tmp_path: Path) -> None:
