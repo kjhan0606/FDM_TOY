@@ -113,6 +113,9 @@ def main() -> int:
     core_radius = float(case["core_radius_pc"])
     mass1 = float(case["mass1_msun"])
     mass2 = float(case["mass2_msun"])
+    mass_ratio_q = float(case["mass_ratio_q"])
+    initial_eccentricity = float(case["eccentricity"])
+    semi_major_axis = float(case["semi_major_axis_pc"])
     separation = float(case["initial_separation_pc"])
     speed1 = float(case["initial_speed1_km_s"])
     speed2 = float(case["initial_speed2_km_s"])
@@ -210,6 +213,10 @@ def main() -> int:
             "pyul_repository": "https://github.com/Sifyrena/PyUL_NBody",
             "pyul_revision": _git_revision(pyul_path),
             "particle_mass_ev": particle_mass_ev,
+            "mass_ratio_q": mass_ratio_q,
+            "initial_eccentricity": initial_eccentricity,
+            "semi_major_axis_pc": semi_major_axis,
+            "initial_separation_pc": separation,
             "resolution": args.resolution,
             "box_size_pc": box_size,
             "cell_size_pc": cell_size,

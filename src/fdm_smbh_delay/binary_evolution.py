@@ -169,6 +169,60 @@ def legacy_circular_fdm_rate_provider(
     return provider
 
 
+def calibrated_qe_fdm_rate_provider(
+    table: "SubgridCalibrationTable",
+    *,
+    profile_id: str,
+    mass1_msun: float,
+    mass2_msun: float,
+    soliton_mass_msun: float,
+    core_radius_pc: float,
+) -> FDMRateProvider:
+    """Adapt an accepted schema-v3 table without q, e, or a extrapolation.
+
+    The table admits interpolation only when measured ``(q, e)`` planes
+    bracket the state and share mass/separation support. Converting a failure to
+    ``UncalibratedBinaryState`` makes the orbit integrator return a censored
+    calibration gap instead of silently substituting another plane.
+    """
+
+    controls = np.asarray(
+        [mass1_msun, mass2_msun, soliton_mass_msun, core_radius_pc],
+        dtype=float,
+    )
+    if np.any(~np.isfinite(controls)) or np.any(controls <= 0.0):
+        raise ValueError("calibrated FDM provider scales must be positive")
+
+    def provider(semimajor_axis_pc: float, eccentricity: float) -> FDMExchangeRates:
+        from .subgrid_calibration import physical_subgrid_rates
+
+        try:
+            rates = physical_subgrid_rates(
+                table,
+                profile_id=profile_id,
+                mass1_msun=mass1_msun,
+                mass2_msun=mass2_msun,
+                soliton_mass_msun=soliton_mass_msun,
+                core_radius_pc=core_radius_pc,
+                separation_pc=semimajor_axis_pc,
+                eccentricity=eccentricity,
+            )
+        except ValueError as error:
+            raise UncalibratedBinaryState(str(error)) from error
+        dimensionless = rates.dimensionless
+        calibration_id = (
+            f"v3:{profile_id}:q={dimensionless.mass_ratio_q:.12g}:"
+            f"e={dimensionless.reference_eccentricity:.12g}"
+        )
+        return FDMExchangeRates(
+            rates.orbital_power,
+            rates.orbital_torque,
+            calibration_id,
+        )
+
+    return provider
+
+
 @dataclass(frozen=True)
 class BoundBinaryModel:
     mass1_msun: float

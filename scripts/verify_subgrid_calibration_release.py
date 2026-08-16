@@ -17,6 +17,18 @@ from fdm_smbh_delay.subgrid_calibration import (
 )
 
 
+def _q_e_plane(value: str) -> tuple[float, float]:
+    try:
+        q_text, eccentricity_text = value.split(",", maxsplit=1)
+        q = float(q_text)
+        eccentricity = float(eccentricity_text)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("q-e planes must use q,e") from error
+    if not 0.0 < q <= 1.0 or not 0.0 <= eccentricity < 1.0:
+        raise argparse.ArgumentTypeError("q-e plane coordinates are invalid")
+    return q, eccentricity
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -35,6 +47,13 @@ def main() -> int:
         default=[],
     )
     parser.add_argument("--expected-source-count", type=int)
+    parser.add_argument(
+        "--required-q-e-plane",
+        action="append",
+        default=[],
+        type=_q_e_plane,
+        help="require an accepted exact plane, formatted as q,e",
+    )
     parser.add_argument("--output", type=Path)
     arguments = parser.parse_args()
 
@@ -65,6 +84,19 @@ def main() -> int:
         table.rows
     ):
         raise SystemExit("subgrid release source counts do not close")
+    accepted_q_e_planes = sorted(
+        {(row.mass_ratio_q, row.reference_eccentricity) for row in table.rows}
+    )
+    for required_q, required_eccentricity in arguments.required_q_e_plane:
+        if not any(
+            abs(q - required_q) <= 1.0e-12
+            and abs(eccentricity - required_eccentricity) <= 1.0e-12
+            for q, eccentricity in accepted_q_e_planes
+        ):
+            raise SystemExit(
+                f"required q-e plane ({required_q}, {required_eccentricity}) "
+                "is absent"
+            )
 
     mass_interpolation_witnesses = {}
     for profile_id in sorted(set(arguments.mass_interpolation_profile)):
@@ -94,7 +126,7 @@ def main() -> int:
     output.parent.mkdir(parents=True, exist_ok=True)
     report = {
         "status": "subgrid_calibration_release_verified",
-        "schema_version": 1,
+        "schema_version": 2,
         "release_input_sha256": summary["release_input_sha256"],
         "table": {
             "file": str(release),
@@ -106,6 +138,10 @@ def main() -> int:
             "sha256": _sha256(summary_path),
         },
         "profiles": profiles,
+        "accepted_q_e_planes": [
+            {"mass_ratio_q": q, "reference_eccentricity": eccentricity}
+            for q, eccentricity in accepted_q_e_planes
+        ],
         "sources": len(summary["sources"]),
         "mass_interpolation_witnesses": mass_interpolation_witnesses,
         "runtime": asdict(runtime),

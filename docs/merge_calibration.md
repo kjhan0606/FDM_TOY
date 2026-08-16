@@ -109,6 +109,42 @@ python scripts/generate_wave_calibration_grid.py \
 Every run requires a coupled Schrödinger--Poisson field and moving SMBHs.
 Analytic FDM drag is disabled because the resolved wake supplies the force.
 
+### Sparse q-e and small-separation extension
+
+The production table schema is version 3. Each accepted row now carries the
+SMBH mass ratio and the input eccentricity in addition to profile, binary mass
+fraction, and separation. Runtime lookup interpolates in `q` or `e` only when
+every bracketing plane has accepted mass and separation support at the query.
+Mass interpolation likewise requires accepted separation support on both mass
+planes, and separation interpolation may cross only contiguous accepted bins.
+Missing support, gaps, and all extrapolation stop the bound-binary calculation
+with an uncalibrated result.
+
+The first sparse extension contains ten physical cases and twenty resolution
+runs. Six cases sample distinct `(q,e)` planes at `a/r_c=0.20`. The circular
+equal-mass plane and the `(q,e)=(0.3,0.3)` plane also reach `a/r_c=0.10` and
+`0.05`, corresponding to `0.22` and `0.11 pc` for the Boey-profile anchor.
+
+```bash
+python scripts/generate_wave_calibration_grid.py \
+  configs/wave_calibration_qe_extension.yaml \
+  --output results/wave_calibration_qe_extension
+```
+
+The `128/256` and `256/512` pairs are a pilot hierarchy, not accepted table
+rows. The table builder requires at least eight complete orbits, a resolved
+half-density radius, Hamiltonian error below the production limit, agreement
+of power and torque across the resolution pair, and a minimum binary
+separation greater than two Plummer radii. The compact 12-core-radius box also
+requires a doubled-box control before these cases can be promoted to a
+production release.
+
+New live-wave metadata records `mass_ratio_q`, `initial_eccentricity`,
+`semi_major_axis_pc`, and `initial_separation_pc`. The eccentricity must come
+from this provenance because the apocentre initializer includes the soliton's
+differential force; a two-body osculating inversion would not reproduce the
+input eccentricity in that extended potential.
+
 ## Public live-wave solver check
 
 The public moving-particle solver cited by Koo et al. is

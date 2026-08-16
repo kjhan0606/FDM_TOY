@@ -36,6 +36,9 @@ def _write_run(
                 "core_radius_reference_pc": 2.0,
                 "box_size_pc": 40.0,
                 "resolution": resolution,
+                "plummer_radius_pc": 0.1,
+                "mass_ratio_q": 1.0,
+                "initial_eccentricity": 0.0,
             }
         )
     )
@@ -263,6 +266,20 @@ def test_builder_rejects_relaxed_production_gates(tmp_path: Path) -> None:
         )
 
 
+def test_builder_rejects_a_softened_binary_separation(tmp_path: Path) -> None:
+    path = _write_summary(tmp_path)
+    metadata_path = tmp_path / "n384" / "fdm_adapter_metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata["plummer_radius_pc"] = 0.25
+    metadata_path.write_text(json.dumps(metadata))
+    result = build_source_rows(CalibrationSource("boey2025", path))
+    assert not result.accepted_rows
+    assert any(
+        "comparison binary separation is softened" in row["reasons"]
+        for row in result.rejected_bins
+    )
+
+
 def test_writer_is_loadable_by_the_runtime_table(tmp_path: Path) -> None:
     path = _write_summary(tmp_path)
     output = tmp_path / "subgrid.csv"
@@ -270,21 +287,26 @@ def test_writer_is_loadable_by_the_runtime_table(tmp_path: Path) -> None:
         [CalibrationSource("boey2025", path)], output=output
     )
     assert summary["rows"] == 1
-    assert summary["schema_version"] == 2
+    assert summary["schema_version"] == 3
     assert len(summary["release_input_sha256"]) == 64
     assert summary["table"]["release_input_sha256"] == summary[
         "release_input_sha256"
     ]
     assert summary["interpolation"] == {
         "profile_axis": "discrete_no_cross_profile_interpolation",
-        "mass_axis": "piecewise_linear_binary_to_soliton_mass",
-        "separation_axis": "piecewise_linear_reference_bin_centres",
+        "mass_ratio_axis": "piecewise_linear_with_complete_e_mass_separation_support",
+        "eccentricity_axis": "piecewise_linear_with_complete_mass_separation_support",
+        "mass_axis": "piecewise_linear_binary_to_soliton_mass_within_q_e_plane",
+        "separation_axis": "piecewise_linear_reference_bin_centres_within_q_e_plane",
         "outer_half_bins": "nearest_accepted_bin_value",
         "missing_separation_bins": "crossing_prohibited",
         "spatial_systematics": "maximum_of_all_bracketing_rows",
         "extrapolation": "prohibited",
     }
     assert summary["sources"][0]["accepted_bins"] == 1
+    assert summary["acceptance"][
+        "minimum_separation_over_plummer_radius"
+    ] == pytest.approx(2.0)
     assert len(summary["sources"][0]["inputs"]) == 7
     assert all(
         len(record["sha256"]) == 64
@@ -299,6 +321,8 @@ def test_writer_is_loadable_by_the_runtime_table(tmp_path: Path) -> None:
                 ]
             ),
             "binary_to_soliton_mass": 0.04,
+            "mass_ratio_q": 1.0,
+            "reference_eccentricity": 0.0,
             "source_case_ids": ["boey_each02pct"],
             "accepted_separation_bin_indices": [0],
             "minimum_separation_over_core_radius": 0.2,
@@ -314,6 +338,8 @@ def test_writer_is_loadable_by_the_runtime_table(tmp_path: Path) -> None:
     assert output.with_suffix(".summary.json").is_file()
     loaded = SubgridCalibrationTable.from_release(output)
     assert len(loaded.rows) == 1
+    assert loaded.rows[0].mass_ratio_q == pytest.approx(1.0)
+    assert loaded.rows[0].reference_eccentricity == pytest.approx(0.0)
 
 
 def test_generated_release_drives_a_conservative_residual_update(
@@ -371,6 +397,8 @@ def test_release_verification_is_durable_and_resumable(tmp_path: Path) -> None:
         "boey2025",
         "--expected-source-count",
         "1",
+        "--required-q-e-plane",
+        "1.0,0.0",
     ]
     subprocess.run(command, check=True)
     verification_path = output.with_suffix(".verification.json")
@@ -380,6 +408,9 @@ def test_release_verification_is_durable_and_resumable(tmp_path: Path) -> None:
     assert report["release_input_sha256"] == summary["release_input_sha256"]
     assert report["table"]["sha256"] == summary["table"]["sha256"]
     assert report["runtime"]["rows"] == 1
+    assert report["accepted_q_e_planes"] == [
+        {"mass_ratio_q": 1.0, "reference_eccentricity": 0.0}
+    ]
 
     # A stopped pair publication cannot leave the previous success marker.
     with output.open("a", encoding="utf-8") as stream:

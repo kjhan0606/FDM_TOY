@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from itertools import product
-from typing import Iterable
+from typing import Iterable, Mapping
 
 import numpy as np
 
@@ -265,6 +265,50 @@ def structured_parameter_cases(
                 semi_major_axis_over_core_radius=a_over_core,
             )
         )
+    return cases
+
+
+def designed_parameter_cases(
+    definitions: Iterable[Mapping[str, float | int | str]],
+) -> list[WaveCalibrationCase]:
+    """Build an explicit sparse design for costly q-e-separation extensions."""
+
+    soliton = boey2025_schive_soliton()
+    cases = []
+    case_ids: set[str] = set()
+    for definition in definitions:
+        case_id = str(definition["case_id"])
+        if not case_id or case_id in case_ids:
+            raise ValueError("designed calibration case IDs must be unique")
+        case_ids.add(case_id)
+        cases.append(
+            build_wave_case(
+                case_id=case_id,
+                tier=int(definition.get("tier", 1)),
+                origin=str(definition.get("origin", "designed_qe_extension")),
+                particle_mass_ev=float(
+                    definition.get("particle_mass_ev", 1.0e-21)
+                ),
+                soliton=soliton,
+                mass_ratio_q=float(definition["mass_ratio_q"]),
+                eccentricity=float(definition["eccentricity"]),
+                binary_to_soliton_mass=float(
+                    definition["binary_to_soliton_mass"]
+                ),
+                semi_major_axis_over_core_radius=float(
+                    definition["semi_major_axis_over_core_radius"]
+                ),
+                target_orbits=float(definition.get("target_orbits", 12.0)),
+                minimum_duration_myr=float(
+                    definition.get("minimum_duration_myr", 0.01)
+                ),
+                maximum_duration_myr=float(
+                    definition.get("maximum_duration_myr", 0.2)
+                ),
+            )
+        )
+    if not cases:
+        raise ValueError("designed calibration grid cannot be empty")
     return cases
 
 

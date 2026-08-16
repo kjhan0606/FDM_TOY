@@ -4,6 +4,7 @@ import pytest
 
 from fdm_smbh_delay.calibration import (
     component_masses,
+    designed_parameter_cases,
     exchange_calibration_eligibility,
     literature_anchor_cases,
     run_specifications,
@@ -104,3 +105,25 @@ def test_structured_grid_tiers_and_no_analytic_drag() -> None:
     )
     assert len(runs) == 1
     assert runs[0].analytic_fdm_drag is False
+
+
+def test_explicit_qe_design_preserves_apocentre_and_small_axis() -> None:
+    cases = designed_parameter_cases(
+        [
+            {
+                "case_id": "qe_q030_e030_a005",
+                "tier": 2,
+                "mass_ratio_q": 0.3,
+                "eccentricity": 0.3,
+                "binary_to_soliton_mass": 0.1,
+                "semi_major_axis_over_core_radius": 0.05,
+            }
+        ]
+    )
+    assert len(cases) == 1
+    case = cases[0]
+    assert case.mass2_msun / case.mass1_msun == pytest.approx(0.3)
+    assert case.initial_separation_pc == pytest.approx(
+        case.semi_major_axis_pc * 1.3
+    )
+    assert case.semi_major_axis_over_core_radius == pytest.approx(0.05)

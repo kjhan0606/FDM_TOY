@@ -28,10 +28,13 @@ def _row(
     torque: float,
     systematic: float,
     profile: str = "boey2025",
+    mass_ratio_q: float = 1.0,
+    eccentricity: float = 0.0,
+    source_case_id: str | None = None,
 ) -> SubgridCalibrationRow:
     return SubgridCalibrationRow(
         profile_id=profile,
-        source_case_id=f"{profile}_{mass_fraction}",
+        source_case_id=source_case_id or f"{profile}_{mass_fraction}",
         schrodinger_poisson_similarity_parameter=0.388,
         binary_to_soliton_mass=mass_fraction,
         separation_bin_index=bin_index,
@@ -50,6 +53,8 @@ def _row(
         comparison_complete_orbits=18,
         reference_minimum_half_density_radius_over_cell_size=10.0,
         comparison_minimum_half_density_radius_over_cell_size=7.0,
+        mass_ratio_q=mass_ratio_q,
+        reference_eccentricity=eccentricity,
         convergence_status=ACCEPTED_STATUS,
     )
 
@@ -229,6 +234,128 @@ def test_interpolation_rejects_a_missing_separation_bin() -> None:
             binary_to_soliton_mass=0.04,
             separation_over_core_radius=0.5,
         )
+
+
+def test_independent_small_separation_sources_join_by_physical_bins() -> None:
+    table = SubgridCalibrationTable(
+        (
+            _row(
+                mass_fraction=0.10,
+                bin_index=0,
+                lower=0.05,
+                upper=0.10,
+                centre=0.075,
+                power=-1.0,
+                torque=-2.0,
+                systematic=0.05,
+                source_case_id="small",
+            ),
+            _row(
+                mass_fraction=0.10,
+                bin_index=0,
+                lower=0.10,
+                upper=0.20,
+                centre=0.15,
+                power=-3.0,
+                torque=-4.0,
+                systematic=0.06,
+                source_case_id="large",
+            ),
+        )
+    )
+    result = table.interpolate(
+        profile_id="boey2025",
+        binary_to_soliton_mass=0.10,
+        separation_over_core_radius=0.10,
+    )
+    assert result.dimensionless_orbital_power == pytest.approx(-5.0 / 3.0)
+
+    with pytest.raises(ValueError, match="cannot overlap"):
+        SubgridCalibrationTable(
+            (
+                table.rows[0],
+                SubgridCalibrationRow(
+                    **{
+                        **table.rows[1].__dict__,
+                        "lower_separation_over_core_radius": 0.09,
+                    }
+                ),
+            )
+        )
+
+
+def test_q_e_axes_require_an_exact_measured_plane() -> None:
+    base = _row(
+        mass_fraction=0.10,
+        bin_index=0,
+        lower=0.1,
+        upper=0.3,
+        centre=0.2,
+        power=-1.0,
+        torque=-2.0,
+        systematic=0.05,
+    )
+    unequal_eccentric = _row(
+        mass_fraction=0.10,
+        bin_index=0,
+        lower=0.1,
+        upper=0.3,
+        centre=0.2,
+        power=-3.0,
+        torque=-4.0,
+        systematic=0.06,
+        mass_ratio_q=0.3,
+        eccentricity=0.3,
+    )
+    table = SubgridCalibrationTable((base, unequal_eccentric))
+    result = table.interpolate(
+        profile_id="boey2025",
+        mass_ratio_q=0.3,
+        eccentricity=0.3,
+        binary_to_soliton_mass=0.10,
+        separation_over_core_radius=0.2,
+    )
+    assert result.mass_ratio_q == pytest.approx(0.3)
+    assert result.reference_eccentricity == pytest.approx(0.3)
+    assert result.dimensionless_orbital_power == pytest.approx(-3.0)
+    for q, eccentricity in ((0.5, 0.3), (0.3, 0.2), (0.5, 0.2)):
+        with pytest.raises(ValueError):
+            table.interpolate(
+                profile_id="boey2025",
+                mass_ratio_q=q,
+                eccentricity=eccentricity,
+                binary_to_soliton_mass=0.10,
+                separation_over_core_radius=0.2,
+            )
+
+    rectangle = SubgridCalibrationTable(
+        tuple(
+            _row(
+                mass_fraction=0.10,
+                bin_index=0,
+                lower=0.1,
+                upper=0.3,
+                centre=0.2,
+                power=-(q + eccentricity),
+                torque=-2.0 * (q + eccentricity),
+                systematic=0.05,
+                mass_ratio_q=q,
+                eccentricity=eccentricity,
+            )
+            for q in (0.3, 1.0)
+            for eccentricity in (0.0, 0.3)
+        )
+    )
+    interpolated = rectangle.interpolate(
+        profile_id="boey2025",
+        mass_ratio_q=0.65,
+        eccentricity=0.15,
+        binary_to_soliton_mass=0.10,
+        separation_over_core_radius=0.2,
+    )
+    assert interpolated.mass_ratio_q == pytest.approx(0.65)
+    assert interpolated.reference_eccentricity == pytest.approx(0.15)
+    assert interpolated.dimensionless_orbital_power == pytest.approx(-0.8)
 
 
 def test_csv_round_trip_is_a_regression_fixture(tmp_path: Path) -> None:

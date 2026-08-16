@@ -12,6 +12,7 @@ from pathlib import Path
 import yaml
 
 from fdm_smbh_delay.calibration import (
+    designed_parameter_cases,
     literature_anchor_cases,
     run_specifications,
     structured_parameter_cases,
@@ -30,31 +31,43 @@ def _write_csv(path: Path, rows: list[dict]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "config", nargs="?", type=Path, default=Path("configs/wave_calibration_grid.yaml")
+        "config",
+        nargs="?",
+        type=Path,
+        default=Path("configs/wave_calibration_grid.yaml"),
     )
     parser.add_argument(
         "--output", type=Path, default=Path("results/wave_calibration_grid")
     )
     args = parser.parse_args()
     raw = yaml.safe_load(args.config.read_text(encoding="utf-8"))
-    axes = raw["axes"]
-    fiducial_raw = raw["fiducial"]
-    fiducial = (
-        fiducial_raw["mass_ratio_q"],
-        fiducial_raw["eccentricity"],
-        fiducial_raw["binary_to_soliton_mass"],
-        fiducial_raw["semi_major_axis_over_core_radius"],
+    cases = (
+        literature_anchor_cases()
+        if raw.get("include_literature_anchors", True)
+        else []
     )
-    cases = literature_anchor_cases()
-    cases.extend(
-        structured_parameter_cases(
-            q_values=axes["mass_ratio_q"],
-            eccentricities=axes["eccentricity"],
-            binary_mass_fractions=axes["binary_to_soliton_mass"],
-            semi_major_axis_over_core=axes["semi_major_axis_over_core_radius"],
-            fiducial=fiducial,
+    if "cases" in raw:
+        cases.extend(designed_parameter_cases(raw["cases"]))
+        design = "explicit_sparse_cases"
+    else:
+        axes = raw["axes"]
+        fiducial_raw = raw["fiducial"]
+        fiducial = (
+            fiducial_raw["mass_ratio_q"],
+            fiducial_raw["eccentricity"],
+            fiducial_raw["binary_to_soliton_mass"],
+            fiducial_raw["semi_major_axis_over_core_radius"],
         )
-    )
+        cases.extend(
+            structured_parameter_cases(
+                q_values=axes["mass_ratio_q"],
+                eccentricities=axes["eccentricity"],
+                binary_mass_fractions=axes["binary_to_soliton_mass"],
+                semi_major_axis_over_core=axes["semi_major_axis_over_core_radius"],
+                fiducial=fiducial,
+            )
+        )
+        design = "cartesian_axes"
     numerics = raw["numerics"]
     resolutions = {
         int(tier): [int(value) for value in values]
@@ -76,11 +89,16 @@ def main() -> int:
         "cases_by_tier": dict(sorted(Counter(case.tier for case in cases).items())),
         "runs_by_tier": dict(sorted(Counter(run.tier for run in runs).items())),
         "analytic_fdm_drag": False,
-        "solver_status": "public_pyul_adapter_available_full_grid_pending",
+        "solver_status": (
+            "public_pyul_adapter_available_sparse_pilot_pending"
+            if design == "explicit_sparse_cases"
+            else "public_pyul_adapter_available_full_grid_pending"
+        ),
         "energy_accounting": raw["energy_accounting"],
         "similarity_scaling": raw["similarity_scaling"],
         "required_measurements": raw["measurements"],
         "configuration": str(args.config),
+        "design": design,
     }
     (args.output / "summary.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"

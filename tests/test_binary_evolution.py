@@ -12,6 +12,7 @@ from fdm_smbh_delay.binary_evolution import (
     UncalibratedBinaryState,
     advance_bound_binary_rk4,
     binary_rate_budget,
+    calibrated_qe_fdm_rate_provider,
     find_gw_transition_pc,
     integrate_bound_binary,
     legacy_circular_fdm_rate_provider,
@@ -184,3 +185,43 @@ def test_legacy_fdm_adapter_rejects_unmeasured_q_and_e() -> None:
     assert circular(1.0, 0.0).calibration_id == "legacy-v2:koo"
     with pytest.raises(UncalibratedBinaryState, match="eccentricity"):
         circular(1.0, 0.1)
+
+
+def test_qe_fdm_adapter_passes_runtime_e_and_censors_missing_plane() -> None:
+    class ExactPlaneTable:
+        def interpolate(self, **coordinates):
+            if coordinates["mass_ratio_q"] != pytest.approx(0.3):
+                raise ValueError("requested mass-ratio/eccentricity plane is absent")
+            if coordinates["eccentricity"] != pytest.approx(0.3):
+                raise ValueError("requested mass-ratio/eccentricity plane is absent")
+            if coordinates["separation_over_core_radius"] != pytest.approx(0.2):
+                raise ValueError("separation lies outside the calibrated range")
+            return InterpolatedSubgridRates(
+                profile_id="boey2025",
+                schrodinger_poisson_similarity_parameter=1.0,
+                binary_to_soliton_mass=0.13,
+                separation_over_core_radius=0.2,
+                dimensionless_orbital_power=-1.0e-3,
+                dimensionless_orbital_torque=-2.0e-3,
+                dimensionless_wave_total_energy_rate=1.0e-3,
+                orbital_power_spatial_systematic_fraction=0.1,
+                orbital_torque_spatial_systematic_fraction=0.1,
+                wave_total_spatial_systematic_fraction=0.1,
+                mass_ratio_q=0.3,
+                reference_eccentricity=0.3,
+            )
+
+    provider = calibrated_qe_fdm_rate_provider(
+        ExactPlaneTable(),
+        profile_id="boey2025",
+        mass1_msun=1.0e8,
+        mass2_msun=3.0e7,
+        soliton_mass_msun=1.0e9,
+        core_radius_pc=5.0,
+    )
+    rates = provider(1.0, 0.3)
+    assert rates.calibration_id == "v3:boey2025:q=0.3:e=0.3"
+    with pytest.raises(UncalibratedBinaryState, match="plane is absent"):
+        provider(1.0, 0.2)
+    with pytest.raises(UncalibratedBinaryState, match="outside"):
+        provider(0.5, 0.3)

@@ -21,6 +21,7 @@ from .subgrid_calibration import (
     MAXIMUM_ACCEPTED_SPATIAL_SYSTEMATIC_FRACTION,
     MINIMUM_ACCEPTED_COMPLETE_ORBITS,
     MINIMUM_ACCEPTED_CORE_RADIUS_CELLS,
+    MINIMUM_ACCEPTED_SEPARATION_OVER_PLUMMER_RADIUS,
     SubgridCalibrationRow,
     summarize_calibrated_domains,
 )
@@ -63,18 +64,39 @@ def _physical_definition(run: Path) -> dict:
     if len(particles) != 2 or len(solitons) != 1:
         raise ValueError(f"{run} must contain two SMBHs and one soliton")
     mass1, mass2 = (float(particle[0]) for particle in particles)
+    mass_ratio_q = min(mass1, mass2) / max(mass1, mass2)
+    recorded_mass_ratio = float(metadata.get("mass_ratio_q", mass_ratio_q))
+    if not np.isclose(recorded_mass_ratio, mass_ratio_q, rtol=1.0e-12, atol=0.0):
+        raise ValueError(f"{run} metadata mass ratio disagrees with particle masses")
+    if "initial_eccentricity" in metadata:
+        eccentricity = float(metadata["initial_eccentricity"])
+    elif str(metadata["case_id"]).startswith(("koo_", "boey_")):
+        # Literature anchors generated before schema v3 are explicitly circular.
+        eccentricity = 0.0
+    else:
+        raise ValueError(
+            f"{run} lacks an explicit initial_eccentricity provenance field"
+        )
+    if not 0.0 <= eccentricity < 1.0:
+        raise ValueError(f"{run} has an invalid initial eccentricity")
     soliton_mass = float(solitons[0][0])
     core_radius = float(metadata["core_radius_reference_pc"])
+    plummer_radius = float(metadata["plummer_radius_pc"])
+    if not np.isfinite(plummer_radius) or plummer_radius <= 0.0:
+        raise ValueError(f"{run} has an invalid Plummer radius")
     return {
         "case_id": str(metadata["case_id"]),
         "mass1_msun": mass1,
         "mass2_msun": mass2,
+        "mass_ratio_q": mass_ratio_q,
+        "initial_eccentricity": eccentricity,
         "soliton_mass_msun": soliton_mass,
         "core_radius_pc": core_radius,
         "particle_mass_ev": float(metadata["particle_mass_ev"]),
         "cell_size_pc": float(metadata["box_size_pc"])
         / int(metadata["resolution"]),
         "resolution": int(metadata["resolution"]),
+        "plummer_radius_pc": plummer_radius,
     }
 
 
@@ -87,6 +109,8 @@ def _same_physical_case(reference: dict, comparison: dict) -> bool:
         "soliton_mass_msun",
         "core_radius_pc",
         "particle_mass_ev",
+        "mass_ratio_q",
+        "initial_eccentricity",
     )
     return all(
         np.isclose(
@@ -170,7 +194,7 @@ def _release_input_sha256(acceptance: dict, results: list[SourceBuildResult]) ->
         ),
     )
     payload = {
-        "schema_version": 2,
+        "schema_version": 3,
         "acceptance": acceptance,
         "sources": sources,
     }
@@ -191,6 +215,9 @@ def build_source_rows(
     ),
     minimum_complete_orbits_per_bin: int = MINIMUM_ACCEPTED_COMPLETE_ORBITS,
     minimum_core_radius_cells: float = MINIMUM_ACCEPTED_CORE_RADIUS_CELLS,
+    minimum_separation_over_plummer_radius: float = (
+        MINIMUM_ACCEPTED_SEPARATION_OVER_PLUMMER_RADIUS
+    ),
 ) -> SourceBuildResult:
     """Accept bins that pass spatial, Hamiltonian, and core sampling gates."""
 
@@ -199,6 +226,7 @@ def build_source_rows(
             maximum_spatial_systematic_fraction,
             maximum_energy_error_over_transfer,
             minimum_core_radius_cells,
+            minimum_separation_over_plummer_radius,
         ],
         dtype=float,
     )
@@ -211,6 +239,8 @@ def build_source_rows(
         or maximum_energy_error_over_transfer
         > MAXIMUM_ACCEPTED_ENERGY_ERROR_OVER_TRANSFER
         or minimum_core_radius_cells < MINIMUM_ACCEPTED_CORE_RADIUS_CELLS
+        or minimum_separation_over_plummer_radius
+        < MINIMUM_ACCEPTED_SEPARATION_OVER_PLUMMER_RADIUS
         or minimum_complete_orbits_per_bin < MINIMUM_ACCEPTED_COMPLETE_ORBITS
     ):
         raise ValueError("subgrid acceptance limits are invalid")
@@ -311,6 +341,23 @@ def build_source_rows(
             reasons.append("reference half-density radius is underresolved")
         if comparison_core_cells < minimum_core_radius_cells:
             reasons.append("comparison half-density radius is underresolved")
+        lower_separation_pc = float(bin_row["lower_separation_pc"])
+        reference_separation_over_plummer = (
+            lower_separation_pc / reference["plummer_radius_pc"]
+        )
+        comparison_separation_over_plummer = (
+            lower_separation_pc / comparison["plummer_radius_pc"]
+        )
+        if (
+            reference_separation_over_plummer
+            < minimum_separation_over_plummer_radius
+        ):
+            reasons.append("reference binary separation is softened")
+        if (
+            comparison_separation_over_plummer
+            < minimum_separation_over_plummer_radius
+        ):
+            reasons.append("comparison binary separation is softened")
 
         differences = comparison_bin[
             "fractional_rate_difference_from_reference"
@@ -342,6 +389,12 @@ def build_source_rows(
                     "comparison_minimum_half_density_radius_over_cell_size": (
                         comparison_core_cells
                     ),
+                    "reference_minimum_separation_over_plummer_radius": (
+                        reference_separation_over_plummer
+                    ),
+                    "comparison_minimum_separation_over_plummer_radius": (
+                        comparison_separation_over_plummer
+                    ),
                 }
             )
             continue
@@ -354,6 +407,8 @@ def build_source_rows(
                 source_case_id=reference["case_id"],
                 schrodinger_poisson_similarity_parameter=similarity,
                 binary_to_soliton_mass=binary_fraction,
+                mass_ratio_q=reference["mass_ratio_q"],
+                reference_eccentricity=reference["initial_eccentricity"],
                 separation_bin_index=int(bin_row["bin"]),
                 lower_separation_over_core_radius=float(
                     bin_row["lower_separation_pc"] / core_radius
@@ -445,6 +500,9 @@ def write_calibration_table(
     ),
     minimum_complete_orbits_per_bin: int = MINIMUM_ACCEPTED_COMPLETE_ORBITS,
     minimum_core_radius_cells: float = MINIMUM_ACCEPTED_CORE_RADIUS_CELLS,
+    minimum_separation_over_plummer_radius: float = (
+        MINIMUM_ACCEPTED_SEPARATION_OVER_PLUMMER_RADIUS
+    ),
 ) -> dict:
     """Publish a CSV followed by a checksum-bearing commit sidecar.
 
@@ -465,6 +523,9 @@ def write_calibration_table(
             ),
             minimum_complete_orbits_per_bin=minimum_complete_orbits_per_bin,
             minimum_core_radius_cells=minimum_core_radius_cells,
+            minimum_separation_over_plummer_radius=(
+                minimum_separation_over_plummer_radius
+            ),
         )
         for source in sources
     ]
@@ -472,6 +533,8 @@ def write_calibration_table(
         (row for result in results for row in result.accepted_rows),
         key=lambda row: (
             row.profile_id,
+            row.mass_ratio_q,
+            row.reference_eccentricity,
             row.binary_to_soliton_mass,
             row.reference_mean_separation_over_core_radius,
         ),
@@ -487,6 +550,9 @@ def write_calibration_table(
         ),
         "minimum_complete_orbits_per_bin": minimum_complete_orbits_per_bin,
         "minimum_core_radius_cells": minimum_core_radius_cells,
+        "minimum_separation_over_plummer_radius": (
+            minimum_separation_over_plummer_radius
+        ),
         "extrapolation": "prohibited",
     }
     release_input_sha256 = _release_input_sha256(acceptance, results)
@@ -512,7 +578,7 @@ def write_calibration_table(
     os.replace(temporary, output)
     summary = {
         "status": "accepted_subgrid_calibration_table",
-        "schema_version": 2,
+        "schema_version": 3,
         "release_input_sha256": release_input_sha256,
         "rows": len(rows),
         "profiles": sorted({row.profile_id for row in rows}),

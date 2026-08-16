@@ -25,10 +25,22 @@ MAXIMUM_ACCEPTED_SPATIAL_SYSTEMATIC_FRACTION = 0.20
 MAXIMUM_ACCEPTED_ENERGY_ERROR_OVER_TRANSFER = 0.01
 MINIMUM_ACCEPTED_COMPLETE_ORBITS = 8
 MINIMUM_ACCEPTED_CORE_RADIUS_CELLS = 2.0
-CALIBRATION_INTERPOLATION_SPECIFICATION = {
+MINIMUM_ACCEPTED_SEPARATION_OVER_PLUMMER_RADIUS = 2.0
+LEGACY_CALIBRATION_INTERPOLATION_SPECIFICATION = {
     "profile_axis": "discrete_no_cross_profile_interpolation",
     "mass_axis": "piecewise_linear_binary_to_soliton_mass",
     "separation_axis": "piecewise_linear_reference_bin_centres",
+    "outer_half_bins": "nearest_accepted_bin_value",
+    "missing_separation_bins": "crossing_prohibited",
+    "spatial_systematics": "maximum_of_all_bracketing_rows",
+    "extrapolation": "prohibited",
+}
+CALIBRATION_INTERPOLATION_SPECIFICATION = {
+    "profile_axis": "discrete_no_cross_profile_interpolation",
+    "mass_ratio_axis": "piecewise_linear_with_complete_e_mass_separation_support",
+    "eccentricity_axis": "piecewise_linear_with_complete_mass_separation_support",
+    "mass_axis": "piecewise_linear_binary_to_soliton_mass_within_q_e_plane",
+    "separation_axis": "piecewise_linear_reference_bin_centres_within_q_e_plane",
     "outer_half_bins": "nearest_accepted_bin_value",
     "missing_separation_bins": "crossing_prohibited",
     "spatial_systematics": "maximum_of_all_bracketing_rows",
@@ -68,6 +80,8 @@ class SubgridCalibrationRow:
     comparison_complete_orbits: int
     reference_minimum_half_density_radius_over_cell_size: float
     comparison_minimum_half_density_radius_over_cell_size: float
+    mass_ratio_q: float = 1.0
+    reference_eccentricity: float = 0.0
     convergence_status: str = ACCEPTED_STATUS
 
     def __post_init__(self) -> None:
@@ -86,6 +100,8 @@ class SubgridCalibrationRow:
                 self.wave_total_spatial_systematic_fraction,
                 self.reference_minimum_half_density_radius_over_cell_size,
                 self.comparison_minimum_half_density_radius_over_cell_size,
+                self.mass_ratio_q,
+                self.reference_eccentricity,
             ],
             dtype=float,
         )
@@ -98,6 +114,8 @@ class SubgridCalibrationRow:
         if (
             self.schrodinger_poisson_similarity_parameter <= 0.0
             or self.binary_to_soliton_mass <= 0.0
+            or not 0.0 < self.mass_ratio_q <= 1.0
+            or not 0.0 <= self.reference_eccentricity < 1.0
             or self.lower_separation_over_core_radius <= 0.0
             or self.upper_separation_over_core_radius
             <= self.lower_separation_over_core_radius
@@ -138,14 +156,25 @@ def summarize_calibrated_domains(
 ) -> list[dict]:
     """Return deterministic mass-plane domains and maximum systematics."""
 
-    grouped: dict[tuple[str, float], list[SubgridCalibrationRow]] = {}
+    grouped: dict[tuple[str, float, float, float], list[SubgridCalibrationRow]] = {}
     for row in rows:
         grouped.setdefault(
-            (row.profile_id, row.binary_to_soliton_mass), []
+            (
+                row.profile_id,
+                row.mass_ratio_q,
+                row.reference_eccentricity,
+                row.binary_to_soliton_mass,
+            ),
+            [],
         ).append(row)
     domains = []
-    for (profile_id, mass_fraction), group in sorted(grouped.items()):
-        ordered = sorted(group, key=lambda row: row.separation_bin_index)
+    for (profile_id, mass_ratio_q, eccentricity, mass_fraction), group in sorted(
+        grouped.items()
+    ):
+        ordered = sorted(
+            group,
+            key=lambda row: row.reference_mean_separation_over_core_radius,
+        )
         domains.append(
             {
                 "profile_id": profile_id,
@@ -153,6 +182,8 @@ def summarize_calibrated_domains(
                     0
                 ].schrodinger_poisson_similarity_parameter,
                 "binary_to_soliton_mass": mass_fraction,
+                "mass_ratio_q": mass_ratio_q,
+                "reference_eccentricity": eccentricity,
                 "source_case_ids": sorted(
                     {row.source_case_id for row in ordered}
                 ),
@@ -198,6 +229,8 @@ class InterpolatedSubgridRates:
     orbital_power_spatial_systematic_fraction: float
     orbital_torque_spatial_systematic_fraction: float
     wave_total_spatial_systematic_fraction: float
+    mass_ratio_q: float = 1.0
+    reference_eccentricity: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -264,6 +297,11 @@ def _interpolate_rate_rows(
 ) -> InterpolatedSubgridRates:
     if lower.profile_id != upper.profile_id:
         raise ValueError("calibration profiles cannot be mixed")
+    if not np.isclose(lower.mass_ratio_q, upper.mass_ratio_q) or not np.isclose(
+        lower.reference_eccentricity,
+        upper.reference_eccentricity,
+    ):
+        raise ValueError("calibration q-e planes cannot be mixed")
     similarity = _linear(
         lower.schrodinger_poisson_similarity_parameter,
         upper.schrodinger_poisson_similarity_parameter,
@@ -301,6 +339,61 @@ def _interpolate_rate_rows(
             lower.wave_total_spatial_systematic_fraction,
             upper.wave_total_spatial_systematic_fraction,
         ),
+        mass_ratio_q=lower.mass_ratio_q,
+        reference_eccentricity=lower.reference_eccentricity,
+    )
+
+
+def _blend_interpolated_rates(
+    lower: InterpolatedSubgridRates,
+    upper: InterpolatedSubgridRates,
+    weight: float,
+    *,
+    mass_ratio_q: float,
+    eccentricity: float,
+    binary_mass_fraction: float,
+    separation_ratio: float,
+) -> InterpolatedSubgridRates:
+    if lower.profile_id != upper.profile_id:
+        raise ValueError("calibration profiles cannot be mixed")
+    return InterpolatedSubgridRates(
+        profile_id=lower.profile_id,
+        schrodinger_poisson_similarity_parameter=_linear(
+            lower.schrodinger_poisson_similarity_parameter,
+            upper.schrodinger_poisson_similarity_parameter,
+            weight,
+        ),
+        binary_to_soliton_mass=float(binary_mass_fraction),
+        separation_over_core_radius=float(separation_ratio),
+        dimensionless_orbital_power=_linear(
+            lower.dimensionless_orbital_power,
+            upper.dimensionless_orbital_power,
+            weight,
+        ),
+        dimensionless_orbital_torque=_linear(
+            lower.dimensionless_orbital_torque,
+            upper.dimensionless_orbital_torque,
+            weight,
+        ),
+        dimensionless_wave_total_energy_rate=_linear(
+            lower.dimensionless_wave_total_energy_rate,
+            upper.dimensionless_wave_total_energy_rate,
+            weight,
+        ),
+        orbital_power_spatial_systematic_fraction=max(
+            lower.orbital_power_spatial_systematic_fraction,
+            upper.orbital_power_spatial_systematic_fraction,
+        ),
+        orbital_torque_spatial_systematic_fraction=max(
+            lower.orbital_torque_spatial_systematic_fraction,
+            upper.orbital_torque_spatial_systematic_fraction,
+        ),
+        wave_total_spatial_systematic_fraction=max(
+            lower.wave_total_spatial_systematic_fraction,
+            upper.wave_total_spatial_systematic_fraction,
+        ),
+        mass_ratio_q=float(mass_ratio_q),
+        reference_eccentricity=float(eccentricity),
     )
 
 
@@ -314,13 +407,40 @@ class SubgridCalibrationTable:
         keys = [
             (
                 row.profile_id,
+                row.mass_ratio_q,
+                row.reference_eccentricity,
                 row.binary_to_soliton_mass,
+                row.source_case_id,
                 row.separation_bin_index,
             )
             for row in self.rows
         ]
         if len(keys) != len(set(keys)):
             raise ValueError("subgrid calibration rows must be unique")
+        planes: dict[
+            tuple[str, float, float, float], list[SubgridCalibrationRow]
+        ] = {}
+        for row in self.rows:
+            planes.setdefault(
+                (
+                    row.profile_id,
+                    row.mass_ratio_q,
+                    row.reference_eccentricity,
+                    row.binary_to_soliton_mass,
+                ),
+                [],
+            ).append(row)
+        for rows in planes.values():
+            ordered = sorted(
+                rows,
+                key=lambda row: row.reference_mean_separation_over_core_radius,
+            )
+            if any(
+                upper.lower_separation_over_core_radius
+                < lower.upper_separation_over_core_radius - 1.0e-12
+                for lower, upper in zip(ordered, ordered[1:])
+            ):
+                raise ValueError("accepted separation bins cannot overlap")
         profile_similarity: dict[str, list[float]] = {}
         for row in self.rows:
             profile_similarity.setdefault(row.profile_id, []).append(
@@ -399,6 +519,10 @@ class SubgridCalibrationTable:
                             "comparison_minimum_half_density_radius_over_cell_size"
                         ]
                     ),
+                    mass_ratio_q=float(record.get("mass_ratio_q") or 1.0),
+                    reference_eccentricity=float(
+                        record.get("reference_eccentricity") or 0.0
+                    ),
                     convergence_status=record["convergence_status"],
                 )
             )
@@ -427,9 +551,10 @@ class SubgridCalibrationTable:
             raise ValueError(
                 f"subgrid release commit sidecar is unreadable: {summary_path}"
             ) from error
+        schema_version = summary.get("schema_version")
         if (
             summary.get("status") != ACCEPTED_TABLE_STATUS
-            or summary.get("schema_version") != 2
+            or schema_version not in (2, 3)
         ):
             raise ValueError("subgrid release status or schema is invalid")
         table_metadata = summary.get("table")
@@ -470,7 +595,12 @@ class SubgridCalibrationTable:
         profiles = sorted({row.profile_id for row in table.rows})
         if summary.get("profiles") != profiles:
             raise ValueError("subgrid release profile list does not match")
-        if summary.get("interpolation") != CALIBRATION_INTERPOLATION_SPECIFICATION:
+        expected_interpolation = (
+            LEGACY_CALIBRATION_INTERPOLATION_SPECIFICATION
+            if schema_version == 2
+            else CALIBRATION_INTERPOLATION_SPECIFICATION
+        )
+        if summary.get("interpolation") != expected_interpolation:
             raise ValueError("subgrid release interpolation rules do not match")
         acceptance = summary.get("acceptance")
         if not isinstance(acceptance, dict):
@@ -486,12 +616,20 @@ class SubgridCalibrationTable:
                 acceptance["minimum_complete_orbits_per_bin"]
             )
             minimum_core_cells = float(acceptance["minimum_core_radius_cells"])
+            minimum_separation_over_plummer = float(
+                acceptance.get("minimum_separation_over_plummer_radius", 0.0)
+            )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError(
                 "subgrid release acceptance criteria are invalid"
             ) from error
         acceptance_values = np.asarray(
-            [maximum_spatial, maximum_energy_error, minimum_core_cells],
+            [
+                maximum_spatial,
+                maximum_energy_error,
+                minimum_core_cells,
+                minimum_separation_over_plummer,
+            ],
             dtype=float,
         )
         if (
@@ -502,6 +640,11 @@ class SubgridCalibrationTable:
             > MAXIMUM_ACCEPTED_ENERGY_ERROR_OVER_TRANSFER
             or minimum_orbits < MINIMUM_ACCEPTED_COMPLETE_ORBITS
             or minimum_core_cells < MINIMUM_ACCEPTED_CORE_RADIUS_CELLS
+            or (
+                schema_version == 3
+                and minimum_separation_over_plummer
+                < MINIMUM_ACCEPTED_SEPARATION_OVER_PLUMMER_RADIUS
+            )
             or acceptance.get("extrapolation") != "prohibited"
         ):
             raise ValueError("subgrid release acceptance criteria are unsafe")
@@ -570,8 +713,18 @@ class SubgridCalibrationTable:
             accepted_rows += source_rows
         if accepted_rows != len(table.rows):
             raise ValueError("subgrid release provenance row count does not close")
+        expected_domains = summarize_calibrated_domains(table.rows)
+        if schema_version == 2:
+            expected_domains = [
+                {
+                    key: value
+                    for key, value in domain.items()
+                    if key not in {"mass_ratio_q", "reference_eccentricity"}
+                }
+                for domain in expected_domains
+            ]
         domains = summary.get("calibrated_domains")
-        if domains != summarize_calibrated_domains(table.rows):
+        if domains != expected_domains:
             raise ValueError("subgrid release calibrated domains do not match")
         return table
 
@@ -579,6 +732,8 @@ class SubgridCalibrationTable:
         self,
         *,
         profile_id: str,
+        mass_ratio_q: float,
+        eccentricity: float,
         binary_mass_fraction: float,
     ) -> tuple[SubgridCalibrationRow, ...]:
         rows = tuple(
@@ -587,6 +742,18 @@ class SubgridCalibrationTable:
                     row
                     for row in self.rows
                     if row.profile_id == profile_id
+                    and np.isclose(
+                        row.mass_ratio_q,
+                        mass_ratio_q,
+                        rtol=1.0e-12,
+                        atol=0.0,
+                    )
+                    and np.isclose(
+                        row.reference_eccentricity,
+                        eccentricity,
+                        rtol=1.0e-12,
+                        atol=1.0e-15,
+                    )
                     and np.isclose(
                         row.binary_to_soliton_mass,
                         binary_mass_fraction,
@@ -598,7 +765,7 @@ class SubgridCalibrationTable:
             )
         )
         if not rows:
-            raise ValueError("requested mass plane is absent")
+            raise ValueError("requested q-e-mass plane is absent")
         return rows
 
     def _interpolate_separation(
@@ -625,9 +792,7 @@ class SubgridCalibrationTable:
             lower = rows[upper_index - 1]
             upper = rows[upper_index]
             if (
-                upper.separation_bin_index
-                != lower.separation_bin_index + 1
-                or upper.lower_separation_over_core_radius
+                upper.lower_separation_over_core_radius
                 > lower.upper_separation_over_core_radius + 1.0e-12
             ):
                 raise ValueError("separation interpolation crosses an unmeasured gap")
@@ -647,27 +812,69 @@ class SubgridCalibrationTable:
             separation_ratio=separation_ratio,
         )
 
-    def interpolate(
+    @staticmethod
+    def _axis_bracket(
+        coordinates: list[float],
+        target: float,
+        *,
+        axis_name: str,
+    ) -> tuple[float, float, float]:
+        exact = next(
+            (
+                coordinate
+                for coordinate in coordinates
+                if np.isclose(
+                    coordinate,
+                    target,
+                    rtol=1.0e-12,
+                    atol=1.0e-15,
+                )
+            ),
+            None,
+        )
+        if exact is not None:
+            return exact, exact, 0.0
+        if not coordinates or target < coordinates[0] or target > coordinates[-1]:
+            raise ValueError(f"{axis_name} lies outside the calibrated range")
+        upper_index = int(np.searchsorted(coordinates, target))
+        lower = coordinates[upper_index - 1]
+        upper = coordinates[upper_index]
+        return lower, upper, (target - lower) / (upper - lower)
+
+    def _interpolate_mass_and_separation(
         self,
         *,
         profile_id: str,
+        mass_ratio_q: float,
+        eccentricity: float,
         binary_to_soliton_mass: float,
         separation_over_core_radius: float,
     ) -> InterpolatedSubgridRates:
-        values = np.asarray(
-            [binary_to_soliton_mass, separation_over_core_radius], dtype=float
+        q_e_rows = tuple(
+            row
+            for row in self.rows
+            if row.profile_id == profile_id
+            and np.isclose(
+                row.mass_ratio_q,
+                mass_ratio_q,
+                rtol=1.0e-12,
+                atol=0.0,
+            )
+            and np.isclose(
+                row.reference_eccentricity,
+                eccentricity,
+                rtol=1.0e-12,
+                atol=1.0e-15,
+            )
         )
-        if np.any(~np.isfinite(values)) or np.any(values <= 0.0):
-            raise ValueError("subgrid interpolation coordinates must be positive")
+        if not q_e_rows:
+            raise ValueError("required mass-ratio/eccentricity support is absent")
         masses = sorted(
             {
                 row.binary_to_soliton_mass
-                for row in self.rows
-                if row.profile_id == profile_id
+                for row in q_e_rows
             }
         )
-        if not masses:
-            raise ValueError(f"unknown calibration profile: {profile_id}")
         exact = next(
             (
                 mass
@@ -685,6 +892,8 @@ class SubgridCalibrationTable:
             return self._interpolate_separation(
                 self._mass_plane(
                     profile_id=profile_id,
+                    mass_ratio_q=mass_ratio_q,
+                    eccentricity=eccentricity,
                     binary_mass_fraction=exact,
                 ),
                 separation_over_core_radius,
@@ -697,6 +906,8 @@ class SubgridCalibrationTable:
         lower_rates = self._interpolate_separation(
             self._mass_plane(
                 profile_id=profile_id,
+                mass_ratio_q=mass_ratio_q,
+                eccentricity=eccentricity,
                 binary_mass_fraction=lower_mass,
             ),
             separation_over_core_radius,
@@ -704,6 +915,8 @@ class SubgridCalibrationTable:
         upper_rates = self._interpolate_separation(
             self._mass_plane(
                 profile_id=profile_id,
+                mass_ratio_q=mass_ratio_q,
+                eccentricity=eccentricity,
                 binary_mass_fraction=upper_mass,
             ),
             separation_over_core_radius,
@@ -711,42 +924,133 @@ class SubgridCalibrationTable:
         weight = (binary_to_soliton_mass - lower_mass) / (
             upper_mass - lower_mass
         )
-        return InterpolatedSubgridRates(
+        return _blend_interpolated_rates(
+            lower_rates,
+            upper_rates,
+            weight,
+            mass_ratio_q=mass_ratio_q,
+            eccentricity=eccentricity,
+            binary_mass_fraction=binary_to_soliton_mass,
+            separation_ratio=separation_over_core_radius,
+        )
+
+    def _interpolate_eccentricity(
+        self,
+        *,
+        profile_id: str,
+        mass_ratio_q: float,
+        eccentricity: float,
+        binary_to_soliton_mass: float,
+        separation_over_core_radius: float,
+    ) -> InterpolatedSubgridRates:
+        eccentricities = sorted(
+            {
+                row.reference_eccentricity
+                for row in self.rows
+                if row.profile_id == profile_id
+                and np.isclose(
+                    row.mass_ratio_q,
+                    mass_ratio_q,
+                    rtol=1.0e-12,
+                    atol=0.0,
+                )
+            }
+        )
+        lower_e, upper_e, weight = self._axis_bracket(
+            eccentricities,
+            eccentricity,
+            axis_name="eccentricity",
+        )
+        lower_rates = self._interpolate_mass_and_separation(
             profile_id=profile_id,
-            schrodinger_poisson_similarity_parameter=_linear(
-                lower_rates.schrodinger_poisson_similarity_parameter,
-                upper_rates.schrodinger_poisson_similarity_parameter,
-                weight,
-            ),
-            binary_to_soliton_mass=float(binary_to_soliton_mass),
-            separation_over_core_radius=float(separation_over_core_radius),
-            dimensionless_orbital_power=_linear(
-                lower_rates.dimensionless_orbital_power,
-                upper_rates.dimensionless_orbital_power,
-                weight,
-            ),
-            dimensionless_orbital_torque=_linear(
-                lower_rates.dimensionless_orbital_torque,
-                upper_rates.dimensionless_orbital_torque,
-                weight,
-            ),
-            dimensionless_wave_total_energy_rate=_linear(
-                lower_rates.dimensionless_wave_total_energy_rate,
-                upper_rates.dimensionless_wave_total_energy_rate,
-                weight,
-            ),
-            orbital_power_spatial_systematic_fraction=max(
-                lower_rates.orbital_power_spatial_systematic_fraction,
-                upper_rates.orbital_power_spatial_systematic_fraction,
-            ),
-            orbital_torque_spatial_systematic_fraction=max(
-                lower_rates.orbital_torque_spatial_systematic_fraction,
-                upper_rates.orbital_torque_spatial_systematic_fraction,
-            ),
-            wave_total_spatial_systematic_fraction=max(
-                lower_rates.wave_total_spatial_systematic_fraction,
-                upper_rates.wave_total_spatial_systematic_fraction,
-            ),
+            mass_ratio_q=mass_ratio_q,
+            eccentricity=lower_e,
+            binary_to_soliton_mass=binary_to_soliton_mass,
+            separation_over_core_radius=separation_over_core_radius,
+        )
+        if lower_e == upper_e:
+            return lower_rates
+        upper_rates = self._interpolate_mass_and_separation(
+            profile_id=profile_id,
+            mass_ratio_q=mass_ratio_q,
+            eccentricity=upper_e,
+            binary_to_soliton_mass=binary_to_soliton_mass,
+            separation_over_core_radius=separation_over_core_radius,
+        )
+        return _blend_interpolated_rates(
+            lower_rates,
+            upper_rates,
+            weight,
+            mass_ratio_q=mass_ratio_q,
+            eccentricity=eccentricity,
+            binary_mass_fraction=binary_to_soliton_mass,
+            separation_ratio=separation_over_core_radius,
+        )
+
+    def interpolate(
+        self,
+        *,
+        profile_id: str,
+        binary_to_soliton_mass: float,
+        separation_over_core_radius: float,
+        mass_ratio_q: float = 1.0,
+        eccentricity: float = 0.0,
+    ) -> InterpolatedSubgridRates:
+        values = np.asarray(
+            [
+                binary_to_soliton_mass,
+                separation_over_core_radius,
+                mass_ratio_q,
+                eccentricity,
+            ],
+            dtype=float,
+        )
+        if (
+            np.any(~np.isfinite(values))
+            or binary_to_soliton_mass <= 0.0
+            or separation_over_core_radius <= 0.0
+            or not 0.0 < mass_ratio_q <= 1.0
+            or not 0.0 <= eccentricity < 1.0
+        ):
+            raise ValueError("subgrid interpolation coordinates are invalid")
+        mass_ratios = sorted(
+            {
+                row.mass_ratio_q
+                for row in self.rows
+                if row.profile_id == profile_id
+            }
+        )
+        if not mass_ratios:
+            raise ValueError(f"unknown calibration profile: {profile_id}")
+        lower_q, upper_q, weight = self._axis_bracket(
+            mass_ratios,
+            mass_ratio_q,
+            axis_name="mass ratio",
+        )
+        lower_rates = self._interpolate_eccentricity(
+            profile_id=profile_id,
+            mass_ratio_q=lower_q,
+            eccentricity=eccentricity,
+            binary_to_soliton_mass=binary_to_soliton_mass,
+            separation_over_core_radius=separation_over_core_radius,
+        )
+        if lower_q == upper_q:
+            return lower_rates
+        upper_rates = self._interpolate_eccentricity(
+            profile_id=profile_id,
+            mass_ratio_q=upper_q,
+            eccentricity=eccentricity,
+            binary_to_soliton_mass=binary_to_soliton_mass,
+            separation_over_core_radius=separation_over_core_radius,
+        )
+        return _blend_interpolated_rates(
+            lower_rates,
+            upper_rates,
+            weight,
+            mass_ratio_q=mass_ratio_q,
+            eccentricity=eccentricity,
+            binary_mass_fraction=binary_to_soliton_mass,
+            separation_ratio=separation_over_core_radius,
         )
 
 
@@ -754,6 +1058,8 @@ def find_mass_interpolation_witness(
     table: SubgridCalibrationTable,
     *,
     profile_id: str,
+    mass_ratio_q: float = 1.0,
+    eccentricity: float = 0.0,
 ) -> InterpolatedSubgridRates | None:
     """Return one measured-overlap point that exercises mass interpolation.
 
@@ -767,15 +1073,21 @@ def find_mass_interpolation_witness(
             row.binary_to_soliton_mass
             for row in table.rows
             if row.profile_id == profile_id
+            and np.isclose(row.mass_ratio_q, mass_ratio_q)
+            and np.isclose(row.reference_eccentricity, eccentricity)
         }
     )
     for lower_mass, upper_mass in zip(masses, masses[1:]):
         lower_rows = table._mass_plane(
             profile_id=profile_id,
+            mass_ratio_q=mass_ratio_q,
+            eccentricity=eccentricity,
             binary_mass_fraction=lower_mass,
         )
         upper_rows = table._mass_plane(
             profile_id=profile_id,
+            mass_ratio_q=mass_ratio_q,
+            eccentricity=eccentricity,
             binary_mass_fraction=upper_mass,
         )
         for lower_row in lower_rows:
@@ -793,6 +1105,8 @@ def find_mass_interpolation_witness(
                 try:
                     return table.interpolate(
                         profile_id=profile_id,
+                        mass_ratio_q=mass_ratio_q,
+                        eccentricity=eccentricity,
                         binary_to_soliton_mass=0.5
                         * (lower_mass + upper_mass),
                         separation_over_core_radius=0.5
@@ -812,9 +1126,13 @@ def physical_subgrid_rates(
     soliton_mass_msun: float,
     core_radius_pc: float,
     separation_pc: float,
+    eccentricity: float = 0.0,
 ) -> PhysicalSubgridRates:
+    mass_ratio_q = min(mass1_msun, mass2_msun) / max(mass1_msun, mass2_msun)
     dimensionless = table.interpolate(
         profile_id=profile_id,
+        mass_ratio_q=mass_ratio_q,
+        eccentricity=eccentricity,
         binary_to_soliton_mass=(mass1_msun + mass2_msun)
         / soliton_mass_msun,
         separation_over_core_radius=separation_pc / core_radius_pc,
@@ -986,6 +1304,8 @@ def verify_subgrid_runtime(
     for row in table.rows:
         interpolated = table.interpolate(
             profile_id=row.profile_id,
+            mass_ratio_q=row.mass_ratio_q,
+            eccentricity=row.reference_eccentricity,
             binary_to_soliton_mass=row.binary_to_soliton_mass,
             separation_over_core_radius=(
                 row.reference_mean_separation_over_core_radius
@@ -1010,18 +1330,21 @@ def verify_subgrid_runtime(
                 "accepted row does not round-trip through interpolation"
             )
 
-        component_mass = (
-            0.5 * row.binary_to_soliton_mass * soliton_mass
+        primary_mass = (
+            row.binary_to_soliton_mass * soliton_mass
+            / (1.0 + row.mass_ratio_q)
         )
+        secondary_mass = row.mass_ratio_q * primary_mass
         separation = row.reference_mean_separation_over_core_radius
         rates = physical_subgrid_rates(
             table,
             profile_id=row.profile_id,
-            mass1_msun=component_mass,
-            mass2_msun=component_mass,
+            mass1_msun=primary_mass,
+            mass2_msun=secondary_mass,
             soliton_mass_msun=soliton_mass,
             core_radius_pc=core_radius,
             separation_pc=separation,
+            eccentricity=row.reference_eccentricity,
         )
         resolved_power = (
             resolved_orbital_power_fraction * rates.orbital_power
@@ -1035,8 +1358,8 @@ def verify_subgrid_runtime(
             resolved_orbital_torque=resolved_torque,
         )
         orbit = keplerian_exchange_rates(
-            mass1_msun=component_mass,
-            mass2_msun=component_mass,
+            mass1_msun=primary_mass,
+            mass2_msun=secondary_mass,
             semimajor_axis_pc=separation,
             eccentricity=eccentricity,
             orbital_power=residual.residual_orbital_power,
@@ -1061,8 +1384,8 @@ def verify_subgrid_runtime(
             )
         step = advance_calibrated_exchange(
             rates,
-            mass1_msun=component_mass,
-            mass2_msun=component_mass,
+            mass1_msun=primary_mass,
+            mass2_msun=secondary_mass,
             semimajor_axis_pc=separation,
             eccentricity=eccentricity,
             time_step_myr=min(time_step_candidates),

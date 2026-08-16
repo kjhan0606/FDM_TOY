@@ -1,0 +1,60 @@
+metadata:
+  purpose: live_wave_q_e_small_separation_extension
+  profile_reference: "Boey et al. 2025 equation 4"
+  analytic_fdm_drag: false
+  status: designed_pilot_not_yet_accepted
+  note: >-
+    Each accepted table plane requires a matched resolution pair. Analytic FDM
+    drag is prohibited because every run evolves the live FDM wake.
+
+include_literature_anchors: false
+
+# The first six rows measure distinct q-e planes at a/r_c=0.20. The last four
+# rows extend two representative planes to separations below the existing
+# accepted table. No q/e interpolation or extrapolation is authorized.
+cases:
+  - {case_id: qe_q100_e000_a020, tier: 1, mass_ratio_q: 1.0, eccentricity: 0.0, binary_to_soliton_mass: 0.10, semi_major_axis_over_core_radius: 0.20}
+  - {case_id: qe_q030_e000_a020, tier: 1, mass_ratio_q: 0.3, eccentricity: 0.0, binary_to_soliton_mass: 0.10, semi_major_axis_over_core_radius: 0.20}
+  - {case_id: qe_q010_e000_a020, tier: 1, mass_ratio_q: 0.1, eccentricity: 0.0, binary_to_soliton_mass: 0.10, semi_major_axis_over_core_radius: 0.20}
+  - {case_id: qe_q100_e030_a020, tier: 1, mass_ratio_q: 1.0, eccentricity: 0.3, binary_to_soliton_mass: 0.10, semi_major_axis_over_core_radius: 0.20}
+  - {case_id: qe_q100_e060_a020, tier: 1, mass_ratio_q: 1.0, eccentricity: 0.6, binary_to_soliton_mass: 0.10, semi_major_axis_over_core_radius: 0.20}
+  - {case_id: qe_q030_e030_a020, tier: 1, mass_ratio_q: 0.3, eccentricity: 0.3, binary_to_soliton_mass: 0.10, semi_major_axis_over_core_radius: 0.20}
+  - {case_id: qe_q100_e000_a010, tier: 2, mass_ratio_q: 1.0, eccentricity: 0.0, binary_to_soliton_mass: 0.10, semi_major_axis_over_core_radius: 0.10}
+  - {case_id: qe_q100_e000_a005, tier: 2, mass_ratio_q: 1.0, eccentricity: 0.0, binary_to_soliton_mass: 0.10, semi_major_axis_over_core_radius: 0.05}
+  - {case_id: qe_q030_e030_a010, tier: 2, mass_ratio_q: 0.3, eccentricity: 0.3, binary_to_soliton_mass: 0.10, semi_major_axis_over_core_radius: 0.10}
+  - {case_id: qe_q030_e030_a005, tier: 2, mass_ratio_q: 0.3, eccentricity: 0.3, binary_to_soliton_mass: 0.10, semi_major_axis_over_core_radius: 0.05}
+
+similarity_scaling:
+  parameter: "hbar^2/(G*m^2*M_soliton*r_core)"
+  interpretation: >-
+    Physical boson-mass variants share one dimensionless calculation only when
+    this parameter and every other dimensionless state variable agree.
+
+numerics:
+  # This resolves a/r_c=0.05 by >2 Plummer radii at n=256. A separate
+  # doubled-box control is required before promoting the pilot to production.
+  box_over_core_radius: 12.0
+  resolutions_by_tier:
+    1: [128, 256]
+    2: [256, 512]
+
+energy_accounting:
+  interaction_energy: integral_rho_phi_bh_dv_counted_once
+  wave_self_gravity: one_half_integral_rho_phi_wave_dv
+  point_sampled_bh_phi_wave: gauge_aligned_force_diagnostic_only
+  single_bh_acceptance:
+    maximum_delta_energy_relative_difference: 0.005
+    maximum_force_relative_difference: 0.02
+  evolution_acceptance:
+    maximum_wave_decomposition_relative_error: 1.0e-12
+    maximum_total_energy_drift_over_transfer: 0.01
+
+measurements:
+  - binary_separation_and_osculating_elements
+  - orbital_energy_and_angular_momentum
+  - wave_kinetic_self_gravity_and_bh_interaction_energy
+  - radial_mass_energy_and_angular_momentum_flux
+  - central_density_and_half_density_radius
+  - radial_monopole_profile_and_complex_density_multipoles_l1_l2
+  - outgoing_wave_energy
+  - total_mass_energy_and_angular_momentum_error
