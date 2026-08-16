@@ -22,6 +22,18 @@ def _output_argument(arguments: list[str]) -> Path:
     raise ValueError("the Torch launcher requires --output RUN_DIRECTORY")
 
 
+def _pid_marker(output: Path) -> Path | None:
+    value = os.environ.get("FDM_SOLVER_PID_FILE")
+    if not value:
+        return None
+    marker = Path(value).expanduser().resolve()
+    if output == marker or output in marker.parents:
+        raise ValueError(
+            "FDM_SOLVER_PID_FILE must be outside a new solver output directory"
+        )
+    return marker
+
+
 def _exec_solver(project: Path, arguments: list[str]) -> None:
     runner = project / "scripts" / "run_torch_wave_case.py"
     os.execv(sys.executable, [sys.executable, str(runner), *arguments])
@@ -39,14 +51,9 @@ def main() -> int:
         _snapshot_run(project, output)
         _exec_solver(project, arguments)
 
+    pid_marker = _pid_marker(output)
     runner = project / "scripts" / "run_torch_wave_case.py"
     process = subprocess.Popen([sys.executable, str(runner), *arguments])
-    pid_marker_value = os.environ.get("FDM_SOLVER_PID_FILE")
-    pid_marker = (
-        None
-        if not pid_marker_value
-        else Path(pid_marker_value).expanduser().resolve()
-    )
     if pid_marker is not None:
         pid_marker.parent.mkdir(parents=True, exist_ok=True)
         temporary = pid_marker.with_name(f".{pid_marker.name}.tmp")

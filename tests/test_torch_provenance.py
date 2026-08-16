@@ -9,7 +9,7 @@ import pytest
 PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT / "scripts"))
 
-from launch_torch_wave_case import _output_argument  # noqa: E402
+from launch_torch_wave_case import _output_argument, _pid_marker  # noqa: E402
 import launch_torch_wave_case  # noqa: E402
 import snapshot_torch_provenance  # noqa: E402
 from snapshot_torch_provenance import _snapshot_run  # noqa: E402
@@ -21,6 +21,19 @@ def test_output_argument_accepts_both_cli_forms(tmp_path: Path) -> None:
     assert _output_argument([f"--output={expected}", "reference"]) == expected
     with pytest.raises(ValueError, match="--output"):
         _output_argument(["reference"])
+
+
+def test_solver_pid_marker_must_be_outside_new_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = (tmp_path / "run").resolve()
+    monkeypatch.setenv("FDM_SOLVER_PID_FILE", str(output / "solver.pid"))
+    with pytest.raises(ValueError, match="outside"):
+        _pid_marker(output)
+
+    external = tmp_path / "logs" / "solver.pid"
+    monkeypatch.setenv("FDM_SOLVER_PID_FILE", str(external))
+    assert _pid_marker(output) == external.resolve()
 
 
 def test_solver_pid_marker_remains_until_wait(
