@@ -230,6 +230,11 @@ def test_writer_is_loadable_by_the_runtime_table(tmp_path: Path) -> None:
         [CalibrationSource("boey2025", path)], output=output
     )
     assert summary["rows"] == 1
+    assert summary["schema_version"] == 2
+    assert len(summary["release_input_sha256"]) == 64
+    assert summary["table"]["release_input_sha256"] == summary[
+        "release_input_sha256"
+    ]
     assert summary["sources"][0]["accepted_bins"] == 1
     assert len(summary["sources"][0]["inputs"]) == 7
     assert all(
@@ -277,6 +282,40 @@ def test_release_loader_rejects_interrupted_pair_publish(tmp_path: Path) -> None
     # A normal rerun repairs the pair and makes it loadable again.
     write_calibration_table([CalibrationSource("boey2025", path)], output=output)
     assert len(SubgridCalibrationTable.from_release(output).rows) == 1
+
+
+def test_release_identity_changes_when_provenance_changes_but_rows_do_not(
+    tmp_path: Path,
+) -> None:
+    path = _write_summary(tmp_path)
+    output = tmp_path / "subgrid.csv"
+    first_summary = write_calibration_table(
+        [CalibrationSource("boey2025", path)], output=output
+    )
+    first_rows = SubgridCalibrationTable.from_csv(output).rows
+    old_commit_marker = output.with_suffix(".summary.json").read_text()
+
+    metadata_path = tmp_path / "n384" / "fdm_adapter_metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata["provenance_note"] = "same physics, different input bytes"
+    metadata_path.write_text(json.dumps(metadata, sort_keys=True))
+    second_summary = write_calibration_table(
+        [CalibrationSource("boey2025", path)], output=output
+    )
+    assert SubgridCalibrationTable.from_csv(output).rows == first_rows
+    assert second_summary["release_input_sha256"] != first_summary[
+        "release_input_sha256"
+    ]
+    assert second_summary["table"]["sha256"] != first_summary["table"]["sha256"]
+
+    # This reproduces a stop after the new CSV replace but before the new
+    # commit-marker replace: the previous summary must not validate it.
+    output.with_suffix(".summary.json").write_text(old_commit_marker)
+    with pytest.raises(ValueError, match="table checksum does not match"):
+        SubgridCalibrationTable.from_release(output)
+
+    write_calibration_table([CalibrationSource("boey2025", path)], output=output)
+    assert SubgridCalibrationTable.from_release(output).rows == first_rows
 
 
 def test_release_loader_requires_a_commit_sidecar(tmp_path: Path) -> None:

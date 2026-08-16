@@ -335,7 +335,10 @@ python scripts/build_subgrid_calibration_table.py \
 
 Production code should load this pair with
 `SubgridCalibrationTable.from_release`; it verifies the schema, provenance,
-row count, profile list, and CSV SHA-256. `from_csv` is reserved for
+row count, profile list, input-derived release ID, and CSV SHA-256. The release
+ID is stored in every CSV row, so a stop between the CSV and summary replaces
+cannot validate against the previous summary even when the numerical rows are
+unchanged. `from_csv` is reserved for
 exploratory data and test fixtures. No interpolation is permitted outside the
 accepted mass and separation ranges or across a rejected separation bin.
 `advance_calibrated_exchange` accepts the orbital power and torque already

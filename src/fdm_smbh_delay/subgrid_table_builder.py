@@ -152,6 +152,33 @@ def _input_record(role: str, path: Path) -> dict:
     }
 
 
+def _release_input_sha256(acceptance: dict, results: list[SourceBuildResult]) -> str:
+    sources = sorted(
+        (
+            {
+                "profile_id": result.profile_id,
+                "source_case_id": result.source_case_id,
+                "inputs": list(result.input_files),
+            }
+            for result in results
+        ),
+        key=lambda source: (
+            source["profile_id"],
+            source["source_case_id"],
+            source["inputs"][0]["path"],
+        ),
+    )
+    payload = {
+        "schema_version": 2,
+        "acceptance": acceptance,
+        "sources": sources,
+    }
+    encoded = json.dumps(
+        payload, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def build_source_rows(
     source: CalibrationSource,
     *,
@@ -434,9 +461,24 @@ def write_calibration_table(
     )
     if not rows:
         raise ValueError("no matched-separation bin passes the subgrid gates")
+    acceptance = {
+        "maximum_spatial_systematic_fraction": (
+            maximum_spatial_systematic_fraction
+        ),
+        "maximum_energy_error_over_transfer": (
+            maximum_energy_error_over_transfer
+        ),
+        "minimum_complete_orbits_per_bin": minimum_complete_orbits_per_bin,
+        "minimum_core_radius_cells": minimum_core_radius_cells,
+        "extrapolation": "prohibited",
+    }
+    release_input_sha256 = _release_input_sha256(acceptance, results)
     output = output.expanduser().resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
-    names = [field.name for field in fields(SubgridCalibrationRow)]
+    names = [
+        "release_input_sha256",
+        *(field.name for field in fields(SubgridCalibrationRow)),
+    ]
     temporary = output.with_name(f".{output.name}.tmp")
     import csv
 
@@ -444,14 +486,17 @@ def write_calibration_table(
         writer = csv.DictWriter(stream, fieldnames=names)
         writer.writeheader()
         for row in rows:
-            writer.writerow(asdict(row))
+            writer.writerow(
+                {"release_input_sha256": release_input_sha256, **asdict(row)}
+            )
         stream.flush()
         os.fsync(stream.fileno())
     table_sha256 = _sha256(temporary)
     os.replace(temporary, output)
     summary = {
         "status": "accepted_subgrid_calibration_table",
-        "schema_version": 1,
+        "schema_version": 2,
+        "release_input_sha256": release_input_sha256,
         "rows": len(rows),
         "profiles": sorted({row.profile_id for row in rows}),
         "calibrated_domains": summarize_calibrated_domains(rows),
@@ -459,18 +504,9 @@ def write_calibration_table(
             "file": output.name,
             "sha256": table_sha256,
             "rows": len(rows),
+            "release_input_sha256": release_input_sha256,
         },
-        "acceptance": {
-            "maximum_spatial_systematic_fraction": (
-                maximum_spatial_systematic_fraction
-            ),
-            "maximum_energy_error_over_transfer": (
-                maximum_energy_error_over_transfer
-            ),
-            "minimum_complete_orbits_per_bin": minimum_complete_orbits_per_bin,
-            "minimum_core_radius_cells": minimum_core_radius_cells,
-            "extrapolation": "prohibited",
-        },
+        "acceptance": acceptance,
         "sources": [
             {
                 "profile_id": result.profile_id,

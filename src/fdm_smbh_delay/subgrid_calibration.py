@@ -408,7 +408,7 @@ class SubgridCalibrationTable:
             ) from error
         if (
             summary.get("status") != ACCEPTED_TABLE_STATUS
-            or summary.get("schema_version") != 1
+            or summary.get("schema_version") != 2
         ):
             raise ValueError("subgrid release status or schema is invalid")
         table_metadata = summary.get("table")
@@ -423,6 +423,21 @@ class SubgridCalibrationTable:
             or _sha256(resolved) != expected_sha256
         ):
             raise ValueError("subgrid release table checksum does not match")
+        release_input_sha256 = summary.get("release_input_sha256")
+        if (
+            not isinstance(release_input_sha256, str)
+            or len(release_input_sha256) != 64
+            or table_metadata.get("release_input_sha256")
+            != release_input_sha256
+        ):
+            raise ValueError("subgrid release input identity does not match")
+        with resolved.open(newline="", encoding="utf-8") as stream:
+            release_records = list(csv.DictReader(stream))
+        release_ids = {
+            record.get("release_input_sha256") for record in release_records
+        }
+        if release_ids != {release_input_sha256}:
+            raise ValueError("subgrid release CSV input identity does not match")
         table = cls.from_csv(resolved)
         expected_rows = table_metadata.get("rows")
         if (
