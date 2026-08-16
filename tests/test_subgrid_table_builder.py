@@ -136,12 +136,14 @@ def _write_summary(tmp_path: Path) -> Path:
                     {
                         "label": "n512",
                         "run": str(n512),
-                        "maximum_energy_error_over_transfer": 0.002,
+                        "initial_resolved_energy_drift_over_transfer": 0.002,
+                        "maximum_energy_error_over_transfer": 0.2,
                     },
                     {
                         "label": "n384",
                         "run": str(n384),
-                        "maximum_energy_error_over_transfer": 0.003,
+                        "initial_resolved_energy_drift_over_transfer": 0.003,
+                        "maximum_energy_error_over_transfer": 0.3,
                     },
                 ],
                 "matched_separation": {
@@ -209,6 +211,38 @@ def test_builder_rejects_an_underresolved_core(tmp_path: Path) -> None:
         "comparison half-density radius is underresolved" in row["reasons"]
         for row in result.rejected_bins
     )
+
+
+def test_builder_rejects_initial_resolved_hamiltonian_error(
+    tmp_path: Path,
+) -> None:
+    path = _write_summary(tmp_path)
+    summary = json.loads(path.read_text())
+    summary["runs"][1][
+        "initial_resolved_energy_drift_over_transfer"
+    ] = 0.011
+    path.write_text(json.dumps(summary))
+
+    result = build_source_rows(CalibrationSource("boey2025", path))
+
+    assert not result.accepted_rows
+    assert all(
+        "n384 exceeds the initial-resolved Hamiltonian error limit"
+        in row["reasons"]
+        for row in result.rejected_bins
+    )
+
+
+def test_builder_requires_initial_resolved_hamiltonian_error(
+    tmp_path: Path,
+) -> None:
+    path = _write_summary(tmp_path)
+    summary = json.loads(path.read_text())
+    del summary["runs"][1]["initial_resolved_energy_drift_over_transfer"]
+    path.write_text(json.dumps(summary))
+
+    with pytest.raises(ValueError, match="initial-resolved Hamiltonian error"):
+        build_source_rows(CalibrationSource("boey2025", path))
 
 
 def test_builder_requires_wave_response_for_both_resolutions(

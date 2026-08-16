@@ -452,6 +452,15 @@ def summarize_convergence(
         metadata = item["metadata"]
         config = item["config"]
         conservation = item["conservation"]
+        initial_resolved_energy_error = float(
+            conservation["initial_resolved_energy_drift_over_transfer"]
+        )
+        if not np.isfinite(initial_resolved_energy_error) or (
+            initial_resolved_energy_error < 0.0
+        ):
+            raise ValueError(
+                f"{item['label']}: initial-resolved Hamiltonian error is invalid"
+            )
         rows.append(
             {
                 "label": item["label"],
@@ -473,6 +482,12 @@ def summarize_convergence(
                 ),
                 "maximum_energy_error_over_transfer": float(
                     conservation["max_total_energy_drift_over_energy_transfer"]
+                ),
+                "initial_resolved_energy_drift_over_transfer": (
+                    initial_resolved_energy_error
+                ),
+                "initial_resolved_energy_conservation_passed": bool(
+                    conservation["initial_resolved_energy_conservation_passed"]
                 ),
                 "common_interval": common,
                 "orbit_averaged_resolved_window": {

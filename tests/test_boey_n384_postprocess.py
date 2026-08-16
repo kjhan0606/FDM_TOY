@@ -7,10 +7,17 @@ import subprocess
 REPOSITORY = Path(__file__).resolve().parents[1]
 FINALIZER = REPOSITORY / "scripts" / "finalize_boey_n384.sh"
 TRIPWIRE = REPOSITORY / "scripts" / "watch_boey_n384_postprocess.sh"
+RECOVERY_DRIVER = REPOSITORY / "scripts" / "run_boey_n384_dt05_recovery.sh"
+RECOVERY_TRIPWIRE = REPOSITORY / "scripts" / "watch_boey_n384_dt05_recovery.sh"
 
 
 def test_boey_n384_shell_drivers_are_syntactically_valid() -> None:
-    for script in (FINALIZER, TRIPWIRE):
+    for script in (
+        FINALIZER,
+        TRIPWIRE,
+        RECOVERY_DRIVER,
+        RECOVERY_TRIPWIRE,
+    ):
         subprocess.run(["bash", "-n", str(script)], check=True)
 
 
@@ -76,3 +83,26 @@ def test_table_only_finalizer_does_not_repeat_case_postprocessing() -> None:
     assert "STEP combined release_runtime_verification:" in result.stdout
     assert "matched_n512_n384" not in result.stdout
     assert "resumable_wave_response" not in result.stdout
+
+
+def test_finalizer_accepts_a_noncanonical_dt05_recovery_run() -> None:
+    recovery = "/gpfs/results/boey_each10pct_n384_dt05"
+    result = subprocess.run(
+        [
+            "bash",
+            str(FINALIZER),
+            "--dry-run",
+            "--n384-run",
+            recovery,
+            "--expected-time-step-factor",
+            "0.5",
+            "boey_each10pct",
+        ],
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert recovery in result.stdout
+    assert result.stdout.count("matched_n512_n384") == 1
+    assert "accepted_subgrid_table" not in result.stdout

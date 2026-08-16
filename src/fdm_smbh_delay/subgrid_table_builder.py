@@ -262,12 +262,28 @@ def build_source_rows(
     ) / reference["soliton_mass_msun"]
     global_reasons = []
     for row in (reference_summary, comparison_summary):
+        initial_resolved_energy_error = row.get(
+            "initial_resolved_energy_drift_over_transfer"
+        )
+        if initial_resolved_energy_error is None:
+            raise ValueError(
+                f"{row['label']} convergence summary lacks the "
+                "initial-resolved Hamiltonian error"
+            )
+        initial_resolved_energy_error = float(initial_resolved_energy_error)
+        if not np.isfinite(initial_resolved_energy_error) or (
+            initial_resolved_energy_error < 0.0
+        ):
+            raise ValueError(
+                f"{row['label']} initial-resolved Hamiltonian error is invalid"
+            )
         if (
-            float(row["maximum_energy_error_over_transfer"])
+            initial_resolved_energy_error
             > maximum_energy_error_over_transfer
         ):
             global_reasons.append(
-                f"{row['label']} exceeds the Hamiltonian error limit"
+                f"{row['label']} exceeds the initial-resolved Hamiltonian "
+                "error limit"
             )
 
     accepted = []

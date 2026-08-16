@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 from fdm_smbh_delay.convergence import load_convergence_run, summarize_convergence
@@ -48,7 +49,12 @@ def main() -> int:
     if args.output is not None:
         output = args.output.expanduser().resolve()
         output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(text, encoding="utf-8")
+        temporary = output.with_name(f".{output.name}.tmp")
+        with temporary.open("w", encoding="utf-8") as stream:
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, output)
     print(text, end="")
     return 0
 

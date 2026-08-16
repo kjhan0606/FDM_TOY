@@ -26,7 +26,9 @@ def _write_run(path: Path, *, scale: float, time_step_factor: float) -> None:
         json.dumps(
             {
                 "initial_spatially_resolved_duration_myr": 1.5,
-                "max_total_energy_drift_over_energy_transfer": 0.002,
+                "initial_resolved_energy_drift_over_transfer": 0.002,
+                "initial_resolved_energy_conservation_passed": True,
+                "max_total_energy_drift_over_energy_transfer": 0.02,
             }
         )
     )
@@ -98,6 +100,11 @@ def test_common_interval_comparison_uses_resolved_duration(tmp_path: Path) -> No
     assert result["common_interval_start_myr"] == pytest.approx(0.0)
     assert result["common_interval_end_myr"] == pytest.approx(1.5)
     second = result["runs"][1]
+    assert second["initial_resolved_energy_drift_over_transfer"] == pytest.approx(
+        0.002
+    )
+    assert second["initial_resolved_energy_conservation_passed"] is True
+    assert second["maximum_energy_error_over_transfer"] == pytest.approx(0.02)
     assert second["common_interval"]["mean_binary_orbital_energy_rate"] == pytest.approx(-2.2)
     assert second["difference_from_reference"][
         "mean_binary_orbital_energy_rate_fractional_difference"

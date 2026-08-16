@@ -9,6 +9,7 @@ from datetime import datetime
 import fcntl
 import getpass
 import json
+import math
 import os
 from pathlib import Path
 from queue import Empty, Queue
@@ -35,6 +36,7 @@ CASE_IDS = (
 @dataclass(frozen=True)
 class BoeyCase:
     case_id: str
+    output_run_name: str | None = None
     duration_myr: float = 0.8
     save_number: int = 2048
     movie_frame_number: int = 128
@@ -50,11 +52,13 @@ class BoeyCase:
 
     @property
     def output(self) -> Path:
-        return OUTPUT_ROOT / f"{self.case_id}_n384"
+        return OUTPUT_ROOT / (
+            self.output_run_name or f"{self.case_id}_n384"
+        )
 
     @property
     def pid_marker(self) -> Path:
-        return LOG_ROOT / f"fdm_{self.case_id}_n384_solver.pid"
+        return LOG_ROOT / f"fdm_{self.output.name}_solver.pid"
 
 
 def _pmon_pid(line: str) -> int | None:
@@ -70,6 +74,17 @@ def _pmon_pid(line: str) -> int | None:
     except ValueError:
         return None
     return pid if pid > 0 else None
+
+
+def _memory_used_mib(line: str) -> int | None:
+    """Return an integer memory sample from an nvidia-smi loop row."""
+
+    field = line.strip().split(",", 1)[0].strip()
+    try:
+        value = int(field)
+    except ValueError:
+        return None
+    return value if value >= 0 else None
 
 
 def _foreign_slurm_reason(line: str, owner: str) -> str | None:
@@ -178,6 +193,69 @@ class GuardedSequence:
             reason = _foreign_slurm_reason(line, self.owner)
             if reason is not None:
                 raise RuntimeError(reason)
+
+    def wait_for_idle_gpu(
+        self,
+        *,
+        maximum_wait_seconds: int,
+        idle_memory_mib: int = 1024,
+        consecutive_samples: int = 2,
+    ) -> None:
+        """Wait using one persistent telemetry process, without process scans."""
+
+        if (
+            maximum_wait_seconds < 1
+            or idle_memory_mib < 0
+            or consecutive_samples < 1
+        ):
+            raise ValueError("idle-wait limits are invalid")
+        self.record(
+            f"waiting for GPU {self.gpu_index} memory to become idle"
+        )
+        deadline = time.monotonic() + maximum_wait_seconds
+        idle_samples = 0
+        with self.guard_log.open("a", encoding="utf-8") as error_stream:
+            monitor = subprocess.Popen(
+                [
+                    "nvidia-smi",
+                    "-i",
+                    str(self.gpu_index),
+                    "--query-gpu=memory.used",
+                    "--format=csv,noheader,nounits",
+                    f"--loop={self.poll_seconds}",
+                ],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=error_stream,
+                start_new_session=True,
+            )
+            try:
+                assert monitor.stdout is not None
+                for line in monitor.stdout:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("timed out waiting for the GPU to become idle")
+                    try:
+                        reason = self.events.get_nowait()
+                    except Empty:
+                        reason = None
+                    if reason is not None:
+                        raise RuntimeError(reason)
+                    memory_mib = _memory_used_mib(line)
+                    if memory_mib is None:
+                        continue
+                    if memory_mib <= idle_memory_mib:
+                        idle_samples += 1
+                    else:
+                        idle_samples = 0
+                    if idle_samples >= consecutive_samples:
+                        self.record(
+                            f"GPU {self.gpu_index} reported {idle_samples} "
+                            f"idle memory samples at or below {idle_memory_mib} MiB"
+                        )
+                        return
+                raise RuntimeError("idle GPU telemetry stopped unexpectedly")
+            finally:
+                self._stop_owned(monitor)
 
     def _report_collision(self, reason: str) -> None:
         if self.collision_reported:
@@ -412,6 +490,34 @@ class GuardedSequence:
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
             if summary.get("status") != "complete":
                 raise RuntimeError(f"invalid completion summary: {summary_path}")
+            metadata_path = case.output / "fdm_adapter_metadata.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            expected_metadata = {
+                "case_id": case.case_id,
+                "run_id": case.output.name,
+                "resolution": 384,
+                "save_number": case.save_number,
+                "saved_3d_states": case.save_3d_number + 1,
+                "nbody_rk4_substeps_per_wave_step": case.rk4_substeps,
+                "checkpoint_every_saved_intervals": (
+                    case.checkpoint_every_saves
+                ),
+                "time_step_factor": case.time_step_factor,
+            }
+            for key, expected in expected_metadata.items():
+                if metadata.get(key) != expected:
+                    raise RuntimeError(
+                        f"completed evolution has invalid {key}: {metadata_path}"
+                    )
+            if not math.isclose(
+                float(metadata.get("duration_myr", float("nan"))),
+                case.duration_myr,
+                rel_tol=0.0,
+                abs_tol=1.0e-12,
+            ):
+                raise RuntimeError(
+                    f"completed evolution has invalid duration: {metadata_path}"
+                )
             self.record(f"{case.case_id} n384 evolution already complete")
             return 0
         resume_arguments: list[str] = []
@@ -471,10 +577,19 @@ def _parse_arguments() -> argparse.Namespace:
     parser.add_argument("--gpu-index", type=int, default=0)
     parser.add_argument("--poll-seconds", type=int, default=10)
     parser.add_argument("--preflight-only", action="store_true")
+    parser.add_argument("--wait-for-idle", action="store_true")
+    parser.add_argument("--maximum-wait-seconds", type=int, default=2_592_000)
+    parser.add_argument("--recovery-10pct-dt05", action="store_true")
     parser.add_argument("cases", nargs="*", choices=CASE_IDS)
     arguments = parser.parse_args()
-    if arguments.gpu_index < 0 or arguments.poll_seconds < 1:
-        parser.error("GPU index and poll interval must be positive")
+    if (
+        arguments.gpu_index < 0
+        or arguments.poll_seconds < 1
+        or arguments.maximum_wait_seconds < 1
+    ):
+        parser.error("GPU index and wait intervals must be positive")
+    if arguments.recovery_10pct_dt05 and arguments.cases:
+        parser.error("the 10% recovery cannot be combined with case IDs")
     return arguments
 
 
@@ -495,6 +610,10 @@ def main() -> int:
         )
     sequence.acquire_lock()
     try:
+        if arguments.wait_for_idle:
+            sequence.wait_for_idle_gpu(
+                maximum_wait_seconds=arguments.maximum_wait_seconds
+            )
         sequence.preflight()
         sequence.record(
             f"syn101 GPU {arguments.gpu_index} preflight passed"
@@ -502,24 +621,36 @@ def main() -> int:
         if arguments.preflight_only:
             return 0
         sequence.start_telemetry()
-        selected = arguments.cases or list(CASE_IDS)
+        if arguments.recovery_10pct_dt05:
+            cases = [
+                BoeyCase(
+                    "boey_each10pct",
+                    output_run_name="boey_each10pct_n384_dt05",
+                    time_step_factor=0.5,
+                )
+            ]
+            summary_path = OUTPUT_ROOT / "boey_n384_dt05_recovery_summary.json"
+        else:
+            selected = arguments.cases or list(CASE_IDS)
+            cases = [BoeyCase(case_id) for case_id in selected]
+            summary_path = OUTPUT_ROOT / "boey_n384_sequence_summary.json"
         completed = []
-        for case_id in selected:
-            case = BoeyCase(case_id)
+        for case in cases:
             status = sequence.prepare_reference(case)
             if status != 0:
                 return status
             status = sequence.evolve(case)
             if status != 0:
                 return status
-            completed.append(case_id)
+            completed.append(case.output.name)
         _atomic_json(
-            OUTPUT_ROOT / "boey_n384_sequence_summary.json",
+            summary_path,
             {
                 "status": "complete",
                 "cases": completed,
                 "resolution": 384,
                 "gpu_index": arguments.gpu_index,
+                "time_step_factor": cases[0].time_step_factor,
             },
         )
         sequence.yield_marker.unlink(missing_ok=True)

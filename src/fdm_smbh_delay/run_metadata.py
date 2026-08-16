@@ -34,6 +34,8 @@ def validate_torch_calibration_completion(
     expected_saved_3d_states: int,
     expected_rk4_substeps: int,
     expected_checkpoint_interval: int,
+    expected_time_step_factor: float = 1.0,
+    expected_run_id: str | None = None,
 ) -> tuple[dict, dict]:
     """Validate the complete numerical contract of a Torch calibration run."""
 
@@ -59,9 +61,15 @@ def validate_torch_calibration_completion(
     if (
         not math.isfinite(expected_duration_myr)
         or expected_duration_myr <= 0.0
+        or not math.isfinite(expected_time_step_factor)
+        or not 0.0 < expected_time_step_factor <= 1.0
         or any(value < 1 for value in expected_positive_integers)
     ):
         raise ValueError("expected Torch calibration contract is invalid")
+    if expected_run_id is None:
+        expected_run_id = f"{expected_case_id}_n{expected_resolution}"
+    if not expected_run_id:
+        raise ValueError("expected Torch calibration run ID is required")
     if summary.get("status") != "complete":
         raise ValueError("Torch calibration evolution is not complete")
     exact_summary = {
@@ -70,13 +78,13 @@ def validate_torch_calibration_completion(
     exact_metadata = {
         "backend": "pytorch_cuda",
         "case_id": expected_case_id,
-        "run_id": f"{expected_case_id}_n{expected_resolution}",
+        "run_id": expected_run_id,
         "resolution": expected_resolution,
         "save_number": expected_saved_intervals,
         "saved_3d_states": expected_saved_3d_states,
         "nbody_rk4_substeps_per_wave_step": expected_rk4_substeps,
         "checkpoint_every_saved_intervals": expected_checkpoint_interval,
-        "time_step_factor": 1.0,
+        "time_step_factor": expected_time_step_factor,
         "analytic_fdm_drag": False,
         "live_wave_force_on_smbhs": True,
         "smbh_force_on_live_wave": True,

@@ -11,6 +11,8 @@ log=${log_root}/fdm_boey_n384_postprocess.log
 dry_run=false
 build_combined_table=false
 build_table_only=false
+n384_run_override=
+expected_time_step_factor=1.0
 requested_cases=()
 
 while [[ $# -gt 0 ]]; do
@@ -21,11 +23,27 @@ while [[ $# -gt 0 ]]; do
     --build-table-only)
       build_table_only=true
       ;;
+    --n384-run)
+      shift
+      if [[ $# -eq 0 ]]; then
+        printf '%s\n' '--n384-run requires a path.' >&2
+        exit 2
+      fi
+      n384_run_override=$1
+      ;;
+    --expected-time-step-factor)
+      shift
+      if [[ $# -eq 0 ]]; then
+        printf '%s\n' '--expected-time-step-factor requires a value.' >&2
+        exit 2
+      fi
+      expected_time_step_factor=$1
+      ;;
     boey_each02pct|boey_each05pct|boey_each10pct)
       requested_cases+=("$1")
       ;;
     *)
-      printf 'usage: %s [--dry-run] [--build-table-only | boey_each02pct ...]\n' "$0" >&2
+      printf 'usage: %s [--dry-run] [--build-table-only | [--n384-run PATH --expected-time-step-factor F] boey_each02pct ...]\n' "$0" >&2
       exit 2
       ;;
   esac
@@ -39,6 +57,14 @@ elif [[ ${build_table_only} == true ]]; then
 elif [[ ${#requested_cases[@]} -eq 0 ]]; then
   requested_cases=(boey_each02pct boey_each05pct boey_each10pct)
   build_combined_table=true
+fi
+if [[ -n ${n384_run_override} && ${#requested_cases[@]} -ne 1 ]]; then
+  printf '%s\n' '--n384-run requires exactly one case ID.' >&2
+  exit 2
+fi
+if [[ ${build_table_only} == true && -n ${n384_run_override} ]]; then
+  printf '%s\n' '--n384-run cannot be combined with --build-table-only.' >&2
+  exit 2
 fi
 if [[ ${dry_run} == false && $(hostname -s) != syntax ]]; then
   printf 'This bounded Boey n384 post-processor is restricted to syntax.\n' >&2
@@ -91,8 +117,10 @@ run_step() {
 }
 
 verify_evolution() {
-  local run=$1 expected_case=$2 expected_resolution=$3
-  python - "${run}" "${expected_case}" "${expected_resolution}" <<'PY'
+  local run=$1 expected_case=$2 expected_resolution=$3 expected_run_id=$4
+  local expected_factor=$5
+  python - "${run}" "${expected_case}" "${expected_resolution}" \
+    "${expected_run_id}" "${expected_factor}" <<'PY'
 from pathlib import Path
 import sys
 
@@ -107,7 +135,34 @@ validate_torch_calibration_completion(
     expected_saved_3d_states=17,
     expected_rk4_substeps=9,
     expected_checkpoint_interval=32,
+    expected_run_id=sys.argv[4],
+    expected_time_step_factor=float(sys.argv[5]),
 )
+PY
+}
+
+verify_conservation_gate() {
+  local run=$1 reference=$2
+  python - "${run}" "${reference}" <<'PY'
+import json
+import math
+from pathlib import Path
+import sys
+
+from fdm_smbh_delay.subgrid_calibration import (
+    MAXIMUM_ACCEPTED_ENERGY_ERROR_OVER_TRANSFER,
+)
+
+for label, path in (("n384", Path(sys.argv[1])), ("n512", Path(sys.argv[2]))):
+    summary = json.loads((path / "conservation_summary.json").read_text())
+    error = float(summary["initial_resolved_energy_drift_over_transfer"])
+    if not math.isfinite(error) or error < 0.0:
+        raise SystemExit(f"{label} initial-resolved Hamiltonian error is invalid")
+    if error > MAXIMUM_ACCEPTED_ENERGY_ERROR_OVER_TRANSFER:
+        raise SystemExit(
+            f"{label} initial-resolved Hamiltonian error {error:.9g} exceeds "
+            f"{MAXIMUM_ACCEPTED_ENERGY_ERROR_OVER_TRANSFER:.9g}"
+        )
 PY
 }
 
@@ -154,21 +209,33 @@ if runs != {"n512": reference, "n384": run}:
 matched = comparison.get("matched_separation")
 if not isinstance(matched, dict) or not matched.get("bins"):
     raise SystemExit("matched convergence contains no accepted separation bins")
+for row in comparison["runs"]:
+    error = row.get("initial_resolved_energy_drift_over_transfer")
+    if error is None or not isinstance(
+        row.get("initial_resolved_energy_conservation_passed"), bool
+    ):
+        raise SystemExit("matched convergence lacks the resolved energy verdict")
 PY
 }
 
 for case_id in "${requested_cases[@]}"; do
-  run=${n384_root}/${case_id}_n384
+  run=${n384_run_override:-${n384_root}/${case_id}_n384}
   reference=${n512_root}/${case_id}_n512
   comparison=${comparison_root}/${case_id}_spatial_convergence_n384_n512.json
   if [[ ${dry_run} == false ]]; then
-    verify_evolution "${run}" "${case_id}" 384
-    verify_evolution "${reference}" "${case_id}" 512
+    verify_evolution \
+      "${run}" "${case_id}" 384 "${run##*/}" "${expected_time_step_factor}"
+    verify_evolution \
+      "${reference}" "${case_id}" 512 "${case_id}_n512" 1.0
   fi
   run_step "${case_id}" provenance \
     python scripts/snapshot_torch_provenance.py "${run}"
   run_step "${case_id}" conservation \
     python scripts/analyze_pyul_wave_run.py "${run}"
+  if [[ ${dry_run} == false ]]; then
+    verify_conservation_gate "${run}" "${reference}"
+    record "${case_id} | initial-resolved Hamiltonian gate passed"
+  fi
   run_step "${case_id}" orbit_averaged_exchange \
     python scripts/analyze_pyul_secular_exchange.py "${run}"
   run_step "${case_id}" line_density \

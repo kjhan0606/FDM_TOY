@@ -82,6 +82,33 @@ def test_complete_torch_calibration_contract(tmp_path: Path) -> None:
     assert summary["actual_wave_steps"] == metadata["actual_wave_steps"]
 
 
+def test_complete_torch_calibration_contract_accepts_named_dt05_variant(
+    tmp_path: Path,
+) -> None:
+    run = tmp_path / "run"
+    _write_complete_torch_run(run)
+    metadata_path = run / "fdm_adapter_metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata["run_id"] = "boey_each02pct_n384_dt05"
+    metadata["time_step_factor"] = 0.5
+    metadata_path.write_text(json.dumps(metadata))
+
+    _, validated = validate_torch_calibration_completion(
+        run,
+        expected_case_id="boey_each02pct",
+        expected_resolution=384,
+        expected_duration_myr=0.8,
+        expected_saved_intervals=2048,
+        expected_saved_3d_states=17,
+        expected_rk4_substeps=9,
+        expected_checkpoint_interval=32,
+        expected_time_step_factor=0.5,
+        expected_run_id="boey_each02pct_n384_dt05",
+    )
+
+    assert validated["time_step_factor"] == pytest.approx(0.5)
+
+
 @pytest.mark.parametrize(
     "record_name,key,value,match",
     [

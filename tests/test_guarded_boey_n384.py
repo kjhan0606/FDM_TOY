@@ -10,6 +10,7 @@ from run_guarded_syn101_boey_n384 import (  # noqa: E402
     BoeyCase,
     GuardedSequence,
     _foreign_slurm_reason,
+    _memory_used_mib,
     _pmon_pid,
 )
 import run_guarded_syn101_boey_n384  # noqa: E402
@@ -30,6 +31,13 @@ def test_foreign_slurm_reason_ignores_owner() -> None:
     )
 
 
+def test_memory_used_mib_parses_loop_samples() -> None:
+    assert _memory_used_mib("54206") == 54206
+    assert _memory_used_mib("0") == 0
+    assert _memory_used_mib("memory.used") is None
+    assert _memory_used_mib("-1") is None
+
+
 def test_boey_case_uses_matching_reference_and_output_names() -> None:
     case = BoeyCase("boey_each05pct")
     assert case.reference.name == "boey_each05pct_n384"
@@ -38,6 +46,17 @@ def test_boey_case_uses_matching_reference_and_output_names() -> None:
     assert case.save_number == 2048
     assert case.save_3d_number == 16
     assert case.checkpoint_every_saves == 32
+
+
+def test_boey_case_supports_a_non_destructive_dt05_recovery_name() -> None:
+    case = BoeyCase(
+        "boey_each10pct",
+        output_run_name="boey_each10pct_n384_dt05",
+        time_step_factor=0.5,
+    )
+    assert case.reference.name == "boey_each10pct_n384"
+    assert case.output.name == "boey_each10pct_n384_dt05"
+    assert case.pid_marker.name == "fdm_boey_each10pct_n384_dt05_solver.pid"
 
 
 def test_guarded_sequence_resumes_an_existing_checkpoint(
