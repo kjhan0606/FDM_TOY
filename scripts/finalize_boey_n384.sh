@@ -10,6 +10,7 @@ log_root=${result_root}/logs
 log=${log_root}/fdm_boey_n384_postprocess.log
 dry_run=false
 build_combined_table=false
+build_table_only=false
 requested_cases=()
 
 while [[ $# -gt 0 ]]; do
@@ -17,17 +18,25 @@ while [[ $# -gt 0 ]]; do
     --dry-run)
       dry_run=true
       ;;
+    --build-table-only)
+      build_table_only=true
+      ;;
     boey_each02pct|boey_each05pct|boey_each10pct)
       requested_cases+=("$1")
       ;;
     *)
-      printf 'usage: %s [--dry-run] [boey_each02pct ...]\n' "$0" >&2
+      printf 'usage: %s [--dry-run] [--build-table-only | boey_each02pct ...]\n' "$0" >&2
       exit 2
       ;;
   esac
   shift
 done
-if [[ ${#requested_cases[@]} -eq 0 ]]; then
+if [[ ${build_table_only} == true && ${#requested_cases[@]} -ne 0 ]]; then
+  printf '%s\n' '--build-table-only cannot be combined with case IDs.' >&2
+  exit 2
+elif [[ ${build_table_only} == true ]]; then
+  build_combined_table=true
+elif [[ ${#requested_cases[@]} -eq 0 ]]; then
   requested_cases=(boey_each02pct boey_each05pct boey_each10pct)
   build_combined_table=true
 fi

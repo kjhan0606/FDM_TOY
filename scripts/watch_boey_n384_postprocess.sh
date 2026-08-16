@@ -31,28 +31,30 @@ record() {
   printf '%s | %s\n' "$(date '+%F %T %Z')" "$*" | tee -a "${log}"
 }
 
-inputs_ready() {
-  [[ -s ${n384_root}/boey_n384_sequence_summary.json ]] \
-    && [[ -s ${n384_root}/boey_each02pct_n384/torch_run_summary.json ]] \
-    && [[ -s ${n384_root}/boey_each05pct_n384/torch_run_summary.json ]] \
-    && [[ -s ${n384_root}/boey_each10pct_n384/torch_run_summary.json ]] \
-    && [[ -s ${koo_n384}/wave_response_summary.json ]]
+wait_for_case() {
+  local case_id=$1 summary=${n384_root}/${case_id}_n384/torch_run_summary.json
+  until [[ -s ${summary} && -s ${koo_n384}/wave_response_summary.json ]]; do
+    if ((elapsed >= maximum_wait_seconds)); then
+      record "tripwire timed out while waiting for ${case_id}"
+      return 4
+    fi
+    sleep "${interval_seconds}"
+    ((elapsed += interval_seconds))
+  done
 }
 
 elapsed=0
-record "tripwire armed; waiting for the Boey sequence and Koo n384 response"
-until inputs_ready; do
-  if ((elapsed >= maximum_wait_seconds)); then
-    record "tripwire timed out without starting CPU post-processing"
-    exit 4
-  fi
-  sleep "${interval_seconds}"
-  ((elapsed += interval_seconds))
+record "tripwire armed for case-by-case Boey n384 post-processing"
+for case_id in boey_each02pct boey_each05pct boey_each10pct; do
+  wait_for_case "${case_id}"
+  # Let the evolution writer close its final files before validation starts.
+  sleep 30
+  record "${case_id} ready; starting bounded CPU post-processing"
+  /home/kjhan/BACKUP/FDM_SINK_MERGE/FDM_TOY/scripts/finalize_boey_n384.sh \
+    "${case_id}"
+  record "${case_id} CPU post-processing and matched comparison complete"
 done
 
-# Let the Koo response runner publish its final files and release the shared
-# n384 FFT lock before starting the first Boey response sample.
-sleep 30
-record "inputs ready; starting bounded sequential Boey n384 post-processing"
-exec /home/kjhan/BACKUP/FDM_SINK_MERGE/FDM_TOY/scripts/finalize_boey_n384.sh
-
+record "all case comparisons complete; building combined accepted release"
+exec /home/kjhan/BACKUP/FDM_SINK_MERGE/FDM_TOY/scripts/finalize_boey_n384.sh \
+  --build-table-only

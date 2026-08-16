@@ -51,3 +51,16 @@ def test_default_finalizer_builds_the_combined_release_last() -> None:
     assert output.index("boey_each10pct matched_n512_n384") < output.index(
         "STEP combined accepted_subgrid_table:"
     )
+
+
+def test_table_only_finalizer_does_not_repeat_case_postprocessing() -> None:
+    result = subprocess.run(
+        ["bash", str(FINALIZER), "--dry-run", "--build-table-only"],
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert "STEP combined accepted_subgrid_table:" in result.stdout
+    assert "matched_n512_n384" not in result.stdout
+    assert "resumable_wave_response" not in result.stdout
