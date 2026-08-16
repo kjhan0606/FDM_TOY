@@ -38,3 +38,26 @@ at most 20 percent. An accepted fine run supplies the multiplicative correction
 to the analytic delay. The initial table performs exact physical-point lookup;
 interpolation and extrapolation remain prohibited until the populated grid
 demonstrates support between points.
+
+## Static-host applicability boundary
+
+`integrate_dual_nucleus_to_hard` supplies the analytic baseline that the zoom
+grid will test. Its dynamical state is the secondary SMBH coordinate relative
+to a primary fixed at the host centre. The primary mass must equal the central
+point mass in the configured host potential. The relative equation includes
+the primary reflex term, so the mutual two-body acceleration uses the sum of
+the SMBH masses. Other host components must be spherical and time independent.
+
+Crossing the configured common-nucleus radius is only a geometric state
+transition. A pair with non-negative osculating two-body energy continues as
+`COMMON_NUCLEUS_UNBOUND`; it reaches physical completion of this segment only
+after becoming bound and crossing the event-specific hard-binary radius in
+semi-major axis. An unbound passage that leaves the common nucleus is censored
+as outside the static-host domain. A mismatch between the explicit primary
+mass and central point mass is invalid rather than silently reinterpreted.
+
+This baseline does not model a moving primary in an asymmetric potential,
+triaxial or time-dependent galaxy-merger torques, evolving density profiles,
+or non-spherical nuclear stripping. Those effects belong to the controlled
+lagRamses zoom calculation. Until an accepted resolution pair supplies a
+calibration row, its delay correction cannot be inferred or extrapolated.
