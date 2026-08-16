@@ -126,6 +126,52 @@ def test_source_snapshot_is_repeatable_and_immutable(
         _snapshot_run(PROJECT, run)
 
 
+def test_existing_snapshot_does_not_depend_on_the_current_worktree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "project"
+    for relative in (
+        *snapshot_torch_provenance._UNCOMMITTED_SOLVER_PATHS,
+        *snapshot_torch_provenance._COMMITTED_DEPENDENCY_PATHS,
+    ):
+        path = project / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"launch source for {relative}\n")
+    monkeypatch.setattr(
+        snapshot_torch_provenance,
+        "_git_blob",
+        lambda requested_project, revision, relative: (
+            requested_project / relative
+        ).read_bytes(),
+    )
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "config.uldm").write_text("{}")
+    (run / "fdm_adapter_metadata.json").write_text(
+        json.dumps(
+            {
+                "backend": "pytorch_cpu",
+                "adapter_revision": "launch-revision",
+            }
+        )
+    )
+    first = _snapshot_run(project, run)
+    (project / "scripts/run_torch_wave_case.py").write_text(
+        "new post-run worktree source\n"
+    )
+
+    second = _snapshot_run(project, run)
+
+    assert second == first
+    frozen = (
+        run
+        / "torch_solver_provenance/source/scripts/run_torch_wave_case.py"
+    )
+    assert frozen.read_text() == (
+        "launch source for scripts/run_torch_wave_case.py\n"
+    )
+
+
 def test_source_snapshot_rejects_changed_committed_dependency(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -56,6 +56,64 @@ def _publish_immutable(path: Path, content: bytes) -> None:
     os.replace(temporary, path)
 
 
+def _load_existing_snapshot(
+    *,
+    destination: Path,
+    resolved_run: Path,
+    metadata_path: Path,
+    revision: str,
+) -> dict[str, Any] | None:
+    """Validate and reuse launch-time source without consulting the worktree."""
+
+    manifest_path = destination / "manifest.json"
+    if not manifest_path.is_file():
+        return None
+    existing = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if (
+        existing.get("status") != "source_snapshot"
+        or existing.get("run") != str(resolved_run)
+        or existing.get("adapter_revision") != revision
+    ):
+        raise ValueError(f"existing provenance manifest identity is invalid: {manifest_path}")
+    expected_inputs = {
+        "fdm_adapter_metadata_sha256": _sha256(metadata_path.read_bytes()),
+        "config_sha256": _sha256((resolved_run / "config.uldm").read_bytes()),
+    }
+    recorded_inputs = existing.get("input_records")
+    if not isinstance(recorded_inputs, dict) or any(
+        recorded_inputs.get(key) != value for key, value in expected_inputs.items()
+    ):
+        raise ValueError(
+            f"existing provenance manifest input hashes are stale: {manifest_path}"
+        )
+    records = existing.get("source_files")
+    if not isinstance(records, list) or not records:
+        raise ValueError(
+            f"existing provenance manifest has no source records: {manifest_path}"
+        )
+    for record in records:
+        relative = Path(str(record.get("path", "")))
+        if not relative.parts or relative.is_absolute() or ".." in relative.parts:
+            raise ValueError(
+                f"existing provenance source path is invalid: {manifest_path}"
+            )
+        frozen = destination / "source" / relative
+        try:
+            content = frozen.read_bytes()
+        except OSError as error:
+            raise FileExistsError(
+                f"refusing to replace a missing provenance file: {frozen}"
+            ) from error
+        if (
+            len(content) != int(record.get("size_bytes", -1))
+            or _sha256(content) != record.get("sha256")
+        ):
+            raise FileExistsError(
+                f"refusing to replace a different provenance file: {frozen}"
+            )
+    return existing
+
+
 def _snapshot_run(project: Path, run: Path) -> dict[str, Any]:
     resolved = run.expanduser().resolve()
     metadata_path = resolved / "fdm_adapter_metadata.json"
@@ -65,6 +123,14 @@ def _snapshot_run(project: Path, run: Path) -> dict[str, Any]:
     revision = str(metadata["adapter_revision"])
     metadata_mtime_ns = metadata_path.stat().st_mtime_ns
     destination = resolved / "torch_solver_provenance"
+    existing = _load_existing_snapshot(
+        destination=destination,
+        resolved_run=resolved,
+        metadata_path=metadata_path,
+        revision=revision,
+    )
+    if existing is not None:
+        return existing
 
     records = []
     for relative in _UNCOMMITTED_SOLVER_PATHS:
@@ -142,15 +208,6 @@ def _snapshot_run(project: Path, run: Path) -> dict[str, Any]:
         json.dumps(manifest, indent=2, sort_keys=True) + "\n"
     ).encode()
     manifest_path = destination / "manifest.json"
-    if manifest_path.is_file():
-        existing = json.loads(manifest_path.read_text(encoding="utf-8"))
-        for key in ("run", "adapter_revision", "source_files", "input_records"):
-            if existing.get(key) != manifest[key]:
-                raise ValueError(
-                    f"existing provenance manifest disagrees on {key}: "
-                    f"{manifest_path}"
-                )
-        return existing
     _publish_immutable(manifest_path, manifest_content)
     return manifest
 
