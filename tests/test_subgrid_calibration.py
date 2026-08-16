@@ -13,6 +13,7 @@ from fdm_smbh_delay.subgrid_calibration import (
     find_mass_interpolation_witness,
     physical_subgrid_rates,
     residual_orbital_rates,
+    verify_subgrid_runtime,
 )
 
 
@@ -159,6 +160,20 @@ def test_mass_interpolation_witness_requires_measured_separation_overlap() -> No
             profile_id="boey2025",
         )
         is None
+    )
+
+
+def test_runtime_verifier_exercises_every_accepted_row() -> None:
+    verification = verify_subgrid_runtime(_table())
+    assert verification.rows == len(_table().rows)
+    assert verification.resolved_orbital_power_fraction == pytest.approx(0.25)
+    assert verification.resolved_orbital_torque_fraction == pytest.approx(0.40)
+    assert (
+        verification.maximum_energy_closure_relative_to_exchange < 1.0e-8
+    )
+    assert (
+        verification.maximum_angular_momentum_closure_relative_to_exchange
+        < 1.0e-8
     )
 
 

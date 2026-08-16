@@ -206,6 +206,7 @@ import sys
 from fdm_smbh_delay.subgrid_calibration import (
     SubgridCalibrationTable,
     find_mass_interpolation_witness,
+    verify_subgrid_runtime,
 )
 
 path = Path(sys.argv[1]).resolve()
@@ -231,6 +232,9 @@ if find_mass_interpolation_witness(table, profile_id="boey2025") is None:
     raise SystemExit(
         "accepted Boey mass planes have no usable separation overlap"
     )
+verification = verify_subgrid_runtime(table)
+if verification.rows != len(table.rows):
+    raise SystemExit("final subgrid runtime verification row count is invalid")
 PY
   fi
   record "combined | accepted subgrid release verified"

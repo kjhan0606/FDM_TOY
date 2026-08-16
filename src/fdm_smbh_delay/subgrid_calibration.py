@@ -15,6 +15,7 @@ from .exchange_scaling import ExchangeScales, exchange_scales
 from .orbital_exchange import (
     FiniteOrbitalExchangeStep,
     advance_keplerian_exchange,
+    keplerian_exchange_rates,
 )
 
 
@@ -236,6 +237,17 @@ class CalibratedOrbitalStep:
     angular_momentum_closure_error: float
     energy_closure_relative_to_exchange: float
     angular_momentum_closure_relative_to_exchange: float
+
+
+@dataclass(frozen=True)
+class SubgridRuntimeVerification:
+    """Result of exercising every accepted row through the runtime update."""
+
+    rows: int
+    resolved_orbital_power_fraction: float
+    resolved_orbital_torque_fraction: float
+    maximum_energy_closure_relative_to_exchange: float
+    maximum_angular_momentum_closure_relative_to_exchange: float
 
 
 def _linear(value0: float, value1: float, weight: float) -> float:
@@ -932,5 +944,158 @@ def advance_calibrated_exchange(
         ),
         angular_momentum_closure_relative_to_exchange=float(
             angular_momentum_closure / angular_momentum_scale
+        ),
+    )
+
+
+def verify_subgrid_runtime(
+    table: SubgridCalibrationTable,
+    *,
+    maximum_relative_closure: float = 1.0e-8,
+    resolved_orbital_power_fraction: float = 0.25,
+    resolved_orbital_torque_fraction: float = 0.40,
+    fractional_orbital_change: float = 1.0e-6,
+) -> SubgridRuntimeVerification:
+    """Exercise accepted rows through interpolation and conservative update.
+
+    The physical scale is arbitrary but fixed.  The time step is chosen so
+    neither residual work nor torque changes its conjugate orbital invariant
+    by more than ``fractional_orbital_change``.  This makes the check valid for
+    every finite accepted rate without assuming a particular table amplitude.
+    """
+
+    controls = np.asarray(
+        [
+            maximum_relative_closure,
+            resolved_orbital_power_fraction,
+            resolved_orbital_torque_fraction,
+            fractional_orbital_change,
+        ],
+        dtype=float,
+    )
+    if np.any(~np.isfinite(controls)):
+        raise ValueError("runtime verification controls must be finite")
+    if maximum_relative_closure < 0.0 or fractional_orbital_change <= 0.0:
+        raise ValueError("runtime verification tolerances are invalid")
+
+    maximum_energy_closure = 0.0
+    maximum_angular_momentum_closure = 0.0
+    soliton_mass = 1.0e9
+    core_radius = 1.0
+    eccentricity = 0.3
+    for row in table.rows:
+        interpolated = table.interpolate(
+            profile_id=row.profile_id,
+            binary_to_soliton_mass=row.binary_to_soliton_mass,
+            separation_over_core_radius=(
+                row.reference_mean_separation_over_core_radius
+            ),
+        )
+        measured = np.asarray(
+            [
+                row.dimensionless_orbital_power,
+                row.dimensionless_orbital_torque,
+                row.dimensionless_wave_total_energy_rate,
+            ]
+        )
+        recovered = np.asarray(
+            [
+                interpolated.dimensionless_orbital_power,
+                interpolated.dimensionless_orbital_torque,
+                interpolated.dimensionless_wave_total_energy_rate,
+            ]
+        )
+        if not np.allclose(recovered, measured, rtol=1.0e-12, atol=0.0):
+            raise ValueError(
+                "accepted row does not round-trip through interpolation"
+            )
+
+        component_mass = (
+            0.5 * row.binary_to_soliton_mass * soliton_mass
+        )
+        separation = row.reference_mean_separation_over_core_radius
+        rates = physical_subgrid_rates(
+            table,
+            profile_id=row.profile_id,
+            mass1_msun=component_mass,
+            mass2_msun=component_mass,
+            soliton_mass_msun=soliton_mass,
+            core_radius_pc=core_radius,
+            separation_pc=separation,
+        )
+        resolved_power = (
+            resolved_orbital_power_fraction * rates.orbital_power
+        )
+        resolved_torque = (
+            resolved_orbital_torque_fraction * rates.orbital_torque
+        )
+        residual = residual_orbital_rates(
+            rates,
+            resolved_orbital_power=resolved_power,
+            resolved_orbital_torque=resolved_torque,
+        )
+        orbit = keplerian_exchange_rates(
+            mass1_msun=component_mass,
+            mass2_msun=component_mass,
+            semimajor_axis_pc=separation,
+            eccentricity=eccentricity,
+            orbital_power=residual.residual_orbital_power,
+            orbital_torque=residual.residual_orbital_torque,
+        )
+        time_step_candidates = [1.0]
+        if residual.residual_orbital_power != 0.0:
+            time_step_candidates.append(
+                fractional_orbital_change
+                * abs(
+                    orbit.orbital_energy
+                    / residual.residual_orbital_power
+                )
+            )
+        if residual.residual_orbital_torque != 0.0:
+            time_step_candidates.append(
+                fractional_orbital_change
+                * abs(
+                    orbit.orbital_angular_momentum
+                    / residual.residual_orbital_torque
+                )
+            )
+        step = advance_calibrated_exchange(
+            rates,
+            mass1_msun=component_mass,
+            mass2_msun=component_mass,
+            semimajor_axis_pc=separation,
+            eccentricity=eccentricity,
+            time_step_myr=min(time_step_candidates),
+            resolved_orbital_power=resolved_power,
+            resolved_orbital_torque=resolved_torque,
+        )
+        maximum_energy_closure = max(
+            maximum_energy_closure,
+            abs(step.energy_closure_relative_to_exchange),
+        )
+        maximum_angular_momentum_closure = max(
+            maximum_angular_momentum_closure,
+            abs(step.angular_momentum_closure_relative_to_exchange),
+        )
+
+    if maximum_energy_closure > maximum_relative_closure:
+        raise ValueError("subgrid runtime energy closure exceeds tolerance")
+    if maximum_angular_momentum_closure > maximum_relative_closure:
+        raise ValueError(
+            "subgrid runtime angular-momentum closure exceeds tolerance"
+        )
+    return SubgridRuntimeVerification(
+        rows=len(table.rows),
+        resolved_orbital_power_fraction=float(
+            resolved_orbital_power_fraction
+        ),
+        resolved_orbital_torque_fraction=float(
+            resolved_orbital_torque_fraction
+        ),
+        maximum_energy_closure_relative_to_exchange=float(
+            maximum_energy_closure
+        ),
+        maximum_angular_momentum_closure_relative_to_exchange=float(
+            maximum_angular_momentum_closure
         ),
     )
