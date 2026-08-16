@@ -7,7 +7,11 @@ import numpy as np
 import pytest
 
 from fdm_smbh_delay.exchange_scaling import exchange_scales
-from fdm_smbh_delay.subgrid_calibration import SubgridCalibrationTable
+from fdm_smbh_delay.subgrid_calibration import (
+    SubgridCalibrationTable,
+    advance_calibrated_exchange,
+    physical_subgrid_rates,
+)
 from fdm_smbh_delay.subgrid_table_builder import (
     CalibrationSource,
     build_source_rows,
@@ -274,6 +278,44 @@ def test_writer_is_loadable_by_the_runtime_table(tmp_path: Path) -> None:
     assert output.with_suffix(".summary.json").is_file()
     loaded = SubgridCalibrationTable.from_release(output)
     assert len(loaded.rows) == 1
+
+
+def test_generated_release_drives_a_conservative_residual_update(
+    tmp_path: Path,
+) -> None:
+    path = _write_summary(tmp_path)
+    output = tmp_path / "subgrid.csv"
+    write_calibration_table([CalibrationSource("boey2025", path)], output=output)
+    table = SubgridCalibrationTable.from_release(output)
+    rates = physical_subgrid_rates(
+        table,
+        profile_id="boey2025",
+        mass1_msun=2.0e7,
+        mass2_msun=2.0e7,
+        soliton_mass_msun=1.0e9,
+        core_radius_pc=2.0,
+        separation_pc=0.6,
+    )
+    assert rates.dimensionless.dimensionless_orbital_power == pytest.approx(-1.0)
+    assert rates.dimensionless.dimensionless_orbital_torque == pytest.approx(-2.0)
+    step = advance_calibrated_exchange(
+        rates,
+        mass1_msun=2.0e7,
+        mass2_msun=2.0e7,
+        semimajor_axis_pc=0.6,
+        eccentricity=0.1,
+        time_step_myr=1.0e-8,
+        resolved_orbital_power=0.25 * rates.orbital_power,
+        resolved_orbital_torque=0.40 * rates.orbital_torque,
+    )
+    assert step.residual.residual_orbital_power == pytest.approx(
+        0.75 * rates.orbital_power
+    )
+    assert step.residual.residual_orbital_torque == pytest.approx(
+        0.60 * rates.orbital_torque
+    )
+    assert abs(step.energy_closure_relative_to_exchange) < 1.0e-10
+    assert abs(step.angular_momentum_closure_relative_to_exchange) < 1.0e-10
 
 
 def test_release_loader_rejects_interrupted_pair_publish(tmp_path: Path) -> None:
