@@ -91,7 +91,9 @@ def test_common_interval_comparison_uses_resolved_duration(tmp_path: Path) -> No
         (
             load_convergence_run("first", first_path),
             load_convergence_run("second", second_path),
-        )
+        ),
+        separation_bins=2,
+        minimum_orbits_per_separation_bin=2,
     )
     assert result["common_interval_start_myr"] == pytest.approx(0.0)
     assert result["common_interval_end_myr"] == pytest.approx(1.5)
@@ -113,6 +115,55 @@ def test_common_interval_comparison_uses_resolved_duration(tmp_path: Path) -> No
     assert second["common_orbit_window"]["rates"]["wave_total_energy_rate"][
         "estimate"
     ] == pytest.approx(2.2)
+    matched = result["matched_separation"]
+    assert matched["retained_bins"] == 2
+    for separation_bin in matched["bins"]:
+        second_at_matched_separation = separation_bin["runs"][1]
+        assert second_at_matched_separation[
+            "fractional_rate_difference_from_reference"
+        ]["orbital_power"] == pytest.approx(-0.1)
+    aggregate = matched[
+        "aggregate_fractional_rate_differences_from_reference"
+    ][1]["rate_differences"]["orbital_power"]
+    assert aggregate["bins"] == 2
+    assert aggregate[
+        "median_absolute_fractional_difference"
+    ] == pytest.approx(0.1)
+    assert aggregate[
+        "maximum_absolute_fractional_difference"
+    ] == pytest.approx(0.1)
+
+
+def test_matched_separation_requires_positive_bin_count(tmp_path: Path) -> None:
+    first_path = tmp_path / "first"
+    second_path = tmp_path / "second"
+    _write_run(first_path, scale=1.0, time_step_factor=1.0)
+    _write_run(second_path, scale=1.0, time_step_factor=0.5)
+    with pytest.raises(ValueError, match="bin count"):
+        summarize_convergence(
+            (
+                load_convergence_run("first", first_path),
+                load_convergence_run("second", second_path),
+            ),
+            separation_bins=0,
+            minimum_orbits_per_separation_bin=2,
+        )
+
+
+def test_matched_separation_requires_two_orbits_per_bin(tmp_path: Path) -> None:
+    first_path = tmp_path / "first"
+    second_path = tmp_path / "second"
+    _write_run(first_path, scale=1.0, time_step_factor=1.0)
+    _write_run(second_path, scale=1.0, time_step_factor=0.5)
+    with pytest.raises(ValueError, match="at least two"):
+        summarize_convergence(
+            (
+                load_convergence_run("first", first_path),
+                load_convergence_run("second", second_path),
+            ),
+            separation_bins=2,
+            minimum_orbits_per_separation_bin=1,
+        )
 
 
 def test_common_interval_requires_unique_labels(tmp_path: Path) -> None:

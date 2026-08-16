@@ -25,6 +25,10 @@ def main() -> int:
         help="two or more calculations written as LABEL=RUN_DIRECTORY",
     )
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--separation-bins", type=int, default=8)
+    parser.add_argument(
+        "--minimum-orbits-per-separation-bin", type=int, default=8
+    )
     args = parser.parse_args()
     if len(args.calculations) < 2:
         parser.error("at least two calculations are required")
@@ -33,7 +37,13 @@ def main() -> int:
         load_convergence_run(*_parse_specification(specification))
         for specification in args.calculations
     ]
-    summary = summarize_convergence(loaded)
+    summary = summarize_convergence(
+        loaded,
+        separation_bins=args.separation_bins,
+        minimum_orbits_per_separation_bin=(
+            args.minimum_orbits_per_separation_bin
+        ),
+    )
     text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
     if args.output is not None:
         output = args.output.expanduser().resolve()

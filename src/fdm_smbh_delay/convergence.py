@@ -52,6 +52,45 @@ def _fractional_difference(value: float, reference: float) -> float | None:
     return float((value - reference) / abs(reference))
 
 
+def _initial_resolved_orbit_indices(orbit: np.ndarray) -> np.ndarray:
+    resolved = np.minimum.accumulate(
+        orbit["mean_separation_over_cell_size"] >= 2.0
+    )
+    return np.flatnonzero(resolved)
+
+
+def _orbit_rate_values(
+    orbit: np.ndarray, selection: np.ndarray, field: str
+) -> np.ndarray:
+    if field == "wave_total_energy_rate":
+        return np.asarray(
+            orbit["wave_intrinsic_energy_rate"][selection]
+            + orbit["wave_bh_interaction_energy_rate"][selection],
+            dtype=float,
+        )
+    return np.asarray(orbit[field][selection], dtype=float)
+
+
+def _bootstrap_orbit_rates(
+    orbit: np.ndarray, selection: np.ndarray
+) -> dict[str, dict[str, float]]:
+    duration = np.asarray(orbit["orbital_period_myr"][selection], dtype=float)
+    rates: dict[str, dict[str, float]] = {}
+    for field in _ORBIT_RATE_FIELDS:
+        interval = moving_block_bootstrap_rate(
+            rate=_orbit_rate_values(orbit, selection, field),
+            duration=duration,
+            block_length=min(8, selection.size),
+            samples=2000,
+        )
+        rates[field] = {
+            "estimate": interval.estimate,
+            "lower_95": interval.lower_95,
+            "upper_95": interval.upper_95,
+        }
+    return rates
+
+
 def load_convergence_run(label: str, run: Path) -> dict:
     """Load the saved diagnostics needed for a convergence comparison."""
     resolved = run.expanduser().resolve()
@@ -157,11 +196,12 @@ def _common_orbit_window(
     valid_indices: list[np.ndarray] = []
     for item in loaded:
         orbit = item["orbit_series"]
-        valid = np.flatnonzero(
+        initially_resolved = _initial_resolved_orbit_indices(orbit)
+        within_common_time = (
             (orbit["start_time_myr"] >= common_start - 1.0e-12)
             & (orbit["end_time_myr"] <= common_end + 1.0e-12)
-            & (orbit["mean_separation_over_cell_size"] >= 2.0)
         )
+        valid = initially_resolved[within_common_time[initially_resolved]]
         if valid.size < 2:
             return None
         valid = valid[-maximum_orbits:]
@@ -198,33 +238,165 @@ def _common_orbit_window(
             ),
             "rates": {},
         }
-        rates = row["rates"]
-        assert isinstance(rates, dict)
-        for field in _ORBIT_RATE_FIELDS:
-            if field == "wave_total_energy_rate":
-                values = np.asarray(
-                    orbit["wave_intrinsic_energy_rate"][selection]
-                    + orbit["wave_bh_interaction_energy_rate"][selection],
-                    dtype=float,
-                )
-            else:
-                values = np.asarray(orbit[field][selection], dtype=float)
-            interval = moving_block_bootstrap_rate(
-                rate=values,
-                duration=duration,
-                block_length=min(8, selection.size),
-                samples=2000,
-            )
-            rates[field] = {
-                "estimate": interval.estimate,
-                "lower_95": interval.lower_95,
-                "upper_95": interval.upper_95,
-            }
+        row["rates"] = _bootstrap_orbit_rates(orbit, selection)
         rows.append(row)
     return orbit_window_start, rows
 
 
-def summarize_convergence(runs: Iterable[dict]) -> dict:
+def _matched_separation_bins(
+    loaded: list[dict], requested_bins: int, minimum_orbits_per_bin: int
+) -> dict | None:
+    """Compare orbit-averaged rates over common physical-separation bins."""
+
+    if requested_bins < 1:
+        raise ValueError("matched-separation bin count must be positive")
+    if minimum_orbits_per_bin < 2:
+        raise ValueError(
+            "matched-separation bins require at least two complete orbits"
+        )
+    if any(item["orbit_series"] is None for item in loaded):
+        return None
+
+    resolved_indices = [
+        _initial_resolved_orbit_indices(item["orbit_series"])
+        for item in loaded
+    ]
+    if any(indices.size < 2 for indices in resolved_indices):
+        return None
+    common_minimum = max(
+        float(np.min(item["orbit_series"]["mean_separation_pc"][indices]))
+        for item, indices in zip(loaded, resolved_indices)
+    )
+    common_maximum = min(
+        float(np.max(item["orbit_series"]["mean_separation_pc"][indices]))
+        for item, indices in zip(loaded, resolved_indices)
+    )
+    if common_maximum <= common_minimum:
+        return None
+
+    edges = np.linspace(common_minimum, common_maximum, requested_bins + 1)
+    bins: list[dict] = []
+    for bin_index, (lower, upper) in enumerate(
+        zip(edges[:-1], edges[1:], strict=True)
+    ):
+        selections: list[np.ndarray] = []
+        for item, initially_resolved in zip(loaded, resolved_indices):
+            orbit = item["orbit_series"]
+            separation = orbit["mean_separation_pc"][initially_resolved]
+            in_bin = separation >= lower - 1.0e-14
+            if bin_index == requested_bins - 1:
+                in_bin &= separation <= upper + 1.0e-14
+            else:
+                in_bin &= separation < upper
+            selection = initially_resolved[in_bin]
+            if selection.size < minimum_orbits_per_bin:
+                selections = []
+                break
+            selections.append(selection)
+        if not selections:
+            continue
+
+        run_rows: list[dict] = []
+        for item, selection in zip(loaded, selections):
+            orbit = item["orbit_series"]
+            duration = np.asarray(
+                orbit["orbital_period_myr"][selection], dtype=float
+            )
+            run_rows.append(
+                {
+                    "label": item["label"],
+                    "complete_orbits": int(selection.size),
+                    "mean_separation_pc": float(
+                        np.sum(orbit["mean_separation_pc"][selection] * duration)
+                        / np.sum(duration)
+                    ),
+                    "minimum_time_myr": float(
+                        orbit["start_time_myr"][selection[0]]
+                    ),
+                    "maximum_time_myr": float(
+                        orbit["end_time_myr"][selection[-1]]
+                    ),
+                    "rates": _bootstrap_orbit_rates(orbit, selection),
+                }
+            )
+
+        reference_rates = run_rows[0]["rates"]
+        for row in run_rows:
+            row["fractional_rate_difference_from_reference"] = {
+                field: _fractional_difference(
+                    float(row["rates"][field]["estimate"]),
+                    float(reference_rates[field]["estimate"]),
+                )
+                for field in _ORBIT_RATE_FIELDS
+            }
+        bins.append(
+            {
+                "bin": bin_index,
+                "lower_separation_pc": float(lower),
+                "upper_separation_pc": float(upper),
+                "runs": run_rows,
+            }
+        )
+
+    aggregate: list[dict] = []
+    for run_index, item in enumerate(loaded):
+        rate_differences: dict[str, dict[str, float | int] | None] = {}
+        for field in _ORBIT_RATE_FIELDS:
+            differences = np.asarray(
+                [
+                    separation_bin["runs"][run_index][
+                        "fractional_rate_difference_from_reference"
+                    ][field]
+                    for separation_bin in bins
+                    if separation_bin["runs"][run_index][
+                        "fractional_rate_difference_from_reference"
+                    ][field]
+                    is not None
+                ],
+                dtype=float,
+            )
+            rate_differences[field] = (
+                None
+                if not differences.size
+                else {
+                    "bins": int(differences.size),
+                    "median_absolute_fractional_difference": float(
+                        np.median(np.abs(differences))
+                    ),
+                    "maximum_absolute_fractional_difference": float(
+                        np.max(np.abs(differences))
+                    ),
+                }
+            )
+        aggregate.append(
+            {
+                "label": item["label"],
+                "rate_differences": rate_differences,
+            }
+        )
+
+    return {
+        "common_minimum_separation_pc": common_minimum,
+        "common_maximum_separation_pc": common_maximum,
+        "requested_bins": requested_bins,
+        "minimum_complete_orbits_per_run_per_bin": minimum_orbits_per_bin,
+        "retained_bins": len(bins),
+        "bins": bins,
+        "aggregate_fractional_rate_differences_from_reference": aggregate,
+        "interpretation": (
+            "duration-weighted complete-orbit rates are compared at matched "
+            "physical separation; rows after the first two-cell crossing are "
+            "excluded even if a later oscillation re-enters the resolved range"
+        ),
+    }
+
+
+def summarize_convergence(
+    runs: Iterable[dict],
+    *,
+    separation_bins: int = 8,
+    minimum_orbits_per_separation_bin: int = 8,
+) -> dict:
     """Compare numerical variants over their shared resolved time interval."""
     loaded = list(runs)
     if len(loaded) < 2:
@@ -348,12 +520,17 @@ def summarize_convergence(runs: Iterable[dict]) -> dict:
             orbit_row["fractional_rate_difference_from_reference"] = differences
             row["common_orbit_window"] = orbit_row
 
+    matched_separation = _matched_separation_bins(
+        loaded, separation_bins, minimum_orbits_per_separation_bin
+    )
+
     return {
         "status": "common_resolved_interval_compared",
         "reference_label": reference["label"],
         "common_interval_start_myr": common_start,
         "common_interval_end_myr": common_end,
         "common_orbit_window_start_myr": common_orbit_start,
+        "matched_separation": matched_separation,
         "runs": rows,
         "interpretation": (
             "common-interval rates include reversible orbital-phase and interaction-energy "

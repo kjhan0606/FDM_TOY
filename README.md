@@ -262,6 +262,25 @@ as a numerical result but is not used as a calibrated decay rate. Long
 calibration runs should also use `--save-3d-number` to retain sparse fields for
 radial energy transport and spherical-mode measurements.
 
+Numerical variants can also be compared at matched physical separation. The
+default comparison divides the common resolved separation range into eight
+bins and retains a bin only when every calculation contributes at least eight
+complete orbits:
+
+```bash
+python scripts/summarize_pyul_convergence.py \
+  n512=/path/to/n512 \
+  n384=/path/to/n384 \
+  n256=/path/to/n256 \
+  --separation-bins 8 \
+  --minimum-orbits-per-separation-bin 8 \
+  --output spatial_convergence.json
+```
+
+The JSON retains both the same-time comparison and the matched-separation
+bootstrap intervals. The latter prevents a difference in binary separation or
+orbital phase from being assigned directly to spatial resolution.
+
 ## Horizon Run 5 comparison sample
 
 The legacy HR5 sink tree can be regenerated as an explicit catalog of binary

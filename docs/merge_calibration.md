@@ -321,6 +321,7 @@ The completed common-window comparisons are:
 | `512^3`, half wave step vs unit step | 0.1000 | `-0.405%` | `-0.661%` | `-0.661%` | `-1.13%` | `-0.744%` |
 | `512^3`, 18 vs 9 SMBH RK4 substeps | 0.1000 | `-0.0516%` | `-0.0093%` | `-0.0360%` | `-0.0215%` | `-0.0464%` |
 | `256^3` vs `512^3`, unit step | 0.1000 | `+2.58%` | `-5.79%` | `-3.59%` | `-3.35%` | `-4.49%` |
+| `384^3` vs `512^3`, unit step | 0.8550 | `-1.52%` | `+2.04%` | `+0.189%` | `-23.9%` | `-50.9%` |
 | `256^3` vs `512^3`, unit step | 0.8550 | `+1.54%` | `+5.44%` | `+0.076%` | `+32.9%` | `+14.5%` |
 | `256^3`, half vs unit wave step | 0.8550 | `-1.52%` | `-0.966%` | `-0.511%` | `-14.3%` | `-16.6%` |
 
@@ -329,10 +330,28 @@ resolved interval. Their broad variations exceed the cumulative separation
 and interval-mean differences. The maximum Hamiltonian errors over transferred
 energy are `0.6829%` for the unit-step `256^3` calculation and `0.2587%` for
 its half-step repeat, both below the adopted one-percent limit. The numerical
-ledger and cumulative inspiral therefore pass, but the late local power and
-torque are not yet spatially or temporally converged. An intermediate `384^3`
-calculation must establish the resolution trend before a physical calibration
-row is accepted.
+ledger and cumulative inspiral therefore pass. The local common-time rates
+remain sensitive to the orbital and wave phases because the trajectories reach
+slightly different separations at the same time.
+
+The completed `384^3` calculation reached `1 Myr` with a final separation of
+`0.2923 pc`. The binary remained above two cell widths, and the Hamiltonian
+error was `0.3581%` of the transferred energy. A state-matched comparison bins
+complete orbits by physical separation and requires at least eight orbits from
+every calculation in a retained bin. The `384^3` and `512^3` calculations give
+the following absolute fractional differences across seven retained bins:
+
+| matched-separation rate | median difference | maximum difference |
+|---|---:|---:|
+| orbital power | `2.82%` | `13.28%` |
+| orbital torque | `3.66%` | `10.88%` |
+| total wave-energy rate | `5.07%` | `16.97%` |
+
+The corresponding median differences between `256^3` and `512^3` are
+`16.51%`, `15.61%`, and `16.38%`. The high-resolution pair therefore supports
+a provisional secular calibration. Each separation bin retains its measured
+spatial systematic, whose maximum reaches about `17%`. The coarse calculation
+does not set the local transfer coefficient.
 
 ## Interaction-energy convention
 
