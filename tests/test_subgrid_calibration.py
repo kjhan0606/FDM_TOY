@@ -46,6 +46,8 @@ def _row(
         comparison_resolution=384,
         reference_complete_orbits=20,
         comparison_complete_orbits=18,
+        reference_minimum_half_density_radius_over_cell_size=10.0,
+        comparison_minimum_half_density_radius_over_cell_size=7.0,
         convergence_status=ACCEPTED_STATUS,
     )
 

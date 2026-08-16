@@ -41,6 +41,8 @@ class SubgridCalibrationRow:
     comparison_resolution: int
     reference_complete_orbits: int
     comparison_complete_orbits: int
+    reference_minimum_half_density_radius_over_cell_size: float
+    comparison_minimum_half_density_radius_over_cell_size: float
     convergence_status: str = ACCEPTED_STATUS
 
     def __post_init__(self) -> None:
@@ -57,6 +59,8 @@ class SubgridCalibrationRow:
                 self.orbital_power_spatial_systematic_fraction,
                 self.orbital_torque_spatial_systematic_fraction,
                 self.wave_total_spatial_systematic_fraction,
+                self.reference_minimum_half_density_radius_over_cell_size,
+                self.comparison_minimum_half_density_radius_over_cell_size,
             ],
             dtype=float,
         )
@@ -83,9 +87,17 @@ class SubgridCalibrationRow:
             or self.comparison_resolution <= 0
             or self.reference_complete_orbits < 8
             or self.comparison_complete_orbits < 8
+            or self.reference_minimum_half_density_radius_over_cell_size < 2.0
+            or self.comparison_minimum_half_density_radius_over_cell_size < 2.0
         ):
             raise ValueError("subgrid row numerical metadata are invalid")
-        systematic = scalar_values[-3:]
+        systematic = np.asarray(
+            [
+                self.orbital_power_spatial_systematic_fraction,
+                self.orbital_torque_spatial_systematic_fraction,
+                self.wave_total_spatial_systematic_fraction,
+            ]
+        )
         if np.any(systematic < 0.0):
             raise ValueError("spatial systematic fractions must be non-negative")
 
@@ -282,6 +294,16 @@ class SubgridCalibrationTable:
                     ),
                     comparison_complete_orbits=int(
                         record["comparison_complete_orbits"]
+                    ),
+                    reference_minimum_half_density_radius_over_cell_size=float(
+                        record[
+                            "reference_minimum_half_density_radius_over_cell_size"
+                        ]
+                    ),
+                    comparison_minimum_half_density_radius_over_cell_size=float(
+                        record[
+                            "comparison_minimum_half_density_radius_over_cell_size"
+                        ]
                     ),
                     convergence_status=record["convergence_status"],
                 )

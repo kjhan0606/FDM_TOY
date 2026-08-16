@@ -243,6 +243,16 @@ a foreign Slurm allocation, a telemetry failure, or a termination signal stops
 only the managed process group. A later invocation resumes an incomplete case
 from its atomic Torch checkpoint and skips every completed case.
 
+Sparse `384^3` wave-response analysis runs one snapshot at a time on `syntax`:
+
+```bash
+bash scripts/run_safe_n384_wave_response.sh /path/to/completed_n384_run
+```
+
+The runner holds one global lock, limits numerical libraries to one thread,
+bounds virtual memory at 32 GiB, and resumes from the paired partial tables.
+Every successful invocation adds at most one new three-dimensional sample.
+
 Add `--save-movie-plane` to the live-wave command when a movie is required.
 This option writes the central FDM density plane at every diagnostic output
 without retaining the full three-dimensional wavefunction at the same cadence.
