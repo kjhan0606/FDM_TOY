@@ -237,11 +237,29 @@ tmux new-session -d -s fdm_boey_n384_guard \
 
 The sequence evolves the 2, 5, and 10 percent cases in that order. A one-time
 preflight requires an idle GPU and no foreign Slurm allocation on `syn101`.
-The guard then keeps one `nvidia-smi pmon` stream and one `squeue --iterate`
-stream instead of launching repeated process scans. An unmanaged GPU process,
-a foreign Slurm allocation, a telemetry failure, or a termination signal stops
+The guard then keeps one persistent `nvidia-smi --query-compute-apps` stream
+and one `squeue --iterate` stream instead of launching repeated process scans.
+The compute-context stream also detects a competing process that has allocated
+GPU memory but is momentarily running no kernel. An unmanaged GPU context, a
+foreign Slurm allocation, a telemetry failure, or a termination signal stops
 only the managed process group. A later invocation resumes an incomplete case
 from its atomic Torch checkpoint and skips every completed case.
+
+If a completed spatial repeat misses the resolved Hamiltonian gate, preserve
+that run and give a named numerical recovery its own output directory. For the
+Boey 10 percent `384^3` half-wave-timestep recovery, the guarded GPU driver and
+file-only CPU finalizer are
+
+```bash
+bash scripts/run_boey_n384_dt05_recovery.sh
+bash scripts/watch_boey_n384_dt05_recovery.sh
+```
+
+The GPU driver waits through one persistent memory telemetry stream until card
+0 is idle, resumes after every guarded yield, and never replaces the original
+`dt=1` result. The CPU tripwire wakes only on the recovery completion file,
+then applies the bounded post-processing sequence, refreshes every accepted
+source comparison, and requires the combined release verifier to succeed.
 
 Sparse `384^3` wave-response analysis runs one snapshot at a time on `syntax`:
 
@@ -324,12 +342,15 @@ The JSON retains both the same-time comparison and the matched-separation
 bootstrap intervals. The latter prevents a difference in binary separation or
 orbital phase from being assigned directly to spatial resolution.
 
-Subgrid release rows must also keep the Hamiltonian error below one percent,
-resolve the measured half-density radius by at least two cells in both runs,
-and keep each power, torque, and total-wave rate spatial difference below 20
-percent. Rejected bins remain in the provenance summary but cannot be loaded
-by the runtime interpolator. The builder publishes the CSV first and a
-checksum-bearing `.summary.json` commit marker second:
+Subgrid release rows must also keep the Hamiltonian drift below one percent in
+each run's initial contiguous spatially resolved interval, resolve the measured
+half-density radius by at least two cells in both runs, and keep each power,
+torque, and total-wave rate spatial difference below 20 percent. The full-run
+maximum Hamiltonian drift remains in the convergence JSON as a diagnostic but
+does not reject a bin solely because a later, already underresolved tail drifts.
+Rejected bins remain in the provenance summary but cannot be loaded by the
+runtime interpolator. The builder publishes the CSV first and a checksum-bearing
+`.summary.json` commit marker second:
 
 ```bash
 python scripts/build_subgrid_calibration_table.py \
