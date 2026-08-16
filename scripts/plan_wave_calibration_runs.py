@@ -156,14 +156,52 @@ def _load_case_parameters(cases_path: Path) -> dict[str, tuple[float, int]]:
     return parameters
 
 
-def _torch_summary_complete(path: Path) -> bool:
+def _summary_complete(
+    path: Path,
+    *,
+    expected_status: str,
+    expected_run_directory: Path,
+) -> bool:
     if not path.is_file():
         return False
     try:
         summary = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
-    return summary.get("status") == "complete"
+    if not isinstance(summary, dict) or summary.get("status") != expected_status:
+        return False
+
+    # The wave-response analyzer records the resolved input run as ``run``.
+    # Torch summaries currently omit a run-directory field, so do not require
+    # one; when a producer supplies it, reject a stale/copied summary.
+    if "run" in summary:
+        run = summary["run"]
+        if not isinstance(run, str):
+            return False
+        try:
+            recorded_run = Path(run).expanduser().resolve()
+            expected_run = expected_run_directory.expanduser().resolve()
+        except OSError:
+            return False
+        if recorded_run != expected_run:
+            return False
+    return True
+
+
+def _torch_summary_complete(path: Path, run_directory: Path) -> bool:
+    return _summary_complete(
+        path,
+        expected_status="complete",
+        expected_run_directory=run_directory,
+    )
+
+
+def _response_summary_complete(path: Path, run_directory: Path) -> bool:
+    return _summary_complete(
+        path,
+        expected_status="diagnosed",
+        expected_run_directory=run_directory,
+    )
 
 
 def _status_detail(
@@ -214,11 +252,13 @@ def build_plan(
         ).is_file()
         torch_directory_exists = torch_directory.is_dir()
         torch_complete = _torch_summary_complete(
-            torch_directory / "torch_run_summary.json"
+            torch_directory / "torch_run_summary.json",
+            torch_directory,
         )
-        response_complete = torch_complete and (
-            torch_directory / "wave_response_summary.json"
-        ).is_file()
+        response_complete = torch_complete and _response_summary_complete(
+            torch_directory / "wave_response_summary.json",
+            torch_directory,
+        )
         plan.append(
             RunPlanRow(
                 run_id=run_id,

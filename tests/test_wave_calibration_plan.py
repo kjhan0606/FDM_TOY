@@ -6,6 +6,13 @@ from pathlib import Path
 import subprocess
 import sys
 
+import pytest
+
+from scripts.plan_wave_calibration_runs import (
+    _response_summary_complete,
+    _torch_summary_complete,
+)
+
 
 PROJECT = Path(__file__).resolve().parents[1]
 
@@ -78,7 +85,13 @@ def _inputs(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
             json.dumps({"status": "complete"}), encoding="utf-8"
         )
     (torch_root / "complete_n128" / "wave_response_summary.json").write_text(
-        "{}", encoding="utf-8"
+        json.dumps(
+            {
+                "status": "diagnosed",
+                "run": str((torch_root / "complete_n128").resolve()),
+            }
+        ),
+        encoding="utf-8",
     )
     return cases, manifest, initial_root, torch_root
 
@@ -226,3 +239,73 @@ def test_snapshot_count_overrides_are_forwarded(tmp_path: Path) -> None:
     assert torch_commands
     assert all("--movie-frame-number 48" in line for line in torch_commands)
     assert all("--save-3d-number 8" in line for line in torch_commands)
+
+
+@pytest.mark.parametrize(
+    ("validator", "valid_status"),
+    [
+        (_torch_summary_complete, "complete"),
+        (_response_summary_complete, "diagnosed"),
+    ],
+)
+def test_summary_completion_requires_valid_json_and_expected_status(
+    tmp_path: Path,
+    validator,
+    valid_status: str,
+) -> None:
+    run = tmp_path / "run"
+    run.mkdir()
+    summary = run / "summary.json"
+
+    summary.write_text("{not-json", encoding="utf-8")
+    assert not validator(summary, run)
+
+    summary.write_text(json.dumps({"status": "partial"}), encoding="utf-8")
+    assert not validator(summary, run)
+
+    summary.write_text(json.dumps({"status": valid_status}), encoding="utf-8")
+    assert validator(summary, run)
+
+
+@pytest.mark.parametrize(
+    ("validator", "valid_status"),
+    [
+        (_torch_summary_complete, "complete"),
+        (_response_summary_complete, "diagnosed"),
+    ],
+)
+def test_summary_run_identity_is_checked_only_when_recorded(
+    tmp_path: Path,
+    validator,
+    valid_status: str,
+) -> None:
+    run = tmp_path / "run"
+    run.mkdir()
+    summary = run / "summary.json"
+    summary.write_text(
+        json.dumps({"status": valid_status, "run": str(run.resolve())}),
+        encoding="utf-8",
+    )
+    assert validator(summary, run)
+
+    summary.write_text(
+        json.dumps({"status": valid_status, "run": str(tmp_path / "other")}),
+        encoding="utf-8",
+    )
+    assert not validator(summary, run)
+
+
+def test_summary_read_error_is_incomplete(tmp_path: Path, monkeypatch) -> None:
+    run = tmp_path / "run"
+    run.mkdir()
+    summary = run / "summary.json"
+    summary.write_text(json.dumps({"status": "complete"}), encoding="utf-8")
+    original_read_text = Path.read_text
+
+    def raise_for_summary(path: Path, *args, **kwargs) -> str:
+        if path == summary:
+            raise OSError("simulated read failure")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", raise_for_summary)
+    assert not _torch_summary_complete(summary, run)
