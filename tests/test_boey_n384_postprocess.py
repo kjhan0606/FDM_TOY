@@ -47,9 +47,15 @@ def test_default_finalizer_builds_the_combined_release_last() -> None:
     )
     output = result.stdout
     assert output.count("matched_n512_n384") == 3
+    assert "STEP combined invalidate_previous_verification:" in output
     assert "STEP combined accepted_subgrid_table:" in output
     assert "STEP combined release_runtime_verification:" in output
     assert output.index("boey_each10pct matched_n512_n384") < output.index(
+        "STEP combined invalidate_previous_verification:"
+    )
+    assert output.index(
+        "STEP combined invalidate_previous_verification:"
+    ) < output.index(
         "STEP combined accepted_subgrid_table:"
     )
     assert output.index("STEP combined accepted_subgrid_table:") < output.index(
@@ -65,6 +71,7 @@ def test_table_only_finalizer_does_not_repeat_case_postprocessing() -> None:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
+    assert "STEP combined invalidate_previous_verification:" in result.stdout
     assert "STEP combined accepted_subgrid_table:" in result.stdout
     assert "STEP combined release_runtime_verification:" in result.stdout
     assert "matched_n512_n384" not in result.stdout

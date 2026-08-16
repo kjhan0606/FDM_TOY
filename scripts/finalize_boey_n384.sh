@@ -189,7 +189,12 @@ done
 
 if [[ ${build_combined_table} == true ]]; then
   table=${comparison_root}/fdm_subgrid_calibration.csv
+  verification=${comparison_root}/fdm_subgrid_calibration.verification.json
   koo_comparison=${result_root}/torch_convergence/koo_spatial_convergence_n384_n512_1myr.json
+  run_step combined invalidate_previous_verification \
+    python -c \
+      'from pathlib import Path; import sys; Path(sys.argv[1]).unlink(missing_ok=True)' \
+      "${verification}"
   run_step combined accepted_subgrid_table \
     python scripts/build_subgrid_calibration_table.py \
       --source koo2024="${koo_comparison}" \
@@ -202,6 +207,7 @@ if [[ ${build_combined_table} == true ]]; then
       --required-profile koo2024 \
       --required-profile boey2025 \
       --mass-interpolation-profile boey2025 \
-      --expected-source-count 4
+      --expected-source-count 4 \
+      --output "${verification}"
   record "combined | accepted subgrid release verified"
 fi
