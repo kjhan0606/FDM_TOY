@@ -82,8 +82,8 @@ run_step() {
 }
 
 verify_evolution() {
-  local run=$1 expected_case=$2
-  python - "${run}" "${expected_case}" <<'PY'
+  local run=$1 expected_case=$2 expected_resolution=$3
+  python - "${run}" "${expected_case}" "${expected_resolution}" <<'PY'
 from pathlib import Path
 import sys
 
@@ -92,7 +92,7 @@ from fdm_smbh_delay.run_metadata import validate_torch_calibration_completion
 validate_torch_calibration_completion(
     Path(sys.argv[1]),
     expected_case_id=sys.argv[2],
-    expected_resolution=384,
+    expected_resolution=int(sys.argv[3]),
     expected_duration_myr=0.8,
     expected_saved_intervals=2048,
     expected_saved_3d_states=17,
@@ -153,7 +153,8 @@ for case_id in "${requested_cases[@]}"; do
   reference=${n512_root}/${case_id}_n512
   comparison=${comparison_root}/${case_id}_spatial_convergence_n384_n512.json
   if [[ ${dry_run} == false ]]; then
-    verify_evolution "${run}" "${case_id}"
+    verify_evolution "${run}" "${case_id}" 384
+    verify_evolution "${reference}" "${case_id}" 512
   fi
   run_step "${case_id}" provenance \
     python scripts/snapshot_torch_provenance.py "${run}"
