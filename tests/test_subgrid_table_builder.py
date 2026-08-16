@@ -235,6 +235,15 @@ def test_writer_is_loadable_by_the_runtime_table(tmp_path: Path) -> None:
     assert summary["table"]["release_input_sha256"] == summary[
         "release_input_sha256"
     ]
+    assert summary["interpolation"] == {
+        "profile_axis": "discrete_no_cross_profile_interpolation",
+        "mass_axis": "piecewise_linear_binary_to_soliton_mass",
+        "separation_axis": "piecewise_linear_reference_bin_centres",
+        "outer_half_bins": "nearest_accepted_bin_value",
+        "missing_separation_bins": "crossing_prohibited",
+        "spatial_systematics": "maximum_of_all_bracketing_rows",
+        "extrapolation": "prohibited",
+    }
     assert summary["sources"][0]["accepted_bins"] == 1
     assert len(summary["sources"][0]["inputs"]) == 7
     assert all(

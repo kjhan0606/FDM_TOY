@@ -16,6 +16,7 @@ from .exchange_scaling import (
 )
 from .subgrid_calibration import (
     ACCEPTED_STATUS,
+    CALIBRATION_INTERPOLATION_SPECIFICATION,
     MAXIMUM_ACCEPTED_ENERGY_ERROR_OVER_TRANSFER,
     MAXIMUM_ACCEPTED_SPATIAL_SYSTEMATIC_FRACTION,
     MINIMUM_ACCEPTED_COMPLETE_ORBITS,
@@ -499,6 +500,7 @@ def write_calibration_table(
         "release_input_sha256": release_input_sha256,
         "rows": len(rows),
         "profiles": sorted({row.profile_id for row in rows}),
+        "interpolation": dict(CALIBRATION_INTERPOLATION_SPECIFICATION),
         "calibrated_domains": summarize_calibrated_domains(rows),
         "table": {
             "file": output.name,

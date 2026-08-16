@@ -341,6 +341,11 @@ cannot validate against the previous summary even when the numerical rows are
 unchanged. `from_csv` is reserved for
 exploratory data and test fixtures. No interpolation is permitted outside the
 accepted mass and separation ranges or across a rejected separation bin.
+Within one profile, rates are piecewise linear in total binary-to-soliton mass
+and in the reference separation-bin centres. The outer half of an accepted
+edge bin uses that bin's measured value, while every interpolated systematic
+is the maximum of its bracketing rows. These rules are stored in the release
+summary and checked by the production loader.
 `advance_calibrated_exchange` accepts the orbital power and torque already
 measured from a resolved wake and applies only the residual relative to the
 calibrated target. Leave those arguments at zero only when the FDM response is

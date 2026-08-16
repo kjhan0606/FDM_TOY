@@ -24,6 +24,15 @@ MAXIMUM_ACCEPTED_SPATIAL_SYSTEMATIC_FRACTION = 0.20
 MAXIMUM_ACCEPTED_ENERGY_ERROR_OVER_TRANSFER = 0.01
 MINIMUM_ACCEPTED_COMPLETE_ORBITS = 8
 MINIMUM_ACCEPTED_CORE_RADIUS_CELLS = 2.0
+CALIBRATION_INTERPOLATION_SPECIFICATION = {
+    "profile_axis": "discrete_no_cross_profile_interpolation",
+    "mass_axis": "piecewise_linear_binary_to_soliton_mass",
+    "separation_axis": "piecewise_linear_reference_bin_centres",
+    "outer_half_bins": "nearest_accepted_bin_value",
+    "missing_separation_bins": "crossing_prohibited",
+    "spatial_systematics": "maximum_of_all_bracketing_rows",
+    "extrapolation": "prohibited",
+}
 
 
 def _sha256(path: Path) -> str:
@@ -449,6 +458,8 @@ class SubgridCalibrationTable:
         profiles = sorted({row.profile_id for row in table.rows})
         if summary.get("profiles") != profiles:
             raise ValueError("subgrid release profile list does not match")
+        if summary.get("interpolation") != CALIBRATION_INTERPOLATION_SPECIFICATION:
+            raise ValueError("subgrid release interpolation rules do not match")
         acceptance = summary.get("acceptance")
         if not isinstance(acceptance, dict):
             raise ValueError("subgrid release acceptance criteria are absent")
