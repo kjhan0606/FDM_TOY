@@ -408,7 +408,9 @@ def build_source_rows(
                 schrodinger_poisson_similarity_parameter=similarity,
                 binary_to_soliton_mass=binary_fraction,
                 mass_ratio_q=reference["mass_ratio_q"],
-                reference_eccentricity=reference["initial_eccentricity"],
+                reference_eccentricity=float(
+                    reference_bin["mean_eccentricity_osculating"]
+                ),
                 separation_bin_index=int(bin_row["bin"]),
                 lower_separation_over_core_radius=float(
                     bin_row["lower_separation_pc"] / core_radius

@@ -112,8 +112,11 @@ Analytic FDM drag is disabled because the resolved wake supplies the force.
 ### Sparse q-e and small-separation extension
 
 The production table schema is version 3. Each accepted row now carries the
-SMBH mass ratio and the input eccentricity in addition to profile, binary mass
-fraction, and separation. Runtime lookup interpolates in `q` or `e` only when
+SMBH mass ratio and the duration-weighted, orbit-averaged osculating
+eccentricity in addition to profile, binary mass fraction, and separation.
+The manifest's input eccentricity remains separate provenance because the
+extended soliton potential shifts the point-mass osculating diagnostic.
+Runtime lookup interpolates in `q` or `e` only when
 every bracketing plane has accepted mass and separation support at the query.
 Mass interpolation likewise requires accepted separation support on both mass
 planes, and separation interpolation may cross only contiguous accepted bins.

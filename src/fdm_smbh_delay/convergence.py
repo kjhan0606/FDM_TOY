@@ -135,6 +135,7 @@ def load_convergence_run(label: str, run: Path) -> dict:
             "orbital_period_myr",
             "mean_separation_pc",
             "mean_separation_over_cell_size",
+            "mean_eccentricity_osculating",
             *_ORBIT_TABLE_RATE_FIELDS,
         }
         orbit_missing = sorted(
@@ -308,6 +309,13 @@ def _matched_separation_bins(
                     "complete_orbits": int(selection.size),
                     "mean_separation_pc": float(
                         np.sum(orbit["mean_separation_pc"][selection] * duration)
+                        / np.sum(duration)
+                    ),
+                    "mean_eccentricity_osculating": float(
+                        np.sum(
+                            orbit["mean_eccentricity_osculating"][selection]
+                            * duration
+                        )
                         / np.sum(duration)
                     ),
                     "minimum_time_myr": float(

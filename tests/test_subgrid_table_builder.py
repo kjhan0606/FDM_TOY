@@ -96,6 +96,7 @@ def _matched_bin(
                 "label": "n512",
                 "complete_orbits": 20,
                 "mean_separation_pc": 0.5 * (lower + upper),
+                "mean_eccentricity_osculating": 0.23,
                 "minimum_time_myr": 0.0,
                 "maximum_time_myr": 0.5,
                 "rates": reference_rates,
@@ -107,6 +108,7 @@ def _matched_bin(
                 "label": "n384",
                 "complete_orbits": 18,
                 "mean_separation_pc": 0.5 * (lower + upper),
+                "mean_eccentricity_osculating": 0.23,
                 "minimum_time_myr": 0.0,
                 "maximum_time_myr": 0.5,
                 "rates": comparison_rates,
@@ -322,7 +324,7 @@ def test_writer_is_loadable_by_the_runtime_table(tmp_path: Path) -> None:
             ),
             "binary_to_soliton_mass": 0.04,
             "mass_ratio_q": 1.0,
-            "reference_eccentricity": 0.0,
+            "reference_eccentricity": 0.23,
             "source_case_ids": ["boey_each02pct"],
             "accepted_separation_bin_indices": [0],
             "minimum_separation_over_core_radius": 0.2,
@@ -339,7 +341,7 @@ def test_writer_is_loadable_by_the_runtime_table(tmp_path: Path) -> None:
     loaded = SubgridCalibrationTable.from_release(output)
     assert len(loaded.rows) == 1
     assert loaded.rows[0].mass_ratio_q == pytest.approx(1.0)
-    assert loaded.rows[0].reference_eccentricity == pytest.approx(0.0)
+    assert loaded.rows[0].reference_eccentricity == pytest.approx(0.23)
 
 
 def test_generated_release_drives_a_conservative_residual_update(
@@ -357,6 +359,7 @@ def test_generated_release_drives_a_conservative_residual_update(
         soliton_mass_msun=1.0e9,
         core_radius_pc=2.0,
         separation_pc=0.6,
+        eccentricity=0.23,
     )
     assert rates.dimensionless.dimensionless_orbital_power == pytest.approx(-1.0)
     assert rates.dimensionless.dimensionless_orbital_torque == pytest.approx(-2.0)
@@ -398,7 +401,7 @@ def test_release_verification_is_durable_and_resumable(tmp_path: Path) -> None:
         "--expected-source-count",
         "1",
         "--required-q-e-plane",
-        "1.0,0.0",
+        "1.0,0.23",
     ]
     subprocess.run(command, check=True)
     verification_path = output.with_suffix(".verification.json")
@@ -409,7 +412,7 @@ def test_release_verification_is_durable_and_resumable(tmp_path: Path) -> None:
     assert report["table"]["sha256"] == summary["table"]["sha256"]
     assert report["runtime"]["rows"] == 1
     assert report["accepted_q_e_planes"] == [
-        {"mass_ratio_q": 1.0, "reference_eccentricity": 0.0}
+        {"mass_ratio_q": 1.0, "reference_eccentricity": 0.23}
     ]
 
     # A stopped pair publication cannot leave the previous success marker.

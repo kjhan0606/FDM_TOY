@@ -68,6 +68,7 @@ def _write_run(path: Path, *, scale: float, time_step_factor: float) -> None:
         "orbital_period_myr": np.full(4, 0.5),
         "mean_separation_pc": np.array([0.98, 0.93, 0.88, 0.83]),
         "mean_separation_over_cell_size": np.array([3.92, 3.72, 3.52, 3.32]),
+        "mean_eccentricity_osculating": np.full(4, 0.2),
         "orbital_power": np.full(4, -2.0 * scale),
         "orbital_torque": np.full(4, -scale),
         "wave_intrinsic_energy_rate": np.full(4, 3.0 * scale),
@@ -131,6 +132,9 @@ def test_common_interval_comparison_uses_resolved_duration(tmp_path: Path) -> No
         assert second_at_matched_separation[
             "fractional_rate_difference_from_reference"
         ]["orbital_power"] == pytest.approx(-0.1)
+        assert second_at_matched_separation[
+            "mean_eccentricity_osculating"
+        ] == pytest.approx(0.2)
     aggregate = matched[
         "aggregate_fractional_rate_differences_from_reference"
     ][1]["rate_differences"]["orbital_power"]
