@@ -155,6 +155,8 @@ def test_commands_follow_seed_torch_response_order(tmp_path: Path) -> None:
     assert "scripts/launch_torch_wave_case.py" in missing_seed[1]
     assert "--duration-myr 0.10000000000000001" in missing_seed[1]
     assert "--save-number 384" in missing_seed[1]
+    assert "--movie-frame-number 96" in missing_seed[1]
+    assert "--save-3d-number 16" in missing_seed[1]
     assert "--checkpoint-every-saves 32" in missing_seed[1]
     assert "--rk4-substeps 9" in missing_seed[1]
     assert "--device cuda:0" in missing_seed[1]
@@ -183,6 +185,8 @@ def test_output_csv_keeps_stage_specific_commands(tmp_path: Path) -> None:
         rows = {row["run_id"]: row for row in csv.DictReader(stream)}
     assert rows["missing_seed_n128"]["seed_command"]
     assert rows["missing_seed_n128"]["torch_command"]
+    assert rows["missing_seed_n128"]["movie_frame_number"] == "96"
+    assert rows["missing_seed_n128"]["save_3d_number"] == "16"
     assert not rows["missing_seed_n128"]["response_command"]
     assert not rows["ready_seed_n256"]["seed_command"]
     assert rows["resume_torch_n256"]["torch_command"].endswith("--resume")
@@ -203,3 +207,22 @@ def test_save_number_override_replaces_case_cadence(tmp_path: Path) -> None:
     ]
     assert torch_commands
     assert all("--save-number 17" in line for line in torch_commands)
+
+
+def test_snapshot_count_overrides_are_forwarded(tmp_path: Path) -> None:
+    completed = _run_planner(
+        tmp_path,
+        "--emit-commands",
+        "--movie-frame-number",
+        "48",
+        "--save-3d-number",
+        "8",
+    )
+    torch_commands = [
+        line
+        for line in completed.stdout.splitlines()
+        if line.startswith("stage=torch")
+    ]
+    assert torch_commands
+    assert all("--movie-frame-number 48" in line for line in torch_commands)
+    assert all("--save-3d-number 8" in line for line in torch_commands)

@@ -37,6 +37,8 @@ class RunPlanRow:
     torch_root: Path
     pyul_path: Path
     save_number: int
+    movie_frame_number: int
+    save_3d_number: int
     checkpoint_every_saves: int
     rk4_substeps: int
     device: str
@@ -93,6 +95,10 @@ class RunPlanRow:
             f"{self.case_duration_myr:.17g}",
             "--save-number",
             str(self.save_number),
+            "--movie-frame-number",
+            str(self.movie_frame_number),
+            "--save-3d-number",
+            str(self.save_3d_number),
             "--checkpoint-every-saves",
             str(self.checkpoint_every_saves),
             "--rk4-substeps",
@@ -188,6 +194,8 @@ def build_plan(
     pyul_path: Path,
     *,
     save_number: int | None = None,
+    movie_frame_number: int = 96,
+    save_3d_number: int = 16,
     checkpoint_every_saves: int = 32,
     rk4_substeps: int = 9,
     device: str = "cuda:0",
@@ -235,6 +243,8 @@ def build_plan(
                 save_number=(
                     derived_save_number if save_number is None else save_number
                 ),
+                movie_frame_number=movie_frame_number,
+                save_3d_number=save_3d_number,
                 checkpoint_every_saves=checkpoint_every_saves,
                 rk4_substeps=rk4_substeps,
                 device=device,
@@ -268,6 +278,9 @@ def _emit_csv(plan: list[RunPlanRow], path: Path) -> None:
         "effective_grid_cells",
         "box_size_pc",
         "target_duration_myr",
+        "save_number",
+        "movie_frame_number",
+        "save_3d_number",
         "seed_ready",
         "torch_complete",
         "response_complete",
@@ -288,6 +301,9 @@ def _emit_csv(plan: list[RunPlanRow], path: Path) -> None:
                     "effective_grid_cells": row.resolution,
                     "box_size_pc": row.box_size_pc,
                     "target_duration_myr": row.case_duration_myr,
+                    "save_number": row.save_number,
+                    "movie_frame_number": row.movie_frame_number,
+                    "save_3d_number": row.save_3d_number,
                     "seed_ready": row.seed_ready,
                     "torch_complete": row.torch_complete,
                     "response_complete": row.response_complete,
@@ -339,6 +355,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         help="override output-cadence-derived saved intervals for every case",
     )
+    parser.add_argument("--movie-frame-number", type=int, default=96)
+    parser.add_argument("--save-3d-number", type=int, default=16)
     parser.add_argument("--checkpoint-every-saves", type=int, default=32)
     parser.add_argument("--rk4-substeps", type=int, default=9)
     parser.add_argument("--device", default="cuda:0")
@@ -360,6 +378,10 @@ def main() -> int:
     args = parser.parse_args()
     if args.save_number is not None and args.save_number < 1:
         parser.error("--save-number must be positive")
+    if args.movie_frame_number < 1:
+        parser.error("--movie-frame-number must be positive")
+    if args.save_3d_number < 1:
+        parser.error("--save-3d-number must be positive")
     if args.checkpoint_every_saves < 1:
         parser.error("--checkpoint-every-saves must be positive")
     if args.rk4_substeps < 1:
@@ -377,6 +399,8 @@ def main() -> int:
         torch_root,
         pyul_path,
         save_number=args.save_number,
+        movie_frame_number=args.movie_frame_number,
+        save_3d_number=args.save_3d_number,
         checkpoint_every_saves=args.checkpoint_every_saves,
         rk4_substeps=args.rk4_substeps,
         device=args.device,
