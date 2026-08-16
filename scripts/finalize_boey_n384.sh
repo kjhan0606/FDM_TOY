@@ -197,45 +197,11 @@ if [[ ${build_combined_table} == true ]]; then
       --source boey2025="${comparison_root}/boey_each05pct_spatial_convergence_n384_n512.json" \
       --source boey2025="${comparison_root}/boey_each10pct_spatial_convergence_n384_n512.json" \
       --output "${table}"
-  if [[ ${dry_run} == false ]]; then
-    python - "${table}" <<'PY'
-import json
-from pathlib import Path
-import sys
-
-from fdm_smbh_delay.subgrid_calibration import (
-    SubgridCalibrationTable,
-    find_mass_interpolation_witness,
-    verify_subgrid_runtime,
-)
-
-path = Path(sys.argv[1]).resolve()
-table = SubgridCalibrationTable.from_release(path)
-summary = json.loads(path.with_suffix(".summary.json").read_text())
-if len(summary["sources"]) != 4:
-    raise SystemExit("final subgrid release does not contain all four sources")
-if sum(source["accepted_bins"] for source in summary["sources"]) != len(table.rows):
-    raise SystemExit("final subgrid release source counts do not close")
-profiles = {row.profile_id for row in table.rows}
-if profiles != {"koo2024", "boey2025"}:
-    raise SystemExit("final subgrid release lacks accepted Koo or Boey data")
-boey_masses = sorted(
-    {
-        row.binary_to_soliton_mass
-        for row in table.rows
-        if row.profile_id == "boey2025"
-    }
-)
-if len(boey_masses) < 2:
-    raise SystemExit("accepted Boey data do not span two mass planes")
-if find_mass_interpolation_witness(table, profile_id="boey2025") is None:
-    raise SystemExit(
-        "accepted Boey mass planes have no usable separation overlap"
-    )
-verification = verify_subgrid_runtime(table)
-if verification.rows != len(table.rows):
-    raise SystemExit("final subgrid runtime verification row count is invalid")
-PY
-  fi
+  run_step combined release_runtime_verification \
+    python scripts/verify_subgrid_calibration_release.py "${table}" \
+      --required-profile koo2024 \
+      --required-profile boey2025 \
+      --mass-interpolation-profile boey2025 \
+      --expected-source-count 4
   record "combined | accepted subgrid release verified"
 fi
