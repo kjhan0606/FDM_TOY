@@ -7,10 +7,13 @@ import argparse
 import builtins
 import csv
 import json
+import multiprocessing
 import os
 from pathlib import Path
 import subprocess
 import sys
+
+from fdm_smbh_delay.pyul import allocated_cpu_count
 
 
 def _load_case(path: Path, case_id: str) -> dict[str, str]:
@@ -70,6 +73,14 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--save-3d", action="store_true")
     parser.add_argument("--save-3d-number", type=int)
+    parser.add_argument(
+        "--save-movie-plane",
+        action="store_true",
+        help=(
+            "save the central FDM density plane at every diagnostic output; "
+            "this is sufficient for a movie without retaining every 3D state"
+        ),
+    )
     args = parser.parse_args()
 
     project_root = Path(__file__).resolve().parents[1]
@@ -102,6 +113,9 @@ def main() -> int:
     core_radius = float(case["core_radius_pc"])
     mass1 = float(case["mass1_msun"])
     mass2 = float(case["mass2_msun"])
+    mass_ratio_q = float(case["mass_ratio_q"])
+    initial_eccentricity = float(case["eccentricity"])
+    semi_major_axis = float(case["semi_major_axis_pc"])
     separation = float(case["initial_separation_pc"])
     speed1 = float(case["initial_speed1_km_s"])
     speed2 = float(case["initial_speed2_km_s"])
@@ -130,12 +144,15 @@ def main() -> int:
 
     original_cwd = Path.cwd()
     original_input = builtins.input
+    original_cpu_count = multiprocessing.cpu_count
     evolve_globals = None
     original_save_grid = None
     try:
         os.chdir(pyul_path)
-        os.environ.setdefault("NUMEXPR_MAX_THREADS", "128")
-        os.environ.setdefault("NUMEXPR_NUM_THREADS", "64")
+        allocated_threads = allocated_cpu_count()
+        os.environ["NUMEXPR_MAX_THREADS"] = str(allocated_threads)
+        os.environ["NUMEXPR_NUM_THREADS"] = str(allocated_threads)
+        multiprocessing.cpu_count = lambda: allocated_threads
         sys.path.insert(0, str(pyul_path))
         builtins.input = lambda _prompt="": f"{particle_mass_ev:.16g}"
         # SciPy 1.15 removed the deprecated sph_harm name used by PyUL_NBody.
@@ -165,6 +182,8 @@ def main() -> int:
         plummer_radius = max(0.001, 0.5 * cell_size)
         plummer_parameter = pyul.GenPlummer(plummer_radius, "pc")
         save_options = "Energy NBody DF 1Density Entropy Quadrupole"
+        if args.save_movie_plane:
+            save_options += " 2Density"
         if args.save_3d or args.save_3d_number is not None:
             save_options += " 3Density 3Wfn"
         estimated_steps = int(
@@ -194,6 +213,10 @@ def main() -> int:
             "pyul_repository": "https://github.com/Sifyrena/PyUL_NBody",
             "pyul_revision": _git_revision(pyul_path),
             "particle_mass_ev": particle_mass_ev,
+            "mass_ratio_q": mass_ratio_q,
+            "initial_eccentricity": initial_eccentricity,
+            "semi_major_axis_pc": semi_major_axis,
+            "initial_separation_pc": separation,
             "resolution": args.resolution,
             "box_size_pc": box_size,
             "cell_size_pc": cell_size,
@@ -206,7 +229,9 @@ def main() -> int:
             ),
             "save_number": args.save_number,
             "saved_3d_states": saved_3d_states,
+            "saved_movie_plane": args.save_movie_plane,
             "estimated_wave_steps": estimated_steps,
+            "fft_threads": allocated_threads,
             "analytic_fdm_drag": False,
             "live_wave_force_on_smbhs": True,
             "smbh_force_on_live_wave": True,
@@ -317,6 +342,7 @@ def main() -> int:
         if evolve_globals is not None and original_save_grid is not None:
             evolve_globals["save_grid"] = original_save_grid
         builtins.input = original_input
+        multiprocessing.cpu_count = original_cpu_count
         os.chdir(original_cwd)
     return 0
 

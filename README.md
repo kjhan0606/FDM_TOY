@@ -90,6 +90,27 @@ fdm-smbh-compose \
 
 The command returns no `true_merge_time_myr` if an interval is missing,
 invalid, or censored. Missing physics is never interpreted as zero delay.
+`uncalibrated`, `outside-support`, and `stalled` FDM summaries are composed as
+explicitly censored intervals, distinct from absent inputs. The JSON result
+lists both `missing_segments` and `censored_segments`; its additive `segments`
+records retain per-interval reasons and source provenance.
+
+An accepted galaxy-merger zoom table can correct an analytic kpc-to-pc
+baseline only at the exact physical point represented by a table row:
+
+```python
+from fdm_smbh_delay.zoom_calibration import apply_kpc_delay_calibration
+
+kpc_segment = apply_kpc_delay_calibration(
+    table,
+    physics=event_physics,
+    analytic_baseline_delay_myr=analytic_delay_myr,
+)
+```
+
+The returned complete segment retains the zoom source case and SHA-256. An
+unmeasured physical point returns a censored segment; the consumer never
+interpolates or extrapolates the zoom correction.
 
 ## Example configuration
 
@@ -137,8 +158,16 @@ cases. Fully coupled PyUL_NBody calculations measure the complete Hamiltonian,
 the osculating binary elements, orbit-averaged power and torque, correlated
 uncertainties, central-density evolution, and sparse three-dimensional wave
 diagnostics. Calibration against converged long calculations, the
-numerical-radius-to-parsec inspiral, and the cosmological PTA population remain
-future work.
+accepted production q-e-separation table, and the cosmological PTA population
+remain future work. The runtime table schema and sparse q-e-small-separation
+pilot are implemented, but a pilot row is not published unless every numerical
+acceptance gate passes.
+
+The point-mass osculating semi-major axis is an optional diagnostic. It can be
+undefined when the instantaneous state is not bound in the point-mass Kepler
+approximation, even though the binary is evolving in the extended FDM and
+softened-SMBH potential. Separation, angular momentum, and the complete
+Hamiltonian exchange remain the primary live-wave diagnostics in that case.
 
 ## Fully coupled wave calculation
 
@@ -163,7 +192,185 @@ The corresponding orbit-resolved measurements are generated with
 python scripts/analyze_pyul_wave_run.py RUN
 python scripts/analyze_pyul_secular_exchange.py RUN
 python scripts/analyze_pyul_line_density.py RUN
+python scripts/analyze_pyul_wave_response.py RUN
 python scripts/build_wave_exchange_table.py RUN --output wave_exchange.csv
+```
+
+The `512^3` wave-response analysis has used about 37 GB of resident memory per
+process. Run only one such analysis at a time, restrict numerical libraries to
+one thread, and checkpoint one sparse three-dimensional sample per invocation:
+
+```bash
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
+NUMEXPR_NUM_THREADS=1 \
+python scripts/analyze_pyul_wave_response.py RUN \
+  --resume --max-new-samples 1
+```
+
+Repeat the command until it produces `wave_response_timeseries.csv`,
+`wave_radial_profiles.csv`, and `wave_response_summary.json`. An interrupted
+analysis retains `wave_response_timeseries.partial.csv` and
+`wave_radial_profiles.partial.csv`; both files are required for `--resume`, and
+their sample indices and row counts are validated before another sample is
+processed.
+
+Generate the sparse q-e-small-separation pilot manifest with
+
+```bash
+python scripts/generate_wave_calibration_grid.py \
+  configs/wave_calibration_qe_extension.yaml \
+  --output results/wave_calibration_qe_extension
+```
+
+The manifest records the Kepler orbit-mean separation in cells and the
+pericentre in both cells and Plummer radii. Generation fails before any solver
+is launched when a requested resolution violates the configured two-cell
+orbit-mean or two-Plummer-radius pericentre gate. At the fixed pilot box size,
+the `a/r_c=0.05` pair therefore uses `n=512,768`, not `n=384,512`.
+
+Long GPU calculations use the PyUL-compatible Torch backend. Install the
+optional dependencies with `python -m pip install -e '.[gpu]'`, export one
+initial three-dimensional state with PyUL, and launch the continuation through
+the provenance-preserving wrapper:
+
+```bash
+python scripts/launch_torch_wave_case.py REFERENCE_RUN \
+  --output results/torch_wave/koo_n512 \
+  --duration-myr 1.0 \
+  --save-number 2048 \
+  --movie-frame-number 360 \
+  --save-3d-number 32 \
+  --checkpoint-every-saves 32 \
+  --device cuda:0
+```
+
+The wrapper snapshots the uncommitted numerical source and its SHA-256 hashes
+under `RUN/torch_solver_provenance`. A resumed calculation is rejected if that
+source no longer matches, preventing two numerical implementations from being
+joined into one trajectory.
+
+For a manually managed shared GPU, place `FDM_SOLVER_PID_FILE` outside the new
+run directory and attach the NVML guard to the recorded solver PID:
+
+```bash
+# Terminal 1
+export FDM_SOLVER_PID_FILE=/path/to/logs/solver.pid
+python scripts/launch_torch_wave_case.py REFERENCE_RUN \
+  --output RUN --device cuda:0
+
+# Terminal 2, after the marker appears
+python scripts/guard_cuda_process.py \
+  --gpu-index 0 --solver-pid "$(cat "$FDM_SOLVER_PID_FILE")" \
+  --status-file /path/to/logs/gpu_guard_status.json
+```
+
+The guard calls NVML directly and interrupts only the owned solver if another
+compute PID appears on that GPU. It does not launch repeated `ps`, `pgrep`, or
+`nvidia-smi` scans.
+
+The intermediate `384^3` spatial-convergence run on `syn101` uses a dedicated
+manual tripwire:
+
+```bash
+tmux new-session -d -s fdm_n384_monitor \
+  'exec bash scripts/monitor_syn101_n384.sh 0'
+```
+
+The monitor refuses an occupied GPU, stops the managed calculation when a
+foreign Slurm job or GPU process appears, and does not retry a failed evolution
+or finalizer. GPU ownership is checked through the solver PID marker and
+`nvidia-smi`; no general process scan is used. After the evolution, the monitor
+runs only conservation, orbit-averaged exchange, line-density, and three-level
+spatial-convergence measurements. The memory-intensive three-dimensional wave
+response remains a separate operation.
+
+The Boey `384^3` spatial repeats use a separate guarded sequence:
+
+```bash
+tmux new-session -d -s fdm_boey_n384_guard \
+  'exec python scripts/run_guarded_syn101_boey_n384.py --gpu-index 0'
+```
+
+The sequence evolves the 2, 5, and 10 percent cases in that order. A one-time
+preflight requires an idle GPU and no foreign Slurm allocation on `syn101`.
+The guard then keeps one persistent `nvidia-smi --query-compute-apps` stream
+and one `squeue --iterate` stream instead of launching repeated process scans.
+The compute-context stream also detects a competing process that has allocated
+GPU memory but is momentarily running no kernel. An unmanaged GPU context, a
+foreign Slurm allocation, a telemetry failure, or a termination signal stops
+only the managed process group. A later invocation resumes an incomplete case
+from its atomic Torch checkpoint and skips every completed case.
+
+If a completed spatial repeat misses the resolved Hamiltonian gate, preserve
+that run and give a named numerical recovery its own output directory. For the
+Boey 10 percent `384^3` half-wave-timestep recovery, the guarded GPU driver and
+file-only CPU finalizer are
+
+```bash
+bash scripts/run_boey_n384_dt05_recovery.sh
+bash scripts/watch_boey_n384_dt05_recovery.sh
+```
+
+The GPU driver waits through one persistent memory telemetry stream until card
+0 is idle, resumes after every guarded yield, and never replaces the original
+`dt=1` result. The CPU tripwire wakes only on the recovery completion file,
+then applies the bounded post-processing sequence, refreshes every accepted
+source comparison, and requires the combined release verifier to succeed.
+
+Sparse `384^3` wave-response analysis runs one snapshot at a time on `syntax`:
+
+```bash
+bash scripts/run_safe_n384_wave_response.sh /path/to/completed_n384_run
+```
+
+The runner holds one global lock, limits numerical libraries to one thread,
+bounds virtual memory at 32 GiB, and resumes from the paired partial tables.
+Every successful invocation adds at most one new three-dimensional sample.
+The complete Boey sequence can be handed to the low-impact CPU tripwire with
+
+```bash
+tmux new-session -d -s fdm_boey_n384_tripwire \
+  'exec bash scripts/watch_boey_n384_postprocess.sh'
+```
+
+The tripwire checks only completion files at five-minute intervals. It waits
+for the Koo `384^3` response to release the global FFT lock and for all three
+Boey evolutions, then runs the conservation, secular-exchange, line-density,
+resumable wave-response, dimensionless-exchange, and matched-`512^3`
+measurements sequentially. It finally builds the accepted combined Koo and
+Boey calibration release. Final release verification requires accepted Koo
+and Boey rows, accepted Boey rows on at least two binary-to-soliton mass
+planes, and a positive-width accepted separation overlap where an actual mass
+interpolation succeeds. If the repeats do not provide that overlap, the
+pipeline fails the release gate and retains the rejected-bin diagnostics; it
+does not relax the spatial-systematic threshold.
+
+Add `--save-movie-plane` to the live-wave command when a movie is required.
+This option writes the central FDM density plane at every diagnostic output
+without retaining the full three-dimensional wavefunction at the same cadence.
+After `analyze_pyul_wave_run.py` has generated the conservation history, render
+the density, SMBH trajectories, binary separation, and Hamiltonian components
+with
+
+```bash
+python scripts/render_pyul_movie.py RUN \
+  --output results/pyul_convergence/koo_n512.mp4 \
+  --poster results/pyul_convergence/koo_n512_poster.png
+```
+
+MP4 output uses the optional `video` dependencies. GIF output remains
+available when the output path has a `.gif` suffix.
+
+The full evolution and a selected interval can be combined in a four-panel
+figure with
+
+```bash
+python scripts/plot_pair_separation.py RUN \
+  --output pair_separation.pdf \
+  --wave-density-panel \
+  --mark-resolution-limit \
+  --koo-reference \
+  --time-zoom-myr 0.0 0.05
 ```
 
 The live calculation is physically interpretable only while its spatial and
@@ -171,6 +378,70 @@ Hamiltonian acceptance tests pass. An orbit below two cell widths is retained
 as a numerical result but is not used as a calibrated decay rate. Long
 calibration runs should also use `--save-3d-number` to retain sparse fields for
 radial energy transport and spherical-mode measurements.
+
+Numerical variants can also be compared at matched physical separation. The
+default comparison divides the common resolved separation range into eight
+bins and retains a bin only when every calculation contributes at least eight
+complete orbits:
+
+```bash
+python scripts/summarize_pyul_convergence.py \
+  n512=/path/to/n512 \
+  n384=/path/to/n384 \
+  n256=/path/to/n256 \
+  --separation-bins 8 \
+  --minimum-orbits-per-separation-bin 8 \
+  --output spatial_convergence.json
+```
+
+The JSON retains both the same-time comparison and the matched-separation
+bootstrap intervals. The latter prevents a difference in binary separation or
+orbital phase from being assigned directly to spatial resolution. Bootstrap
+blocks are capped at half the selected cycles, so the minimum eight-orbit
+sample retains at least two independent block lengths.
+
+Subgrid release rows must also keep the Hamiltonian drift below one percent in
+each run's initial contiguous spatially resolved interval, resolve the measured
+half-density radius by at least two cells in both runs, keep the resolution-pair
+absolute mean-eccentricity mismatch at or below 0.02, and keep each power,
+torque, and total-wave rate spatial difference below 20 percent. The 0.02
+eccentricity cap is one fifteenth of the q-e design's minimum plane spacing and
+may only be tightened. The full-run
+maximum Hamiltonian drift remains in the convergence JSON as a diagnostic but
+does not reject a bin solely because a later, already underresolved tail drifts.
+Rejected bins remain in the provenance summary but cannot be loaded by the
+runtime interpolator. The builder publishes the CSV first and a checksum-bearing
+`.summary.json` commit marker second:
+
+```bash
+python scripts/build_subgrid_calibration_table.py \
+  --source koo2024=/path/to/koo_n512_n384.json \
+  --source boey2025=/path/to/boey_n512_n384.json \
+  --output fdm_subgrid_calibration.csv
+```
+
+Production code should load this pair with
+`SubgridCalibrationTable.from_release`; it verifies the schema, provenance,
+row count, profile list, input-derived release ID, and CSV SHA-256. The release
+ID is stored in every CSV row, so a stop between the CSV and summary replaces
+cannot validate against the previous summary even when the numerical rows are
+unchanged. `from_csv` is reserved for
+exploratory data and test fixtures. No interpolation is permitted outside the
+accepted mass-ratio, eccentricity, binary-mass, and separation ranges or across
+a rejected separation bin. Higher-resolution failure or insufficient joint
+separation-eccentricity support remains unresolved/censored; it must not trigger
+automatic n=1024 expansion or extrapolation. A v4 table interpolates piecewise
+linearly in
+`(q,e)` only when every bracketing plane independently supplies the required
+mass-separation support. The outer half of an accepted edge bin uses that bin's
+measured value, while every interpolated systematic is the maximum of all
+bracketing rows. These rules are stored in the release summary and checked by
+the production loader.
+`advance_calibrated_exchange` accepts the orbital power and torque already
+measured from a resolved wake and applies only the residual relative to the
+calibrated target. Leave those arguments at zero only when the FDM response is
+unresolved; applying the full target on top of a live wake would count the same
+exchange twice.
 
 ## Horizon Run 5 comparison sample
 

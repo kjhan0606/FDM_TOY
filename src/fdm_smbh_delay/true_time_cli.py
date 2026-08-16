@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Sequence
@@ -20,16 +21,48 @@ from .units import parse_quantity
 
 
 def _fdm_segment(summary: dict[str, Any]) -> DelaySegment:
-    status = summary.get("status")
+    raw_status = summary.get("status")
+    if not isinstance(raw_status, str):
+        return DelaySegment("fdm_pc_to_0p01pc", "invalid", None)
+    status = raw_status.strip().lower().replace("-", "_")
+    reason = summary.get("reason")
+    if not isinstance(reason, str):
+        reason = None
     if status in {"reached_0p01pc", "reached_target"}:
         delay = summary.get("t_fdm_myr")
-        if not isinstance(delay, (int, float)):
+        if (
+            isinstance(delay, bool)
+            or not isinstance(delay, (int, float))
+            or not math.isfinite(delay)
+            or delay < 0.0
+        ):
             return DelaySegment("fdm_pc_to_0p01pc", "invalid", None)
         return DelaySegment("fdm_pc_to_0p01pc", "complete", float(delay))
-    if status == "timeout":
+    if status in {
+        "timeout",
+        "censored",
+        "stalled",
+        "uncalibrated",
+        "outside_support",
+        "outside_calibration",
+        "outside_calibration_domain",
+        "outside_calibration_support",
+    }:
         elapsed = summary.get("integration_time_myr", 0.0)
+        if (
+            isinstance(elapsed, bool)
+            or not isinstance(elapsed, (int, float))
+            or not math.isfinite(elapsed)
+            or elapsed < 0.0
+        ):
+            return DelaySegment("fdm_pc_to_0p01pc", "invalid", None)
+        segment_status = "timeout" if status == "timeout" else "censored"
         return DelaySegment(
-            "fdm_pc_to_0p01pc", "timeout", None, float(elapsed)
+            "fdm_pc_to_0p01pc",
+            segment_status,
+            None,
+            float(elapsed),
+            reason=reason or f"FDM summary reported {raw_status!r}",
         )
     return DelaySegment("fdm_pc_to_0p01pc", "invalid", None)
 
