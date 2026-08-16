@@ -130,7 +130,20 @@ def test_common_interval_comparison_uses_resolved_duration(tmp_path: Path) -> No
     matched = result["matched_separation"]
     assert matched["requested_bins"] == 2
     assert matched["minimum_complete_orbits_per_run_per_bin"] == 2
-    assert matched["retained_bins"] == 2
+    assert matched["retained_bins"] == 1
+    assert matched["selection_status"] == "matched_separation_bins_evaluated"
+    assert matched["resolved_complete_orbits_by_run"] == [
+        {
+            "label": "first",
+            "complete_orbits": 3,
+            "initial_instantaneous_resolved_duration_myr": 1.5,
+        },
+        {
+            "label": "second",
+            "complete_orbits": 3,
+            "initial_instantaneous_resolved_duration_myr": 1.5,
+        },
+    ]
     for separation_bin in matched["bins"]:
         second_at_matched_separation = separation_bin["runs"][1]
         assert second_at_matched_separation[
@@ -142,13 +155,48 @@ def test_common_interval_comparison_uses_resolved_duration(tmp_path: Path) -> No
     aggregate = matched[
         "aggregate_fractional_rate_differences_from_reference"
     ][1]["rate_differences"]["orbital_power"]
-    assert aggregate["bins"] == 2
+    assert aggregate["bins"] == 1
     assert aggregate[
         "median_absolute_fractional_difference"
     ] == pytest.approx(0.1)
     assert aggregate[
         "maximum_absolute_fractional_difference"
     ] == pytest.approx(0.1)
+
+
+def test_matched_separation_excludes_orbits_ending_after_instantaneous_cutoff(
+    tmp_path: Path,
+) -> None:
+    first_path = tmp_path / "first"
+    second_path = tmp_path / "second"
+    _write_run(first_path, scale=1.0, time_step_factor=1.0)
+    _write_run(second_path, scale=1.0, time_step_factor=0.5)
+    conservation_path = second_path / "conservation_summary.json"
+    conservation = json.loads(conservation_path.read_text())
+    conservation["initial_spatially_resolved_duration_myr"] = 0.25
+    conservation_path.write_text(json.dumps(conservation))
+
+    result = summarize_convergence(
+        (
+            load_convergence_run("first", first_path),
+            load_convergence_run("second", second_path),
+        ),
+        separation_bins=1,
+        minimum_orbits_per_separation_bin=2,
+    )
+
+    matched = result["matched_separation"]
+    assert matched["retained_bins"] == 0
+    assert matched["bins"] == []
+    assert matched["selection_status"] == (
+        "insufficient_complete_orbits_before_first_instantaneous_"
+        "underresolution"
+    )
+    assert matched["resolved_complete_orbits_by_run"][1] == {
+        "label": "second",
+        "complete_orbits": 0,
+        "initial_instantaneous_resolved_duration_myr": 0.25,
+    }
 
 
 def test_eight_orbit_bootstrap_keeps_two_independent_blocks() -> None:

@@ -60,11 +60,29 @@ def _fractional_difference(value: float, reference: float) -> float | None:
     return float((value - reference) / abs(reference))
 
 
-def _initial_resolved_orbit_indices(orbit: np.ndarray) -> np.ndarray:
-    resolved = np.minimum.accumulate(
+def _initial_resolved_orbit_indices(
+    orbit: np.ndarray,
+    initial_resolved_duration_myr: float,
+) -> np.ndarray:
+    """Return the contiguous orbits wholly inside the resolved interval.
+
+    Orbit-mean separation is not sufficient by itself: an eccentric orbit may
+    average above two cells after its instantaneous separation has already
+    crossed below that limit.  The conservation diagnostic records the first
+    such crossing as a contiguous duration, so every retained complete orbit
+    must end no later than that cutoff.
+    """
+
+    cutoff = float(initial_resolved_duration_myr)
+    if not np.isfinite(cutoff) or cutoff < 0.0:
+        raise ValueError("initial resolved duration must be finite and non-negative")
+    mean_resolved = np.minimum.accumulate(
         orbit["mean_separation_over_cell_size"] >= 2.0
     )
-    return np.flatnonzero(resolved)
+    wholly_inside_instantaneous_cutoff = (
+        orbit["end_time_myr"] <= cutoff + 1.0e-12
+    )
+    return np.flatnonzero(mean_resolved & wholly_inside_instantaneous_cutoff)
 
 
 def _orbit_rate_values(
@@ -215,7 +233,14 @@ def _common_orbit_window(
     valid_indices: list[np.ndarray] = []
     for item in loaded:
         orbit = item["orbit_series"]
-        initially_resolved = _initial_resolved_orbit_indices(orbit)
+        initially_resolved = _initial_resolved_orbit_indices(
+            orbit,
+            float(
+                item["conservation"][
+                    "initial_spatially_resolved_duration_myr"
+                ]
+            ),
+        )
         within_common_time = (
             (orbit["start_time_myr"] >= common_start - 1.0e-12)
             & (orbit["end_time_myr"] <= common_end + 1.0e-12)
@@ -277,11 +302,48 @@ def _matched_separation_bins(
         return None
 
     resolved_indices = [
-        _initial_resolved_orbit_indices(item["orbit_series"])
+        _initial_resolved_orbit_indices(
+            item["orbit_series"],
+            float(
+                item["conservation"][
+                    "initial_spatially_resolved_duration_myr"
+                ]
+            ),
+        )
         for item in loaded
     ]
+    resolved_counts = [
+        {
+            "label": item["label"],
+            "complete_orbits": int(indices.size),
+            "initial_instantaneous_resolved_duration_myr": float(
+                item["conservation"][
+                    "initial_spatially_resolved_duration_myr"
+                ]
+            ),
+        }
+        for item, indices in zip(loaded, resolved_indices, strict=True)
+    ]
     if any(indices.size < 2 for indices in resolved_indices):
-        return None
+        return {
+            "common_minimum_separation_pc": None,
+            "common_maximum_separation_pc": None,
+            "requested_bins": requested_bins,
+            "minimum_complete_orbits_per_run_per_bin": minimum_orbits_per_bin,
+            "retained_bins": 0,
+            "bins": [],
+            "aggregate_fractional_rate_differences_from_reference": [],
+            "resolved_complete_orbits_by_run": resolved_counts,
+            "selection_status": (
+                "insufficient_complete_orbits_before_first_instantaneous_"
+                "underresolution"
+            ),
+            "interpretation": (
+                "no matched bin is admissible because at least one run has "
+                "fewer than two complete orbits ending before its first "
+                "instantaneous two-cell underresolution time"
+            ),
+        }
     common_minimum = max(
         float(np.min(item["orbit_series"]["mean_separation_pc"][indices]))
         for item, indices in zip(loaded, resolved_indices)
@@ -409,11 +471,15 @@ def _matched_separation_bins(
         "retained_bins": len(bins),
         "bins": bins,
         "aggregate_fractional_rate_differences_from_reference": aggregate,
+        "resolved_complete_orbits_by_run": resolved_counts,
+        "selection_status": "matched_separation_bins_evaluated",
         "interpretation": (
             "duration-weighted complete-orbit rates are compared at matched "
-            "physical separation; rows after the first complete orbit whose "
-            "mean separation falls below two cell widths are excluded even if "
-            "a later orbit re-enters the resolved range"
+            "physical separation; every retained orbit ends before the first "
+            "instantaneous two-cell underresolution time, and rows after the "
+            "first complete orbit whose mean separation falls below two cell "
+            "widths are excluded even if a later orbit re-enters the resolved "
+            "range"
         ),
     }
 
