@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 import numpy as np
 import pytest
@@ -316,6 +318,52 @@ def test_generated_release_drives_a_conservative_residual_update(
     )
     assert abs(step.energy_closure_relative_to_exchange) < 1.0e-10
     assert abs(step.angular_momentum_closure_relative_to_exchange) < 1.0e-10
+
+
+def test_release_verification_is_durable_and_resumable(tmp_path: Path) -> None:
+    path = _write_summary(tmp_path)
+    output = tmp_path / "subgrid.csv"
+    write_calibration_table([CalibrationSource("boey2025", path)], output=output)
+    verifier = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "verify_subgrid_calibration_release.py"
+    )
+    command = [
+        sys.executable,
+        str(verifier),
+        str(output),
+        "--required-profile",
+        "boey2025",
+        "--expected-source-count",
+        "1",
+    ]
+    subprocess.run(command, check=True)
+    verification_path = output.with_suffix(".verification.json")
+    report = json.loads(verification_path.read_text())
+    summary = json.loads(output.with_suffix(".summary.json").read_text())
+    assert report["status"] == "subgrid_calibration_release_verified"
+    assert report["release_input_sha256"] == summary["release_input_sha256"]
+    assert report["table"]["sha256"] == summary["table"]["sha256"]
+    assert report["runtime"]["rows"] == 1
+
+    # A stopped pair publication cannot leave the previous success marker.
+    with output.open("a", encoding="utf-8") as stream:
+        stream.write("\n")
+    failed = subprocess.run(
+        command,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert failed.returncode != 0
+    assert not verification_path.exists()
+
+    # A normal rerun repairs the release and regenerates the audit record.
+    write_calibration_table([CalibrationSource("boey2025", path)], output=output)
+    subprocess.run(command, check=True)
+    assert verification_path.is_file()
 
 
 def test_release_loader_rejects_interrupted_pair_publish(tmp_path: Path) -> None:

@@ -40,6 +40,14 @@ def main() -> int:
 
     release = arguments.release.expanduser().resolve()
     summary_path = release.with_suffix(".summary.json")
+    output = (
+        arguments.output.expanduser().resolve()
+        if arguments.output is not None
+        else release.with_suffix(".verification.json")
+    )
+    if output in {release, summary_path}:
+        raise SystemExit("verification output cannot replace the release pair")
+    output.unlink(missing_ok=True)
     table = SubgridCalibrationTable.from_release(release)
     summary = json.loads(summary_path.read_text())
     profiles = sorted({row.profile_id for row in table.rows})
@@ -83,11 +91,6 @@ def main() -> int:
         mass_interpolation_witnesses[profile_id] = asdict(witness)
 
     runtime = verify_subgrid_runtime(table)
-    output = (
-        arguments.output.expanduser().resolve()
-        if arguments.output is not None
-        else release.with_suffix(".verification.json")
-    )
     output.parent.mkdir(parents=True, exist_ok=True)
     report = {
         "status": "subgrid_calibration_release_verified",
