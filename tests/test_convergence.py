@@ -116,6 +116,8 @@ def test_common_interval_comparison_uses_resolved_duration(tmp_path: Path) -> No
         "estimate"
     ] == pytest.approx(2.2)
     matched = result["matched_separation"]
+    assert matched["requested_bins"] == 2
+    assert matched["minimum_complete_orbits_per_run_per_bin"] == 2
     assert matched["retained_bins"] == 2
     for separation_bin in matched["bins"]:
         second_at_matched_separation = separation_bin["runs"][1]

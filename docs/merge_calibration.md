@@ -353,6 +353,15 @@ a provisional secular calibration. Each separation bin retains its measured
 spatial systematic, whose maximum reaches about `17%`. The coarse calculation
 does not set the local transfer coefficient.
 
+The current dimensionless exchange tables retain all 81 Koo rows and all 454
+Boey rows. The binary-separation, measured half-density-radius, and Hamiltonian
+tests admit 81 Koo rows and 433 Boey rows to the provisional secular sample.
+The wave-state timing test admits 48 rows from each family to the
+phase-dependent sample, for 96 rows in total. These flags identify eligible
+measurements rather than final fitted coefficients. The completed Koo
+resolution comparison supplies a measured spatial systematic. The Boey mass
+trend remains provisional until a matching spatial comparison is available.
+
 ## Interaction-energy convention
 
 The coupled Hamiltonian is
