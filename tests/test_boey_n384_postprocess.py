@@ -36,3 +36,18 @@ def test_boey_n384_finalizer_dry_run_has_every_required_stage() -> None:
     assert "boey_each05pct" not in output
     assert "boey_each10pct" not in output
 
+
+def test_default_finalizer_builds_the_combined_release_last() -> None:
+    result = subprocess.run(
+        ["bash", str(FINALIZER), "--dry-run"],
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    output = result.stdout
+    assert output.count("matched_n512_n384") == 3
+    assert "STEP combined accepted_subgrid_table:" in output
+    assert output.index("boey_each10pct matched_n512_n384") < output.index(
+        "STEP combined accepted_subgrid_table:"
+    )

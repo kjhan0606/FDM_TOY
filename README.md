@@ -252,6 +252,19 @@ bash scripts/run_safe_n384_wave_response.sh /path/to/completed_n384_run
 The runner holds one global lock, limits numerical libraries to one thread,
 bounds virtual memory at 32 GiB, and resumes from the paired partial tables.
 Every successful invocation adds at most one new three-dimensional sample.
+The complete Boey sequence can be handed to the low-impact CPU tripwire with
+
+```bash
+tmux new-session -d -s fdm_boey_n384_tripwire \
+  'exec bash scripts/watch_boey_n384_postprocess.sh'
+```
+
+The tripwire checks only completion files at five-minute intervals. It waits
+for the Koo `384^3` response to release the global FFT lock and for all three
+Boey evolutions, then runs the conservation, secular-exchange, line-density,
+resumable wave-response, dimensionless-exchange, and matched-`512^3`
+measurements sequentially. It finally builds the accepted combined Koo and
+Boey calibration release.
 
 Add `--save-movie-plane` to the live-wave command when a movie is required.
 This option writes the central FDM density plane at every diagnostic output
@@ -305,6 +318,26 @@ python scripts/summarize_pyul_convergence.py \
 The JSON retains both the same-time comparison and the matched-separation
 bootstrap intervals. The latter prevents a difference in binary separation or
 orbital phase from being assigned directly to spatial resolution.
+
+Subgrid release rows must also keep the Hamiltonian error below one percent,
+resolve the measured half-density radius by at least two cells in both runs,
+and keep each power, torque, and total-wave rate spatial difference below 20
+percent. Rejected bins remain in the provenance summary but cannot be loaded
+by the runtime interpolator. The builder publishes the CSV first and a
+checksum-bearing `.summary.json` commit marker second:
+
+```bash
+python scripts/build_subgrid_calibration_table.py \
+  --source koo2024=/path/to/koo_n512_n384.json \
+  --source boey2025=/path/to/boey_n512_n384.json \
+  --output fdm_subgrid_calibration.csv
+```
+
+Production code should load this pair with
+`SubgridCalibrationTable.from_release`; it verifies the schema, provenance,
+row count, profile list, and CSV SHA-256. `from_csv` is reserved for
+exploratory data and test fixtures. No interpolation is permitted outside the
+accepted mass and separation ranges or across a rejected separation bin.
 
 ## Horizon Run 5 comparison sample
 

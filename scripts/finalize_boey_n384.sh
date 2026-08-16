@@ -9,6 +9,7 @@ comparison_root=${result_root}/torch_calibration
 log_root=${result_root}/logs
 log=${log_root}/fdm_boey_n384_postprocess.log
 dry_run=false
+build_combined_table=false
 requested_cases=()
 
 while [[ $# -gt 0 ]]; do
@@ -28,6 +29,7 @@ while [[ $# -gt 0 ]]; do
 done
 if [[ ${#requested_cases[@]} -eq 0 ]]; then
   requested_cases=(boey_each02pct boey_each05pct boey_each10pct)
+  build_combined_table=true
 fi
 if [[ ${dry_run} == false && $(hostname -s) != syntax ]]; then
   printf 'This bounded Boey n384 post-processor is restricted to syntax.\n' >&2
@@ -173,3 +175,33 @@ for case_id in "${requested_cases[@]}"; do
   fi
   record "${case_id} | verified post-processing complete"
 done
+
+if [[ ${build_combined_table} == true ]]; then
+  table=${comparison_root}/fdm_subgrid_calibration.csv
+  koo_comparison=${result_root}/torch_convergence/koo_spatial_convergence_n384_n512_1myr.json
+  run_step combined accepted_subgrid_table \
+    python scripts/build_subgrid_calibration_table.py \
+      --source koo2024="${koo_comparison}" \
+      --source boey2025="${comparison_root}/boey_each02pct_spatial_convergence_n384_n512.json" \
+      --source boey2025="${comparison_root}/boey_each05pct_spatial_convergence_n384_n512.json" \
+      --source boey2025="${comparison_root}/boey_each10pct_spatial_convergence_n384_n512.json" \
+      --output "${table}"
+  if [[ ${dry_run} == false ]]; then
+    python - "${table}" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+from fdm_smbh_delay.subgrid_calibration import SubgridCalibrationTable
+
+path = Path(sys.argv[1]).resolve()
+table = SubgridCalibrationTable.from_release(path)
+summary = json.loads(path.with_suffix(".summary.json").read_text())
+if len(summary["sources"]) != 4:
+    raise SystemExit("final subgrid release does not contain all four sources")
+if sum(source["accepted_bins"] for source in summary["sources"]) != len(table.rows):
+    raise SystemExit("final subgrid release source counts do not close")
+PY
+  fi
+  record "combined | accepted subgrid release verified"
+fi

@@ -195,6 +195,94 @@ def test_physical_update_closes_energy_and_angular_momentum() -> None:
     assert abs(step.angular_momentum_closure_relative_to_exchange) < 1.0e-10
 
 
+def test_physical_rates_follow_the_internal_unit_scaling() -> None:
+    reference = physical_subgrid_rates(
+        _table(),
+        profile_id="boey2025",
+        mass1_msun=2.0e7,
+        mass2_msun=2.0e7,
+        soliton_mass_msun=1.0e9,
+        core_radius_pc=2.0,
+        separation_pc=0.8,
+    )
+    mass_scale = 3.0
+    length_scale = 5.0
+    rescaled = physical_subgrid_rates(
+        _table(),
+        profile_id="boey2025",
+        mass1_msun=mass_scale * 2.0e7,
+        mass2_msun=mass_scale * 2.0e7,
+        soliton_mass_msun=mass_scale * 1.0e9,
+        core_radius_pc=length_scale * 2.0,
+        separation_pc=length_scale * 0.8,
+    )
+    power_scale = mass_scale**2.5 / length_scale**2.5
+    torque_scale = mass_scale**2 / length_scale
+    assert rescaled.orbital_power == pytest.approx(
+        power_scale * reference.orbital_power
+    )
+    assert rescaled.wave_total_energy_rate == pytest.approx(
+        power_scale * reference.wave_total_energy_rate
+    )
+    assert rescaled.orbital_torque == pytest.approx(
+        torque_scale * reference.orbital_torque
+    )
+    assert rescaled.orbital_power_spatial_systematic == pytest.approx(
+        power_scale * reference.orbital_power_spatial_systematic
+    )
+
+
+def test_repeated_finite_updates_close_cumulative_exchange() -> None:
+    rates = physical_subgrid_rates(
+        _table(),
+        profile_id="boey2025",
+        mass1_msun=2.0e7,
+        mass2_msun=2.0e7,
+        soliton_mass_msun=1.0e9,
+        core_radius_pc=2.0,
+        separation_pc=0.8,
+    )
+    semimajor_axis = 0.8
+    eccentricity = 0.1
+    total_wave_energy = 0.0
+    total_wave_angular_momentum = 0.0
+    initial_energy = None
+    initial_angular_momentum = None
+    final_energy = None
+    final_angular_momentum = None
+    for _ in range(100):
+        step = advance_calibrated_exchange(
+            rates,
+            mass1_msun=2.0e7,
+            mass2_msun=2.0e7,
+            semimajor_axis_pc=semimajor_axis,
+            eccentricity=eccentricity,
+            time_step_myr=1.0e-9,
+        )
+        if initial_energy is None:
+            initial_energy = step.exchange.initial_orbital_energy
+            initial_angular_momentum = (
+                step.exchange.initial_orbital_angular_momentum
+            )
+        total_wave_energy += step.exchange.wave_energy_increment
+        total_wave_angular_momentum += (
+            step.exchange.wave_angular_momentum_increment
+        )
+        final_energy = step.exchange.final_orbital_energy
+        final_angular_momentum = step.exchange.final_orbital_angular_momentum
+        semimajor_axis = step.exchange.final_semimajor_axis_pc
+        eccentricity = step.exchange.final_eccentricity
+    assert final_energy - initial_energy + total_wave_energy == pytest.approx(
+        0.0, abs=abs(total_wave_energy) * 1.0e-9
+    )
+    assert (
+        final_angular_momentum
+        - initial_angular_momentum
+        + total_wave_angular_momentum
+        == pytest.approx(0.0, abs=abs(total_wave_angular_momentum) * 1.0e-9)
+    )
+
+
 def test_residual_rates_remove_resolved_work_without_double_counting() -> None:
     rates = physical_subgrid_rates(
         _table(),
