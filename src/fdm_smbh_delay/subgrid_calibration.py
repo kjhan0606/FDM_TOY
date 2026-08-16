@@ -738,6 +738,59 @@ class SubgridCalibrationTable:
         )
 
 
+def find_mass_interpolation_witness(
+    table: SubgridCalibrationTable,
+    *,
+    profile_id: str,
+) -> InterpolatedSubgridRates | None:
+    """Return one measured-overlap point that exercises mass interpolation.
+
+    A pair of accepted mass planes alone is insufficient: their accepted
+    separation intervals must overlap without crossing a rejected bin.  This
+    helper supplies a concrete witness for release-level validation.
+    """
+
+    masses = sorted(
+        {
+            row.binary_to_soliton_mass
+            for row in table.rows
+            if row.profile_id == profile_id
+        }
+    )
+    for lower_mass, upper_mass in zip(masses, masses[1:]):
+        lower_rows = table._mass_plane(
+            profile_id=profile_id,
+            binary_mass_fraction=lower_mass,
+        )
+        upper_rows = table._mass_plane(
+            profile_id=profile_id,
+            binary_mass_fraction=upper_mass,
+        )
+        for lower_row in lower_rows:
+            for upper_row in upper_rows:
+                overlap_lower = max(
+                    lower_row.lower_separation_over_core_radius,
+                    upper_row.lower_separation_over_core_radius,
+                )
+                overlap_upper = min(
+                    lower_row.upper_separation_over_core_radius,
+                    upper_row.upper_separation_over_core_radius,
+                )
+                if overlap_lower >= overlap_upper:
+                    continue
+                try:
+                    return table.interpolate(
+                        profile_id=profile_id,
+                        binary_to_soliton_mass=0.5
+                        * (lower_mass + upper_mass),
+                        separation_over_core_radius=0.5
+                        * (overlap_lower + overlap_upper),
+                    )
+                except ValueError:
+                    continue
+    return None
+
+
 def physical_subgrid_rates(
     table: SubgridCalibrationTable,
     *,

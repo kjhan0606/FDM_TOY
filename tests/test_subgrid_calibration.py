@@ -10,6 +10,7 @@ from fdm_smbh_delay.subgrid_calibration import (
     SubgridCalibrationRow,
     SubgridCalibrationTable,
     advance_calibrated_exchange,
+    find_mass_interpolation_witness,
     physical_subgrid_rates,
     residual_orbital_rates,
 )
@@ -96,6 +97,68 @@ def test_interpolation_is_linear_and_systematic_is_conservative() -> None:
     )
     assert result.orbital_torque_spatial_systematic_fraction == pytest.approx(
         0.09
+    )
+
+
+def test_mass_interpolation_witness_requires_measured_separation_overlap() -> None:
+    witness = find_mass_interpolation_witness(_table(), profile_id="boey2025")
+    assert witness is not None
+    assert witness.binary_to_soliton_mass == pytest.approx(0.07)
+
+    disjoint = SubgridCalibrationTable(
+        (
+            _row(
+                mass_fraction=0.04,
+                bin_index=0,
+                lower=0.2,
+                upper=0.3,
+                centre=0.25,
+                power=-1.0,
+                torque=-2.0,
+                systematic=0.05,
+            ),
+            _row(
+                mass_fraction=0.10,
+                bin_index=0,
+                lower=0.4,
+                upper=0.5,
+                centre=0.45,
+                power=-2.0,
+                torque=-3.0,
+                systematic=0.06,
+            ),
+        )
+    )
+    assert (
+        find_mass_interpolation_witness(disjoint, profile_id="boey2025")
+        is None
+    )
+    assert find_mass_interpolation_witness(
+        SubgridCalibrationTable((disjoint.rows[0],)),
+        profile_id="boey2025",
+    ) is None
+
+    boundary_only = SubgridCalibrationTable(
+        (
+            disjoint.rows[0],
+            _row(
+                mass_fraction=0.10,
+                bin_index=0,
+                lower=0.3,
+                upper=0.4,
+                centre=0.35,
+                power=-2.0,
+                torque=-3.0,
+                systematic=0.06,
+            ),
+        )
+    )
+    assert (
+        find_mass_interpolation_witness(
+            boundary_only,
+            profile_id="boey2025",
+        )
+        is None
     )
 
 

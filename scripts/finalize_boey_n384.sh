@@ -203,7 +203,10 @@ import json
 from pathlib import Path
 import sys
 
-from fdm_smbh_delay.subgrid_calibration import SubgridCalibrationTable
+from fdm_smbh_delay.subgrid_calibration import (
+    SubgridCalibrationTable,
+    find_mass_interpolation_witness,
+)
 
 path = Path(sys.argv[1]).resolve()
 table = SubgridCalibrationTable.from_release(path)
@@ -212,6 +215,22 @@ if len(summary["sources"]) != 4:
     raise SystemExit("final subgrid release does not contain all four sources")
 if sum(source["accepted_bins"] for source in summary["sources"]) != len(table.rows):
     raise SystemExit("final subgrid release source counts do not close")
+profiles = {row.profile_id for row in table.rows}
+if profiles != {"koo2024", "boey2025"}:
+    raise SystemExit("final subgrid release lacks accepted Koo or Boey data")
+boey_masses = sorted(
+    {
+        row.binary_to_soliton_mass
+        for row in table.rows
+        if row.profile_id == "boey2025"
+    }
+)
+if len(boey_masses) < 2:
+    raise SystemExit("accepted Boey data do not span two mass planes")
+if find_mass_interpolation_witness(table, profile_id="boey2025") is None:
+    raise SystemExit(
+        "accepted Boey mass planes have no usable separation overlap"
+    )
 PY
   fi
   record "combined | accepted subgrid release verified"
