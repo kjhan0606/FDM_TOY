@@ -354,7 +354,13 @@ def write_calibration_table(
     minimum_complete_orbits_per_bin: int = 8,
     minimum_core_radius_cells: float = 2.0,
 ) -> dict:
-    """Write one atomic CSV and a provenance-rich summary sidecar."""
+    """Publish a CSV followed by a checksum-bearing commit sidecar.
+
+    The two files cannot be replaced atomically as a pair.  The summary is
+    therefore the commit marker: runtime release loading verifies its CSV
+    checksum and rejects a table if an interruption left the pair mismatched.
+    Rerunning this function repairs either an incomplete or stale pair.
+    """
 
     results = [
         build_source_rows(
@@ -391,11 +397,20 @@ def write_calibration_table(
         writer.writeheader()
         for row in rows:
             writer.writerow(asdict(row))
+        stream.flush()
+        os.fsync(stream.fileno())
+    table_sha256 = _sha256(temporary)
     os.replace(temporary, output)
     summary = {
         "status": "accepted_subgrid_calibration_table",
+        "schema_version": 1,
         "rows": len(rows),
         "profiles": sorted({row.profile_id for row in rows}),
+        "table": {
+            "file": output.name,
+            "sha256": table_sha256,
+            "rows": len(rows),
+        },
         "acceptance": {
             "maximum_spatial_systematic_fraction": (
                 maximum_spatial_systematic_fraction
@@ -421,9 +436,9 @@ def write_calibration_table(
     }
     summary_path = output.with_suffix(".summary.json")
     summary_temporary = summary_path.with_name(f".{summary_path.name}.tmp")
-    summary_temporary.write_text(
-        json.dumps(summary, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    with summary_temporary.open("w", encoding="utf-8") as stream:
+        stream.write(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
     os.replace(summary_temporary, summary_path)
     return summary

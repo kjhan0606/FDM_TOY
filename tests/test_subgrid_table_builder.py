@@ -222,6 +222,33 @@ def test_writer_is_loadable_by_the_runtime_table(tmp_path: Path) -> None:
     )
     assert summary["rows"] == 1
     assert summary["sources"][0]["accepted_bins"] == 1
+    assert len(summary["table"]["sha256"]) == 64
     assert output.with_suffix(".summary.json").is_file()
-    loaded = SubgridCalibrationTable.from_csv(output)
+    loaded = SubgridCalibrationTable.from_release(output)
     assert len(loaded.rows) == 1
+
+
+def test_release_loader_rejects_interrupted_pair_publish(tmp_path: Path) -> None:
+    path = _write_summary(tmp_path)
+    output = tmp_path / "subgrid.csv"
+    write_calibration_table([CalibrationSource("boey2025", path)], output=output)
+
+    # This is the state produced if a newer CSV is replaced and the process is
+    # stopped before publishing its matching summary commit marker.
+    with output.open("a", encoding="utf-8") as stream:
+        stream.write("\n")
+    with pytest.raises(ValueError, match="checksum"):
+        SubgridCalibrationTable.from_release(output)
+
+    # A normal rerun repairs the pair and makes it loadable again.
+    write_calibration_table([CalibrationSource("boey2025", path)], output=output)
+    assert len(SubgridCalibrationTable.from_release(output).rows) == 1
+
+
+def test_release_loader_requires_a_commit_sidecar(tmp_path: Path) -> None:
+    path = _write_summary(tmp_path)
+    output = tmp_path / "subgrid.csv"
+    write_calibration_table([CalibrationSource("boey2025", path)], output=output)
+    output.with_suffix(".summary.json").unlink()
+    with pytest.raises(ValueError, match="commit sidecar is absent"):
+        SubgridCalibrationTable.from_release(output)

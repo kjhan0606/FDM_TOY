@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass
+import hashlib
+import json
 from pathlib import Path
 from typing import Iterable
 
@@ -17,6 +19,15 @@ from .orbital_exchange import (
 
 
 ACCEPTED_STATUS = "accepted_with_spatial_systematic"
+ACCEPTED_TABLE_STATUS = "accepted_subgrid_calibration_table"
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 @dataclass(frozen=True)
@@ -309,6 +320,62 @@ class SubgridCalibrationTable:
                 )
             )
         return cls(rows)
+
+    @classmethod
+    def from_release(cls, path: Path) -> "SubgridCalibrationTable":
+        """Load only a committed CSV/summary pair with valid provenance.
+
+        ``from_csv`` remains useful for in-memory fixtures and exploratory
+        tables. Production use should call this method so a stop between the
+        two file replacements cannot silently expose a mixed release.
+        """
+
+        resolved = path.expanduser().resolve()
+        if not resolved.is_file():
+            raise ValueError(f"subgrid release table is absent: {resolved}")
+        summary_path = resolved.with_suffix(".summary.json")
+        if not summary_path.is_file():
+            raise ValueError(
+                f"subgrid release commit sidecar is absent: {summary_path}"
+            )
+        try:
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise ValueError(
+                f"subgrid release commit sidecar is unreadable: {summary_path}"
+            ) from error
+        if (
+            summary.get("status") != ACCEPTED_TABLE_STATUS
+            or summary.get("schema_version") != 1
+        ):
+            raise ValueError("subgrid release status or schema is invalid")
+        table_metadata = summary.get("table")
+        if not isinstance(table_metadata, dict):
+            raise ValueError("subgrid release table metadata is absent")
+        if table_metadata.get("file") != resolved.name:
+            raise ValueError("subgrid release table filename does not match")
+        expected_sha256 = table_metadata.get("sha256")
+        if (
+            not isinstance(expected_sha256, str)
+            or len(expected_sha256) != 64
+            or _sha256(resolved) != expected_sha256
+        ):
+            raise ValueError("subgrid release table checksum does not match")
+        table = cls.from_csv(resolved)
+        expected_rows = table_metadata.get("rows")
+        if (
+            not isinstance(expected_rows, int)
+            or expected_rows != len(table.rows)
+            or summary.get("rows") != len(table.rows)
+        ):
+            raise ValueError("subgrid release row count does not match")
+        profiles = sorted({row.profile_id for row in table.rows})
+        if summary.get("profiles") != profiles:
+            raise ValueError("subgrid release profile list does not match")
+        sources = summary.get("sources")
+        if not isinstance(sources, list) or not sources:
+            raise ValueError("subgrid release provenance sources are absent")
+        return table
 
     def _mass_plane(
         self,
