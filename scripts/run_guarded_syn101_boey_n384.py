@@ -61,19 +61,17 @@ class BoeyCase:
         return LOG_ROOT / f"fdm_{self.output.name}_solver.pid"
 
 
-def _pmon_pid(line: str) -> int | None:
-    """Return a process ID from one nvidia-smi pmon row."""
+def _compute_application(line: str) -> tuple[str, int] | None:
+    """Return a GPU UUID and PID from one persistent context sample."""
 
-    fields = line.split()
-    if not fields or fields[0].startswith("#") or len(fields) < 2:
-        return None
-    if fields[1] == "-":
+    fields = [field.strip() for field in line.split(",")]
+    if len(fields) != 2 or not fields[0].startswith("GPU-"):
         return None
     try:
         pid = int(fields[1])
     except ValueError:
         return None
-    return pid if pid > 0 else None
+    return (fields[0], pid) if pid > 0 else None
 
 
 def _memory_used_mib(line: str) -> int | None:
@@ -121,6 +119,7 @@ class GuardedSequence:
         self.allowed_lock = Lock()
         self.allowed_pids: set[int] = set()
         self.current_marker: Path | None = None
+        self.gpu_uuid: str | None = None
         self.telemetry: list[subprocess.Popen[str]] = []
         self.telemetry_logs: list[object] = []
         self.collision_reported = False
@@ -164,6 +163,9 @@ class GuardedSequence:
                 "--format=csv,noheader,nounits",
             ]
         ).strip()
+        if not gpu_uuid.startswith("GPU-"):
+            raise RuntimeError(f"GPU {self.gpu_index} has an invalid UUID")
+        self.gpu_uuid = gpu_uuid
         applications = self._capture(
             [
                 "nvidia-smi",
@@ -280,8 +282,11 @@ class GuardedSequence:
 
     def _read_gpu_telemetry(self, stream) -> None:
         for line in stream:
-            pid = _pmon_pid(line)
-            if pid is None:
+            application = _compute_application(line)
+            if application is None:
+                continue
+            gpu_uuid, pid = application
+            if gpu_uuid != self.gpu_uuid:
                 continue
             with self.allowed_lock:
                 allowed = set(self.allowed_pids)
@@ -302,16 +307,16 @@ class GuardedSequence:
                 return
 
     def start_telemetry(self) -> None:
+        if self.gpu_uuid is None:
+            raise RuntimeError("GPU telemetry requires a successful preflight")
         error_stream = self.guard_log.open("a", encoding="utf-8")
         self.telemetry_logs.append(error_stream)
         gpu = subprocess.Popen(
             [
                 "nvidia-smi",
-                "pmon",
-                "-i",
-                str(self.gpu_index),
-                "-d",
-                str(self.poll_seconds),
+                "--query-compute-apps=gpu_uuid,pid",
+                "--format=csv,noheader,nounits",
+                f"--loop={self.poll_seconds}",
             ],
             text=True,
             stdout=subprocess.PIPE,

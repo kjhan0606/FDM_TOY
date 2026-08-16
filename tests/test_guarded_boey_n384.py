@@ -9,18 +9,18 @@ sys.path.insert(0, str(PROJECT / "scripts"))
 from run_guarded_syn101_boey_n384 import (  # noqa: E402
     BoeyCase,
     GuardedSequence,
+    _compute_application,
     _foreign_slurm_reason,
     _memory_used_mib,
-    _pmon_pid,
 )
 import run_guarded_syn101_boey_n384  # noqa: E402
 
 
-def test_pmon_pid_ignores_headers_and_empty_samples() -> None:
-    assert _pmon_pid("# gpu pid type sm mem command") is None
-    assert _pmon_pid("0 - - - - -") is None
-    assert _pmon_pid("") is None
-    assert _pmon_pid("0 12345 C 0 4 python") == 12345
+def test_compute_application_parses_persistent_context_samples() -> None:
+    assert _compute_application("No running processes found") is None
+    assert _compute_application("") is None
+    assert _compute_application("GPU-aabb, invalid") is None
+    assert _compute_application("GPU-aabb, 12345") == ("GPU-aabb", 12345)
 
 
 def test_foreign_slurm_reason_ignores_owner() -> None:
