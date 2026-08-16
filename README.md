@@ -137,8 +137,10 @@ cases. Fully coupled PyUL_NBody calculations measure the complete Hamiltonian,
 the osculating binary elements, orbit-averaged power and torque, correlated
 uncertainties, central-density evolution, and sparse three-dimensional wave
 diagnostics. Calibration against converged long calculations, the
-numerical-radius-to-parsec inspiral, and the cosmological PTA population remain
-future work.
+accepted production q-e-separation table, and the cosmological PTA population
+remain future work. The runtime table schema and sparse q-e-small-separation
+pilot are implemented, but a pilot row is not published unless every numerical
+acceptance gate passes.
 
 The point-mass osculating semi-major axis is an optional diagnostic. It can be
 undefined when the instantaneous state is not bound in the point-mass Kepler
@@ -191,6 +193,20 @@ analysis retains `wave_response_timeseries.partial.csv` and
 their sample indices and row counts are validated before another sample is
 processed.
 
+Generate the sparse q-e-small-separation pilot manifest with
+
+```bash
+python scripts/generate_wave_calibration_grid.py \
+  configs/wave_calibration_qe_extension.yaml \
+  --output results/wave_calibration_qe_extension
+```
+
+The manifest records the Kepler orbit-mean separation in cells and the
+pericentre in both cells and Plummer radii. Generation fails before any solver
+is launched when a requested resolution violates the configured two-cell
+orbit-mean or two-Plummer-radius pericentre gate. At the fixed pilot box size,
+the `a/r_c=0.05` pair therefore uses `n=512,768`, not `n=384,512`.
+
 Long GPU calculations use the PyUL-compatible Torch backend. Install the
 optional dependencies with `python -m pip install -e '.[gpu]'`, export one
 initial three-dimensional state with PyUL, and launch the continuation through
@@ -211,6 +227,25 @@ The wrapper snapshots the uncommitted numerical source and its SHA-256 hashes
 under `RUN/torch_solver_provenance`. A resumed calculation is rejected if that
 source no longer matches, preventing two numerical implementations from being
 joined into one trajectory.
+
+For a manually managed shared GPU, place `FDM_SOLVER_PID_FILE` outside the new
+run directory and attach the NVML guard to the recorded solver PID:
+
+```bash
+# Terminal 1
+export FDM_SOLVER_PID_FILE=/path/to/logs/solver.pid
+python scripts/launch_torch_wave_case.py REFERENCE_RUN \
+  --output RUN --device cuda:0
+
+# Terminal 2, after the marker appears
+python scripts/guard_cuda_process.py \
+  --gpu-index 0 --solver-pid "$(cat "$FDM_SOLVER_PID_FILE")" \
+  --status-file /path/to/logs/gpu_guard_status.json
+```
+
+The guard calls NVML directly and interrupts only the owned solver if another
+compute PID appears on that GPU. It does not launch repeated `ps`, `pgrep`, or
+`nvidia-smi` scans.
 
 The intermediate `384^3` spatial-convergence run on `syn101` uses a dedicated
 manual tripwire:
@@ -366,12 +401,13 @@ ID is stored in every CSV row, so a stop between the CSV and summary replaces
 cannot validate against the previous summary even when the numerical rows are
 unchanged. `from_csv` is reserved for
 exploratory data and test fixtures. No interpolation is permitted outside the
-accepted mass and separation ranges or across a rejected separation bin.
-Within one profile, rates are piecewise linear in total binary-to-soliton mass
-and in the reference separation-bin centres. The outer half of an accepted
-edge bin uses that bin's measured value, while every interpolated systematic
-is the maximum of its bracketing rows. These rules are stored in the release
-summary and checked by the production loader.
+accepted mass-ratio, eccentricity, binary-mass, and separation ranges or across
+a rejected separation bin. A v3 table interpolates piecewise linearly in
+`(q,e)` only when every bracketing plane independently supplies the required
+mass-separation support. The outer half of an accepted edge bin uses that bin's
+measured value, while every interpolated systematic is the maximum of all
+bracketing rows. These rules are stored in the release summary and checked by
+the production loader.
 `advance_calibrated_exchange` accepts the orbital power and torque already
 measured from a resolved wake and applies only the residual relative to the
 calibrated target. Leave those arguments at zero only when the FDM response is
