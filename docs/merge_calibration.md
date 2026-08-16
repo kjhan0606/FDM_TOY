@@ -134,8 +134,8 @@ python scripts/generate_wave_calibration_grid.py \
   --output results/wave_calibration_qe_extension
 ```
 
-The `128/256` and `256/512` pairs are a pilot hierarchy, not accepted table
-rows. The table builder requires at least eight complete orbits, a resolved
+The `128/256`, `256/512`, and smallest-axis `384/512` pairs are a pilot
+hierarchy, not accepted table rows. The table builder requires at least eight complete orbits, a resolved
 half-density radius, Hamiltonian error below the production limit, agreement
 of power and torque across the resolution pair, and a minimum binary
 separation greater than two Plummer radii. The compact 12-core-radius box also

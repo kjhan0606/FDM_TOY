@@ -20,9 +20,9 @@ cases:
   - {case_id: qe_q100_e060_a020, tier: 1, mass_ratio_q: 1.0, eccentricity: 0.6, binary_to_soliton_mass: 0.10, semi_major_axis_over_core_radius: 0.20}
   - {case_id: qe_q030_e030_a020, tier: 1, mass_ratio_q: 0.3, eccentricity: 0.3, binary_to_soliton_mass: 0.10, semi_major_axis_over_core_radius: 0.20}
   - {case_id: qe_q100_e000_a010, tier: 2, mass_ratio_q: 1.0, eccentricity: 0.0, binary_to_soliton_mass: 0.10, semi_major_axis_over_core_radius: 0.10}
-  - {case_id: qe_q100_e000_a005, tier: 2, mass_ratio_q: 1.0, eccentricity: 0.0, binary_to_soliton_mass: 0.10, semi_major_axis_over_core_radius: 0.05}
+  - {case_id: qe_q100_e000_a005, tier: 3, mass_ratio_q: 1.0, eccentricity: 0.0, binary_to_soliton_mass: 0.10, semi_major_axis_over_core_radius: 0.05}
   - {case_id: qe_q030_e030_a010, tier: 2, mass_ratio_q: 0.3, eccentricity: 0.3, binary_to_soliton_mass: 0.10, semi_major_axis_over_core_radius: 0.10}
-  - {case_id: qe_q030_e030_a005, tier: 2, mass_ratio_q: 0.3, eccentricity: 0.3, binary_to_soliton_mass: 0.10, semi_major_axis_over_core_radius: 0.05}
+  - {case_id: qe_q030_e030_a005, tier: 3, mass_ratio_q: 0.3, eccentricity: 0.3, binary_to_soliton_mass: 0.10, semi_major_axis_over_core_radius: 0.05}
 
 similarity_scaling:
   parameter: "hbar^2/(G*m^2*M_soliton*r_core)"
@@ -37,6 +37,7 @@ numerics:
   resolutions_by_tier:
     1: [128, 256]
     2: [256, 512]
+    3: [384, 512]
 
 energy_accounting:
   interaction_energy: integral_rho_phi_bh_dv_counted_once
