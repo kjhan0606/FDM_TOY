@@ -264,7 +264,12 @@ for the Koo `384^3` response to release the global FFT lock and for all three
 Boey evolutions, then runs the conservation, secular-exchange, line-density,
 resumable wave-response, dimensionless-exchange, and matched-`512^3`
 measurements sequentially. It finally builds the accepted combined Koo and
-Boey calibration release.
+Boey calibration release. Final release verification requires accepted Koo
+and Boey rows, accepted Boey rows on at least two binary-to-soliton mass
+planes, and a positive-width accepted separation overlap where an actual mass
+interpolation succeeds. If the repeats do not provide that overlap, the
+pipeline fails the release gate and retains the rejected-bin diagnostics; it
+does not relax the spatial-systematic threshold.
 
 Add `--save-movie-plane` to the live-wave command when a movie is required.
 This option writes the central FDM density plane at every diagnostic output
