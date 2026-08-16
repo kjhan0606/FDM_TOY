@@ -46,6 +46,15 @@ def _selected_indices(save_number: int, requested_intervals: int) -> set[int]:
     )
 
 
+def _estimated_remaining_seconds(
+    *, elapsed_seconds: float, start_step: int, step: int, total_steps: int
+) -> float | None:
+    completed_steps = step - start_step
+    if completed_steps <= 0:
+        return None
+    return elapsed_seconds * (total_steps - step) / completed_steps
+
+
 def _save_array(run: Path, category: str, prefix: str, index: int, value) -> None:
     directory = run / "Outputs" / category
     directory.mkdir(parents=True, exist_ok=True)
@@ -483,9 +492,14 @@ def main() -> int:
                         "step": step,
                         "steps": actual_steps,
                         "elapsed_seconds": elapsed,
-                        "estimated_remaining_seconds": elapsed
-                        * (actual_steps - step)
-                        / step,
+                        "estimated_remaining_seconds": (
+                            _estimated_remaining_seconds(
+                                elapsed_seconds=elapsed,
+                                start_step=start_step,
+                                step=step,
+                                total_steps=actual_steps,
+                            )
+                        ),
                     },
                     sort_keys=True,
                 ),

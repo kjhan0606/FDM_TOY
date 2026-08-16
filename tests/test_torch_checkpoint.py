@@ -25,6 +25,21 @@ def _wave(value: float):
     )
 
 
+def test_remaining_time_uses_only_steps_completed_since_resume() -> None:
+    assert run_torch_wave_case._estimated_remaining_seconds(
+        elapsed_seconds=20.0,
+        start_step=600,
+        step=800,
+        total_steps=1200,
+    ) == pytest.approx(40.0)
+    assert run_torch_wave_case._estimated_remaining_seconds(
+        elapsed_seconds=0.0,
+        start_step=600,
+        step=600,
+        total_steps=1200,
+    ) is None
+
+
 def test_torch_checkpoint_round_trip_and_replaces_the_previous_pair(
     tmp_path: Path,
 ) -> None:
