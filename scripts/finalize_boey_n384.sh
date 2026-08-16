@@ -84,20 +84,21 @@ run_step() {
 verify_evolution() {
   local run=$1 expected_case=$2
   python - "${run}" "${expected_case}" <<'PY'
-import json
 from pathlib import Path
 import sys
 
-run = Path(sys.argv[1]).resolve()
-expected_case = sys.argv[2]
-summary = json.loads((run / "torch_run_summary.json").read_text())
-metadata = json.loads((run / "fdm_adapter_metadata.json").read_text())
-if summary.get("status") != "complete":
-    raise SystemExit("evolution summary is not complete")
-if int(metadata.get("resolution", -1)) != 384:
-    raise SystemExit("post-processing input is not n384")
-if metadata.get("case_id") != expected_case:
-    raise SystemExit("post-processing case identity does not match")
+from fdm_smbh_delay.run_metadata import validate_torch_calibration_completion
+
+validate_torch_calibration_completion(
+    Path(sys.argv[1]),
+    expected_case_id=sys.argv[2],
+    expected_resolution=384,
+    expected_duration_myr=0.8,
+    expected_saved_intervals=2048,
+    expected_saved_3d_states=17,
+    expected_rk4_substeps=9,
+    expected_checkpoint_interval=32,
+)
 PY
 }
 
