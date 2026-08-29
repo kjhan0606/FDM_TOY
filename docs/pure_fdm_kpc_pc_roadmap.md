@@ -1,0 +1,343 @@
+# Pure-FDM kpc-to-pc roadmap
+
+This roadmap defines the path from a pure-FDM galaxy-merger capture to the
+parsec-scale live-wave calculation.  It is deliberately separate from the
+PTA population synthesis: a physical delay enters the population only after
+every interval below has passed its validation gates.
+
+## Scientific scope
+
+`pure-FDM` means that the CDM density and force are identically zero.  Stars
+and gas are optional baryonic channels and must be marked `available` or
+`absent`; they are never silently replaced by CDM.  A completely baryon-free
+experiment marks both channels `absent`.
+
+The few-kpc interval is not a one-body decay in a static spherical core.  It
+contains two moving nuclei (and, in general, two evolving FDM cores) before a
+common core forms.  The existing fixed-primary spherical solver is retained
+only as an analytic baseline.  A physical value requires a pure-FDM merger
+zoom or a closure calibrated against one.
+
+## Staged work
+
+### 0. Contract and scope freeze — complete
+
+- CDM is excluded from the pure-FDM path.
+- Missing data are not interpreted as zero force or zero delay.
+- Inner live-wave results that lack accepted support remain `uncalibrated` or
+  `censored`.
+
+### 1. Outer-halo data contract — complete in the toy repository
+
+`FDMOuterHaloClosure` stores no-extrapolation radial diagnostics:
+
+- FDM mass current;
+- coherence time and de Broglie wavelength;
+- velocity-space diffusion coefficient;
+- density-gradient scale;
+- calibration status.
+
+`EnvironmentProfileBundle` can preserve this closure with the source case,
+SHA-256, and path.  These fields are diagnostics only; they do not define a
+drag law.
+
+### 2. Outer response and handoff contract — complete in the toy repository
+
+`FDMOuterResponseTable` accepts a measured vector drift and a symmetric
+positive-semidefinite velocity-diffusion tensor.  It returns `censored` when
+the table is uncalibrated or a radius lies outside support.
+
+`validate_outer_inner_handoff` requires:
+
+- a positive-width overlap, at least a factor of two in separation;
+- at least three matched rate points;
+- orbital-power and torque disagreement no larger than 20 percent;
+- eccentricity mismatch no larger than 0.02;
+- dimensionless similarity mismatch no larger than 2 percent;
+- no sign change in the measured power or torque.
+
+The validator never adds overlapping delays.  It chooses a single handoff
+surface only after both calculations pass.
+
+### 3. Pure-FDM outer merger zoom — operator execution stage
+
+The first explicit outer-grid specification is
+`configs/pure_fdm_outer_zoom_grid.yaml`: four physical points, two phase
+replicates, and two outer-stage resolutions (20 manifest cases).  It can be
+materialized without submitting jobs with:
+
+```bash
+python scripts/generate_galaxy_zoom_grid.py \
+  configs/pure_fdm_outer_zoom_grid.yaml \
+  results/pure_fdm_outer_zoom_manifest.json
+```
+
+This manifest deliberately stops at the outer/common-core stage.  It is not
+evidence that a 1 pc transition is resolved.
+
+Before registration, generate the non-submitting preflight record:
+
+```bash
+python scripts/preflight_pure_fdm_outer_zoom.py \
+  configs/pure_fdm_outer_zoom_grid.yaml \
+  results/pure_fdm_outer_zoom_preflight.json
+```
+
+The current specification produces 20 outer cases and 10 deferred nested
+requests.  Each request is attached to the finest outer run for one physical
+point and phase replicate, and requires `dx <= 0.25 pc` plus the exact outer
+checkpoint, checkpoint SHA-256, wave-seam provenance, and force ledger before
+it can become a real inner run.
+
+`NestedZoomCheckpointContract` enforces the registration gate: the requested
+outer case ID must match exactly, the 1 pc target must retain at least four
+cells, softening cannot exceed the finest cell, and both the HJM/wave seam and
+the numerical boundary must lie beyond the protected wake/coherence extent.
+It also carries separate force and wave-ledger SHA-256 values.  A failure is a
+censored setup, not a reason to enlarge the force or reuse a neighbouring
+checkpoint.
+
+The operator must prepare a pure-FDM run family, submitted through Slurm, with
+the following provenance fixed in the manifest:
+
+- exact code revision, namelist, units, `m_fdm`, and initial wave phase;
+- box size, refinement mask, `dx`, `dt`, softening, and HJM/wave seam;
+- two un-compacted SMBH states and the complete pre-compaction ledger;
+- FDM-only density, potential, current, mass/energy/angular-momentum fluxes;
+- core centres, core radii, dipole/quadrupole modes, and granule coherence;
+- boundary flux and the time at which a wake reaches a numerical boundary;
+- explicit star/gas channel status if baryons are present.
+
+For lagRamses FDM runs, setting `fdm_outer_ledger=.true.` in `&fdm_params`
+adds a compact `fdm_outer_wave_provenance_<output>.txt` record beside each
+normal `fdm_<output>.out*` wave snapshot.  It preserves the output epoch,
+code-unit leaf mass/current integral, HJM seam settings, current-stencil
+coverage, and the explicit resolved-wave/no-analytic-drag force accounting.
+The current V2 record also preserves the active dual-soliton switch and both
+runtime component parameter vectors, so a controlled two-core output can be
+bound back to its materialized seed.
+It is raw provenance only: the full snapshots remain mandatory for local
+profiles, core motion/modes, granules, force work, and a complete outer wave
+ledger.  The lagRamses patch document is
+`patch/lagRamses/FDM_OUTER_WAVE_PROVENANCE.md`.
+
+The raw text record can be checked and converted to an atomic JSON diagnostic
+without re-running a simulation:
+
+```bash
+python scripts/validate_lagramses_fdm_outer_wave_provenance.py \
+  output_00042/fdm_outer_wave_provenance_00042.txt \
+  results/fdm_outer_wave_provenance_00042.json
+```
+
+`available_raw_provenance` means only that the summary is self-consistent and
+that it declares resolved-wave-only FDM force accounting.  It is deliberately
+not a calibrated response, an accepted outer closure, or a delay estimate.
+
+For a controlled two-core experiment, define a YAML seed with exactly two
+FDM solitons and two SMBH sinks in code units, then materialize the matching
+all-wave `&FDM_PARAMS` fragment and the two-row lagRamses `ic_sink` input:
+
+```bash
+python scripts/materialize_dual_soliton_ic.py \
+  dual_soliton_seed.yaml \
+  initial_conditions/pure_fdm_case
+```
+
+The seed requires `dark_matter_model: fdm`, explicit star/gas availability,
+zero sink CDM fraction, and each SMBH within its assigned soliton core.  It
+sets `fdm_use_hjm=.false.`, `fdm_dual_soliton_ic=.true.`, and
+`fdm_outer_ledger=.true.`; its `box_length_code` must equal the lagRamses
+`&AMR_PARAMS boxlen` used with the generated `ic_sink`.  A coherent two-soliton overlap is not a
+single-stream HJM state, so an HJM seam is prohibited at initialization.  The
+materialized files are initial data only; relaxation, paired resolution,
+phase replicas, and the outer-wave evidence gates remain mandatory.
+
+Before the operator submits a completed run namelist, verify that its scalar
+FDM/AMR switches, all two-soliton components, and the run-directory
+`ic_sink` remain identical to the materialized seed:
+
+```bash
+python scripts/preflight_dual_soliton_run.py \
+  initial_conditions/pure_fdm_case/dual_soliton_seed_manifest.json \
+  run.nml \
+  ic_sink \
+  results/pure_fdm_dual_soliton_preflight.json
+```
+
+Only `ready_for_operator_submission` means that this configuration identity
+check passed.  It neither submits a job nor certifies the relaxation,
+conservation, paired-resolution, phase-replica, boundary, or calibration
+gates.  A mismatch is `not_ready_for_operator_submission`, not a physical
+delay or a scientific censoring result.
+
+After the first normal FDM output, verify the runtime V2 provenance against
+the same materialized seed before treating the output as a member of that
+controlled case:
+
+```bash
+python scripts/validate_dual_soliton_runtime_identity.py \
+  initial_conditions/pure_fdm_case/dual_soliton_seed_manifest.json \
+  output_00042/fdm_outer_wave_provenance_00042.txt \
+  results/pure_fdm_dual_soliton_runtime_identity.json
+```
+
+`runtime_seed_identity_verified` establishes only that the raw V2 output
+declares the same all-wave two-core configuration and passes the raw
+force/current coverage gate.  It does not relax, calibrate, or otherwise
+accept the physical merger calculation.
+
+The bounded initial relaxation window is assessed separately from the full
+time-resolved snapshots.  Its evidence table must preserve both core masses,
+radii, periodic centres, and the independently measured wave-mass,
+Hamiltonian, and angular-momentum error series.  It is accepted only after a
+verified runtime identity record exists:
+
+```bash
+python scripts/assess_dual_soliton_relaxation.py \
+  results/pure_fdm_dual_soliton_relaxation_evidence.json \
+  results/pure_fdm_dual_soliton_relaxation_assessment.json
+```
+
+The declared window thresholds are evaluated without re-reading or modifying
+the wave fields.  A pass identifies a stable initial two-core window; it is
+not an outer-merger result, and a failed window cannot be relabelled as zero
+pairing delay.
+
+No direct syn101 execution is permitted.  GPU execution is Slurm-only.  When
+CPU preprocessing is needed, it is run manually on Lageunha with one process,
+one numerical-library thread, a memory bound, and restartable outputs.  The
+operator owns job submission, cancellation on collision, registration, and
+commit/push; code and scientific acceptance remain separate responsibilities.
+
+### 4. Nested inner zoom — operator execution stage
+
+The existing 1--2 pc cell-size galaxy zoom cannot satisfy a four-cell gate at
+1 pc.  A nested inner zoom must therefore use `dx <= 0.25 pc`, with the final
+choice set by the measured pericentre, de Broglie wavelength, softening, and
+wake extent.  The inner run must share an exact checkpoint with the outer run
+and preserve the wave Hamiltonian ledger.
+
+The current Koo/Boey live-wave anchors and a galaxy-scale outer halo are not
+automatically in the same similarity class.  Matching requires, at minimum,
+`m_fdm`, soliton mass and core radius, `eta_SP`, binary mass fraction,
+`a/r_c`, eccentricity, local density/current, mode phase, and external tidal
+field.
+
+### 5. Calibration and acceptance — evaluation stage
+
+The evaluator compares orbit-averaged `dE_orb/dt`, `dL_orb/dt`, eccentricity,
+and their phase distributions on the positive-width overlap.  Paired
+resolution and phase-replicate runs are mandatory.  A live wake supplies its
+own work and torque; a subgrid response may receive only a measured residual.
+
+The outer stochastic model is a calibrated drift-plus-diffusion consumer.  No
+analytic response is generated when `eta_nl` is outside calibrated support,
+the de Broglie scale is unresolved, a granule/wake reaches a seam or boundary,
+or the response is dominated by a sign-changing torque or stochastic stall.
+
+`PureFDMOuterRunResult` is the required outer-run result record.  It binds the
+exact grid case and manifest SHA-256 to the outer closure, conservation
+diagnostics, stages (`outer_start`, `common_core`, `nested_checkpoint`), and
+the nested checkpoint contract.  Its paired-resolution evaluator requires
+both the de Broglie scale and wake to have at least four cells and returns only
+`accepted_outer_uncalibrated`: it permits inner registration but does not
+publish a physical kpc-to-pc delay.
+
+Every registered outer result also carries an `FDMOuterWaveLedger`: hashes of
+the time-resolved field and profile snapshot indices, force-source ledger,
+core centres, FDM current, coherence and de Broglie scales, granule statistic,
+complex l=1/l=2 modes, wake extent, seam/boundary clearance, and wave
+Hamiltonian/mass/angular-momentum diagnostics.  It rejects an analytic FDM
+drag force and cannot accept a seam or boundary inside the protected wave
+extent.  The nested checkpoint's force and wave-ledger hashes must match this
+outer evidence exactly.
+
+`assess_pure_fdm_outer_phase_ensemble` then retains the common-core timing
+mean and sample standard deviation across independently converged phase
+replicates.  This dispersion is a stochastic outer-halo observable, not a
+resolution correction and not a coalescence-time prediction.
+
+After manual Lageunha postprocessing has registered each available result, the
+operator writes a small index with the exact manifest hash and case-ID-to-JSON
+paths.  It may contain only the cases that have finished; omitted, unreadable,
+or provenance-invalid records become explicit censored realizations:
+
+```json
+{
+  "schema_version": 1,
+  "manifest_sha256": "<exact hash from the generated manifest>",
+  "results": {
+    "<case id>": "outer-results/<case id>.json"
+  }
+}
+```
+
+Evaluate that index without submitting a job or rerunning postprocessing:
+
+```bash
+python scripts/evaluate_pure_fdm_outer_ensemble.py \
+  configs/pure_fdm_outer_zoom_grid.yaml \
+  results/pure_fdm_outer_result_index.json \
+  results/pure_fdm_outer_ensemble_evaluation.json
+```
+
+The evaluator checks only the finest adjacent resolution pair for each phase
+replicate (the two available levels in the initial grid), stores every source
+path and SHA-256, and reports an ensemble as
+`accepted_outer_ensemble_uncalibrated` only after all its phase pairs pass.
+That status identifies outer checkpoints eligible for the subsequent overlap
+evaluation; it never authorizes a physical delay, nested submission, or PTA
+catalogue entry by itself.
+
+Only an accepted outer phase ensemble can be converted into a checkpoint-bound
+registration record.  The following command independently re-reads the index
+and source records, checks that every checkpoint retains the exact FDM mass,
+soliton mass, core radius, case ID, and manifest, and writes no scheduler
+request:
+
+```bash
+python scripts/prepare_pure_fdm_nested_zoom_registration.py \
+  configs/pure_fdm_outer_zoom_grid.yaml \
+  results/pure_fdm_outer_result_index.json \
+  results/pure_fdm_nested_zoom_registration.json
+```
+
+The operator may use only `ready_for_operator_registration` entries to create
+the corresponding nested zoom inputs.  The generated record is intentionally
+not executable: each new run still requires the operator's Slurm submission
+and the already specified collision policy.
+
+### 6. End-to-end delay and PTA handoff — final stage
+
+Only after the previous gates pass do we compose:
+
+```text
+numerical capture -> pure-FDM outer merger -> common core/1 pc
+-> accepted inner FDM response -> 0.01 pc -> GW evolution
+```
+
+The population/ PTA layer receives the per-event delay and its provenance,
+uncertainty, and censoring status.  A missing or censored interval is never
+replaced with zero and is not silently converted into a physical coalescence
+time.
+
+## Censor conditions
+
+The event remains censored for incomplete provenance, `MULTIPLE` capture,
+unbound re-escape, unsupported radius or similarity class, insufficient
+overlap, failed Hamiltonian or resolution gates, HJM/wave seam contamination,
+periodic-boundary wake contamination, unresolved core/de Broglie/orbit scales,
+static-core energy injection above the validated binding-energy fraction, or
+failure to reach the target within the available cosmic time.
+
+## Current implementation status
+
+The repository currently contains the bridge, radial profile bundle, outer
+closure diagnostics, calibrated response-table boundary, overlap validator,
+and the typed dual-soliton/two-SMBH seed plus run-input identity preflight.
+The lagRamses patch implements the opt-in all-wave seed and raw outer-wave
+provenance writer; it does not alter ordinary dynamics when disabled.  The
+full toy-repository suite passes (`423 passed` at the latest check).  No
+pure-FDM outer zoom has been submitted and no end-to-end physical delay is yet
+accepted.

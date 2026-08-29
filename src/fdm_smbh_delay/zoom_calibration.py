@@ -57,9 +57,11 @@ class ZoomPhysicsPoint:
     fdm_soliton_mass_msun: float | None = None
 
     def __post_init__(self) -> None:
+        stellar_mass = float(self.host_stellar_mass_msun)
+        if not np.isfinite(stellar_mass) or stellar_mass < 0.0:
+            raise ValueError("host_stellar_mass_msun must be finite and non-negative")
         positive = np.asarray(
             [
-                self.host_stellar_mass_msun,
                 self.host_scale_radius_pc,
                 self.binary_total_mass_msun,
                 self.initial_separation_pc,

@@ -110,6 +110,14 @@ def test_grid_rejects_duplicate_physical_points() -> None:
         build_zoom_grid(spec)
 
 
+def test_pure_fdm_point_can_explicitly_omit_stellar_baryons() -> None:
+    mapping = dict(_specification()["baseline"])
+    mapping.update(host_stellar_mass_msun=0.0, gas_fraction=0.0, gas_rotation_fraction=0.0)
+    point = ZoomPhysicsPoint(**mapping)
+    assert point.host_stellar_mass_msun == 0.0
+    assert point.gas_fraction == 0.0
+
+
 def test_resolution_pair_builds_exact_point_delay_row(tmp_path) -> None:
     grid = build_zoom_grid(_specification())
     coarse_case, fine_case = grid.cases[:2]
