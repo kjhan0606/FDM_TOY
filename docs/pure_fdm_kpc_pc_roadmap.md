@@ -140,12 +140,14 @@ identity is censored. The sidecar does not by itself recompute a rate from raw
 time series, so a production estimator must still bind its source series and
 settings before its diagnosed rates become a scientific acceptance.
 
-`materialize_model_zoom_execution_contract.py` writes that common
-`&PHYSICS_PARAMS` identity fragment for one CDM, SIDM, or FDM case after it
-re-reads one complete binary capture event and hashes the initial conditions,
-baryon configuration, and SMBH seed catalogue. It is deliberately
-non-submitting; model dynamics, FDM wave controls, and operator Slurm launch
-remain separate explicit inputs.
+`materialize_model_zoom_execution_contract.py` verifies these assignments in
+the one solver-consumed `&PHYSICS_PARAMS` group and writes a merge-only
+assignment fragment for one CDM, SIDM, or FDM case after it re-reads one
+complete bound binary capture event and hashes the initial conditions, baryon
+configuration, and SMBH seed catalogue. It is deliberately non-submitting and
+does not claim that the raw capture belongs to the selected model realization
+or that the solver consumed those external files; model dynamics, FDM wave
+controls, and operator Slurm launch remain separate explicit inputs.
 
 These commands only inspect registered JSON evidence and never submit work:
 

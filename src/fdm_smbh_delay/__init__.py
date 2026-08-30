@@ -38,7 +38,9 @@ from .cdm_zoom_materialization import (
 )
 from .model_zoom_materialization import (
     ModelZoomExecutionContract,
+    VerifiedModelZoomExecutionContract,
     materialize_model_zoom_execution_contract,
+    read_verified_model_zoom_execution_contract,
 )
 from .cdm_zoom_runtime_identity import (
     CDMNonCompactingZoomRuntimeIdentity,

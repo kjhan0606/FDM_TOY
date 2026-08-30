@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ import yaml
 from fdm_smbh_delay.capture_ledger import read_capture_ledger
 from fdm_smbh_delay.model_zoom_materialization import (
     materialize_model_zoom_execution_contract,
+    read_verified_model_zoom_execution_contract,
 )
 from fdm_smbh_delay.zoom_calibration import load_zoom_grid
 
@@ -151,6 +153,32 @@ def _inputs(root: Path) -> dict[str, Path]:
     return inputs
 
 
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _namelist(
+    *, grid_manifest_sha256: str, case_id: str, event_sha256: str, inputs: dict[str, Path]
+) -> str:
+    identity = {
+        "model_zoom_manifest_sha256": grid_manifest_sha256,
+        "model_zoom_case_id": case_id,
+        "model_zoom_capture_event_sha256": event_sha256,
+        "model_zoom_initial_conditions_sha256": _sha256(inputs["initial_conditions"]),
+        "model_zoom_baryon_configuration_sha256": _sha256(inputs["baryon_configuration"]),
+        "model_zoom_sink_initial_conditions_sha256": _sha256(inputs["smbh_seed_catalog"]),
+    }
+    return "\n".join(
+        (
+            "&PHYSICS_PARAMS",
+            "smbh=.true.",
+            *(f"{name}='{value}'" for name, value in sorted(identity.items())),
+            "/",
+            "",
+        )
+    )
+
+
 @pytest.mark.parametrize("model", ("cdm", "sidm", "fdm"))
 def test_materializes_common_identity_for_each_dark_matter_model(
     tmp_path: Path, model: str
@@ -160,25 +188,47 @@ def test_materializes_common_identity_for_each_dark_matter_model(
     grid = load_zoom_grid(specification)
     ledger = tmp_path / "capture.jsonl"
     event_sha256 = _capture_ledger(ledger)
+    inputs = _inputs(tmp_path)
+    namelist = tmp_path / "run.nml"
+    namelist.write_text(
+        _namelist(
+            grid_manifest_sha256=grid.manifest_sha256,
+            case_id=grid.cases[0].case_id,
+            event_sha256=event_sha256,
+            inputs=inputs,
+        ),
+        encoding="utf-8",
+    )
     record = materialize_model_zoom_execution_contract(
         specification_path=specification,
         case_id=grid.cases[0].case_id,
         capture_ledger_path=ledger,
         capture_event_uid="capture-1-2",
-        shared_input_paths=_inputs(tmp_path),
+        shared_input_paths=inputs,
+        run_namelist_path=namelist,
         output_directory=tmp_path / "contract",
     )
-    assert record["status"] == "ready_for_operator_namelist_insertion"
+    assert record["status"] == "declared_namelist_identity_verified"
     assert record["dark_matter_model"] == model
     assert record["capture_event"]["event_sha256"] == event_sha256
     identity = record["model_zoom_execution_identity"]
     assert identity["model_zoom_case_id"] == grid.cases[0].case_id
     assert identity["model_zoom_baryon_configuration_sha256"]
-    controls = (tmp_path / "contract" / "required_model_zoom_identity.nml").read_text(
+    controls = (tmp_path / "contract" / "required_model_zoom_identity.assignments").read_text(
         encoding="utf-8"
     )
-    assert "&PHYSICS_PARAMS" in controls
+    assert not any(line.lstrip().startswith("&") for line in controls.splitlines())
+    assert "/\n" not in controls
     assert identity["model_zoom_capture_event_sha256"] in controls
+    verified = read_verified_model_zoom_execution_contract(
+        tmp_path / "contract" / "model_zoom_execution_contract.json"
+    )
+    assert verified.case == grid.cases[0]
+    namelist.write_text(namelist.read_text(encoding="utf-8") + "! later edit\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="run namelist no longer matches"):
+        read_verified_model_zoom_execution_contract(
+            tmp_path / "contract" / "model_zoom_execution_contract.json"
+        )
 
 
 def test_rejects_missing_shared_input_and_existing_destination(tmp_path: Path) -> None:
@@ -186,8 +236,18 @@ def test_rejects_missing_shared_input_and_existing_destination(tmp_path: Path) -
     specification.write_text(yaml.safe_dump(_specification("cdm")), encoding="utf-8")
     grid = load_zoom_grid(specification)
     ledger = tmp_path / "capture.jsonl"
-    _capture_ledger(ledger)
+    event_sha256 = _capture_ledger(ledger)
     inputs = _inputs(tmp_path)
+    namelist = tmp_path / "run.nml"
+    namelist.write_text(
+        _namelist(
+            grid_manifest_sha256=grid.manifest_sha256,
+            case_id=grid.cases[0].case_id,
+            event_sha256=event_sha256,
+            inputs=inputs,
+        ),
+        encoding="utf-8",
+    )
     with pytest.raises(ValueError, match="shared inputs must name"):
         materialize_model_zoom_execution_contract(
             specification_path=specification,
@@ -195,6 +255,7 @@ def test_rejects_missing_shared_input_and_existing_destination(tmp_path: Path) -
             capture_ledger_path=ledger,
             capture_event_uid="capture-1-2",
             shared_input_paths={"initial_conditions": inputs["initial_conditions"]},
+            run_namelist_path=namelist,
             output_directory=tmp_path / "contract",
         )
     materialize_model_zoom_execution_contract(
@@ -203,6 +264,7 @@ def test_rejects_missing_shared_input_and_existing_destination(tmp_path: Path) -
         capture_ledger_path=ledger,
         capture_event_uid="capture-1-2",
         shared_input_paths=inputs,
+        run_namelist_path=namelist,
         output_directory=tmp_path / "contract",
     )
     with pytest.raises(ValueError, match="must not already exist"):
@@ -212,5 +274,33 @@ def test_rejects_missing_shared_input_and_existing_destination(tmp_path: Path) -
             capture_ledger_path=ledger,
             capture_event_uid="capture-1-2",
             shared_input_paths=inputs,
+            run_namelist_path=namelist,
+            output_directory=tmp_path / "contract",
+        )
+
+
+def test_rejects_a_second_physics_params_group(tmp_path: Path) -> None:
+    specification = tmp_path / "cdm.yaml"
+    specification.write_text(yaml.safe_dump(_specification("cdm")), encoding="utf-8")
+    grid = load_zoom_grid(specification)
+    ledger = tmp_path / "capture.jsonl"
+    event_sha256 = _capture_ledger(ledger)
+    inputs = _inputs(tmp_path)
+    namelist = tmp_path / "run.nml"
+    content = _namelist(
+        grid_manifest_sha256=grid.manifest_sha256,
+        case_id=grid.cases[0].case_id,
+        event_sha256=event_sha256,
+        inputs=inputs,
+    )
+    namelist.write_text(content + content, encoding="utf-8")
+    with pytest.raises(ValueError, match="exactly one &PHYSICS_PARAMS group"):
+        materialize_model_zoom_execution_contract(
+            specification_path=specification,
+            case_id=grid.cases[0].case_id,
+            capture_ledger_path=ledger,
+            capture_event_uid="capture-1-2",
+            shared_input_paths=inputs,
+            run_namelist_path=namelist,
             output_directory=tmp_path / "contract",
         )
