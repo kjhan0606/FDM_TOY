@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from pathlib import Path
 
 import pytest
 
 from fdm_smbh_delay.cdm_coalescence import (
+    build_cdm_delay_stage_record,
     compose_cdm_coalescence_time,
     peters_gravitational_wave_segment,
     read_cdm_delay_stage_summary,
@@ -25,7 +27,7 @@ def _write_json(path: Path, record: dict[str, object]) -> Path:
 
 def _accepted_phase_ensemble(tmp_path: Path, *, model: str = "cdm") -> Path:
     return _write_json(
-        tmp_path / "phase_ensemble.json",
+        tmp_path / f"phase_ensemble_{model}.json",
         {
             "schema_version": 1,
             "status": "accepted_model_specific_phase_ensemble",
@@ -34,6 +36,41 @@ def _accepted_phase_ensemble(tmp_path: Path, *, model: str = "cdm") -> Path:
             "replicates": [0, 1],
             "members": [],
             "reasons": [],
+        },
+    )
+
+
+def _rate_track(
+    tmp_path: Path,
+    *,
+    stage: str,
+    delay_myr: float,
+    start_pc: float,
+    end_pc: float,
+) -> Path:
+    rate = -math.log(start_pc / end_pc) / delay_myr
+    return _write_json(
+        tmp_path / f"{stage}_rate_track.json",
+        {
+            "schema_version": 1,
+            "status": "complete",
+            "dark_matter_model": "cdm",
+            "stage": stage,
+            "physics_id": "zoomphys-cdm-test",
+            "rate_points": [
+                {
+                    "separation_pc": start_pc,
+                    "dln_separation_dt_per_myr": rate,
+                },
+                {
+                    "separation_pc": (start_pc * end_pc) ** 0.5,
+                    "dln_separation_dt_per_myr": rate,
+                },
+                {
+                    "separation_pc": end_pc,
+                    "dln_separation_dt_per_myr": rate,
+                },
+            ],
         },
     )
 
@@ -48,10 +85,17 @@ def _complete_stage(
     phase_path: Path,
     method: str = "resolved_cdm_rate_integration",
 ) -> Path:
+    rate_track = _rate_track(
+        tmp_path,
+        stage=stage,
+        delay_myr=delay_myr,
+        start_pc=start_pc,
+        end_pc=end_pc,
+    )
     return _write_json(
         tmp_path / f"{stage}.json",
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "status": "complete",
             "dark_matter_model": "cdm",
             "stage": stage,
@@ -67,6 +111,8 @@ def _complete_stage(
                 "phase_ensemble_path": phase_path.name,
                 "phase_ensemble_sha256": _sha256(phase_path),
                 "physics_id": "zoomphys-cdm-test",
+                "rate_track_path": rate_track.name,
+                "rate_track_sha256": _sha256(rate_track),
             },
         },
     )
@@ -76,7 +122,7 @@ def _censored_stage(tmp_path: Path, *, stage: str) -> Path:
     return _write_json(
         tmp_path / f"{stage}.json",
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "status": "censored",
             "dark_matter_model": "cdm",
             "stage": stage,
@@ -104,6 +150,34 @@ def test_completed_cdm_stages_require_accepted_cdm_phase_evidence(tmp_path: Path
     assert parsed.segment.delay_myr == pytest.approx(20.0)
     assert parsed.physics_id == "zoomphys-cdm-test"
     assert parsed.phase_ensemble_sha256 == _sha256(phase)
+
+
+def test_stage_builder_integrates_only_the_measured_rate_track_support(
+    tmp_path: Path,
+) -> None:
+    phase = _accepted_phase_ensemble(tmp_path)
+    track = _rate_track(
+        tmp_path,
+        stage="capture_to_hard_binary",
+        delay_myr=20.0,
+        start_pc=1000.0,
+        end_pc=1.0,
+    )
+    record = build_cdm_delay_stage_record(track, phase)
+    assert record["schema_version"] == 2
+    assert record["delay_myr"] == pytest.approx(20.0)
+    assert record["interval_pc"] == {
+        "start_separation_pc": 1000.0,
+        "end_separation_pc": 1.0,
+    }
+    summary = _write_json(tmp_path / "built_stage.json", record)
+    parsed = read_cdm_delay_stage_summary(summary, expected_stage="capture_to_hard_binary")
+    assert parsed.rate_track_sha256 == _sha256(track)
+
+    record["delay_myr"] = 21.0
+    tampered = _write_json(tmp_path / "tampered_stage.json", record)
+    with pytest.raises(ValueError, match="differs from its resolved rate-track integral"):
+        read_cdm_delay_stage_summary(tampered, expected_stage="capture_to_hard_binary")
 
 
 def test_fixed_population_delay_and_non_cdm_phase_evidence_are_rejected(tmp_path: Path) -> None:

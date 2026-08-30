@@ -15,14 +15,15 @@ The first two intervals are separate `capture_to_hard_binary` and
 `dark_matter_model: cdm`, give a decreasing separation interval, and reference
 an immutable `accepted_model_specific_phase_ensemble` record for the same CDM
 `physics_id`.  Its only accepted calibration method is
-`resolved_cdm_rate_integration`.  This makes a fixed-delay population model or
-an FDM/SIDM result ineligible by construction.
+`resolved_cdm_rate_integration`.  The calibration also hashes the exact CDM
+logarithmic-separation-rate track that was integrated.  This makes a
+fixed-delay population model or an FDM/SIDM result ineligible by construction.
 
 For a completed stage, the schema is:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "status": "complete",
   "dark_matter_model": "cdm",
   "stage": "capture_to_hard_binary",
@@ -37,9 +38,23 @@ For a completed stage, the schema is:
     "method": "resolved_cdm_rate_integration",
     "phase_ensemble_path": "accepted_cdm_phase_ensemble.json",
     "phase_ensemble_sha256": "<64 hexadecimal characters>",
-    "physics_id": "<same CDM physics id>"
+    "physics_id": "<same CDM physics id>",
+    "rate_track_path": "capture_to_hard_rates.json",
+    "rate_track_sha256": "<64 hexadecimal characters>"
   }
 }
+```
+
+The rate-track input has exactly the same `physics_id` and stage, at least
+three separation-ordered points, and a negative measured
+`dln_separation_dt_per_myr` at every point.  It is integrated only between its
+first and last separations; no support is extrapolated.  Build a completed
+stage record rather than entering its delay by hand:
+
+```bash
+python scripts/build_cdm_delay_stage.py \
+  capture_to_hard_rates.json accepted_cdm_phase_ensemble.json \
+  capture_to_hard.json
 ```
 
 An uncalibrated, unresolved, stalled, or over-cosmic-time interval instead has
