@@ -346,6 +346,76 @@ def read_verified_pure_fdm_dual_soliton_run_preflight(
     return decision
 
 
+def read_verified_pure_fdm_dual_soliton_runtime_identity(
+    path: str | Path,
+) -> DualSolitonRuntimeIdentity:
+    """Rebuild one saved verified runtime identity from its current sources.
+
+    The compact raw provenance is intentionally only a configuration and
+    force/current-coverage record.  This reader consequently does not turn it
+    into a relaxation, convergence, or physical-delay result; it only prevents
+    a downstream consumer from trusting a stale or hand-written status field.
+    """
+
+    source = Path(path).expanduser().resolve()
+    try:
+        record = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"cannot read dual-soliton runtime identity: {error}") from error
+    expected_fields = {
+        "schema_version",
+        "status",
+        "interpretation",
+        "seed_case_id",
+        "sources",
+        "raw_provenance_decision",
+        "reasons",
+    }
+    if (
+        not isinstance(record, Mapping)
+        or set(record) != expected_fields
+        or record.get("schema_version") != 1
+        or record.get("status") != "runtime_seed_identity_verified"
+        or record.get("reasons") != []
+    ):
+        raise ValueError("dual-soliton runtime identity is not verified")
+    sources = record.get("sources")
+    if not isinstance(sources, Mapping) or set(sources) != {
+        "seed_manifest",
+        "raw_fdm_provenance",
+    }:
+        raise ValueError("dual-soliton runtime identity sources are invalid")
+    paths: dict[str, Path] = {}
+    for name in ("seed_manifest", "raw_fdm_provenance"):
+        artifact = sources[name]
+        if (
+            not isinstance(artifact, Mapping)
+            or set(artifact) != {"path", "sha256"}
+            or not isinstance(artifact.get("path"), str)
+            or not isinstance(artifact.get("sha256"), str)
+        ):
+            raise ValueError(f"dual-soliton runtime identity {name} source is invalid")
+        candidate = Path(artifact["path"]).expanduser().resolve()
+        try:
+            actual = _sha256(candidate)
+        except OSError as error:
+            raise ValueError(
+                f"cannot re-read dual-soliton runtime identity {name}: {error}"
+            ) from error
+        if actual != artifact["sha256"]:
+            raise ValueError(
+                f"dual-soliton runtime identity {name} SHA-256 no longer matches"
+            )
+        paths[name] = candidate
+    decision = validate_pure_fdm_dual_soliton_runtime_identity(
+        seed_manifest_path=paths["seed_manifest"],
+        provenance_path=paths["raw_fdm_provenance"],
+    )
+    if not decision.verified or decision.as_dict() != record:
+        raise ValueError("dual-soliton runtime identity no longer matches its source inputs")
+    return decision
+
+
 def preflight_pure_fdm_dual_soliton_run(
     *,
     seed_manifest_path: str | Path,

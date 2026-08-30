@@ -465,8 +465,7 @@ one configuration.  It still does not prove solver consumption; that claim
 starts only with a separately validated runtime provenance record.
 
 After the first normal FDM output, verify the runtime V2 provenance against
-the same materialized seed before treating the output as a member of that
-controlled case:
+the same materialized seed:
 
 ```bash
 python scripts/validate_dual_soliton_runtime_identity.py \
@@ -479,6 +478,65 @@ python scripts/validate_dual_soliton_runtime_identity.py \
 declares the same all-wave two-core configuration and passes the raw
 force/current coverage gate.  It does not relax, calibrate, or otherwise
 accept the physical merger calculation.
+
+It also does not yet attest that the solver consumed the exact declared
+namelist or `ic_sink`, nor that the output belongs to the model-zoom case.
+Those claims require a later solver-side execution attestation that records
+the declared contract, seed/input hashes, and output-set identity.  Until
+then, this record is not sufficient to register an output as a controlled
+FDM zoom realization.
+
+The relaxation consumer re-reads that saved decision, re-hashes its seed
+manifest and raw provenance, and reconstructs the decision before use.  A
+copied status field, a changed raw provenance file, or a stale seed manifest
+therefore cannot authorize the relaxation window.
+
+Before writing the relaxation evidence table, a manual Lageunha extractor
+must list the raw V2 provenance path for every selected output in a small
+JSON manifest (`raw_fdm_provenance_paths`).  The binding code reads each
+record itself, verifies its two-soliton configuration against the seed, and
+enumerates and hashes the currently present per-CPU `fdm_*.out*` set and the
+corresponding `amr_*.out*` topology shards.  The raw runtime
+provenance must appear exactly once in the temporal sequence.  Bind this
+source set without reading full fields or launching an FFT:
+
+```bash
+python scripts/materialize_dual_soliton_relaxation_sample_ledger.py \
+  results/pure_fdm_dual_soliton_runtime_identity.json \
+  results/dual_soliton_relaxation_sample_manifest.json \
+  results/dual_soliton_relaxation_sample_ledger.json
+```
+
+The resulting ledger is required by the relaxation evidence.  It is source
+identity only: the core properties and the wave mass, Hamiltonian, and
+angular-momentum series must still be measured from those sources by a
+declared extractor.  Bind that diagnostic series to both the exact sample
+ledger and immutable extractor bytes before assessment:
+
+```bash
+python scripts/materialize_dual_soliton_relaxation_diagnostic_provenance.py \
+  results/dual_soliton_relaxation_sample_ledger.json \
+  results/dual_soliton_relaxation_diagnostic_manifest.json \
+  results/dual_soliton_relaxation_diagnostic_provenance.json
+```
+
+The diagnostic manifest records the extractor path and version with the
+measured series.  This provides reproducible source and method identity; it
+does not yet attest that the extractor was executed, so it cannot replace the
+later paired-resolution and conservation checks.
+
+The relaxation evidence schema requires both the source ledger and the
+diagnostic provenance.  Earlier evidence files without those records are not
+relaxation inputs and must be re-extracted rather than relabelled as verified.
+
+Raw V2 does not record the expected MPI-rank count, an execution/output-set
+identity, or a solver-side namelist/input attestation.  It therefore cannot
+prove that the discovered shard list is complete or that the selected outputs
+belong to one execution sequence.  Similarly, extractor bytes and a declared
+version do not prove extractor execution.  The current assessment is only a
+conditional declared-series threshold result; it cannot be cited as a
+relaxation or conservation pass until those V3 solver and extractor
+attestations are implemented.
 
 The bounded initial relaxation window is assessed separately from the full
 time-resolved snapshots.  Its evidence table must preserve both core masses,
@@ -493,9 +551,9 @@ python scripts/assess_dual_soliton_relaxation.py \
 ```
 
 The declared window thresholds are evaluated without re-reading or modifying
-the wave fields.  A pass identifies a stable initial two-core window; it is
-not an outer-merger result, and a failed window cannot be relabelled as zero
-pairing delay.
+the wave fields.  A conditional within-threshold result is not an
+outer-merger result or a physical relaxation pass, and an outside-threshold
+result cannot be relabelled as zero pairing delay.
 
 No direct syn101 execution is permitted.  GPU execution is Slurm-only.  When
 CPU preprocessing is needed, it is run manually on Lageunha with one process,

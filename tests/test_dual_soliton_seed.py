@@ -14,6 +14,7 @@ from fdm_smbh_delay.dual_soliton_seed import (
 )
 from fdm_smbh_delay.dual_soliton_preflight import (
     preflight_pure_fdm_dual_soliton_run,
+    read_verified_pure_fdm_dual_soliton_runtime_identity,
     validate_pure_fdm_dual_soliton_runtime_identity,
 )
 
@@ -393,6 +394,29 @@ def test_runtime_identity_binds_v2_raw_output_to_materialized_seed(tmp_path: Pat
     )
     assert identity.verified
     assert identity.as_dict()["status"] == "runtime_seed_identity_verified"
+
+    saved = tmp_path / "runtime-identity.json"
+    saved.write_text(json.dumps(identity.as_dict()), encoding="utf-8")
+    assert read_verified_pure_fdm_dual_soliton_runtime_identity(saved).verified
+
+
+def test_saved_runtime_identity_rejects_changed_raw_provenance(tmp_path: Path) -> None:
+    seed_path = tmp_path / "seed.yaml"
+    _write_seed(seed_path)
+    seed = load_pure_fdm_dual_soliton_seed(seed_path)
+    materialized = tmp_path / "materialized"
+    materialize_pure_fdm_dual_soliton_seed(seed, materialized)
+    provenance = tmp_path / "fdm_outer_wave_provenance.txt"
+    _write_runtime_provenance(provenance, seed)
+    identity = validate_pure_fdm_dual_soliton_runtime_identity(
+        seed_manifest_path=materialized / "dual_soliton_seed_manifest.json",
+        provenance_path=provenance,
+    )
+    saved = tmp_path / "runtime-identity.json"
+    saved.write_text(json.dumps(identity.as_dict()), encoding="utf-8")
+    _write_runtime_provenance(provenance, seed, second_phase=1.2)
+    with pytest.raises(ValueError, match="SHA-256 no longer matches"):
+        read_verified_pure_fdm_dual_soliton_runtime_identity(saved)
 
 
 def test_runtime_identity_refuses_changed_dual_soliton_phase(tmp_path: Path) -> None:

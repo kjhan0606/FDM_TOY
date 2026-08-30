@@ -108,14 +108,23 @@ from .dual_soliton_preflight import (
     DualSolitonRuntimeIdentity,
     preflight_pure_fdm_dual_soliton_run,
     read_lagramses_namelist_assignment,
+    read_verified_pure_fdm_dual_soliton_runtime_identity,
     read_verified_pure_fdm_dual_soliton_run_preflight,
     validate_pure_fdm_dual_soliton_runtime_identity,
 )
 from .dual_soliton_relaxation import (
     DualSolitonRelaxationAssessment,
+    DualSolitonRelaxationDiagnosticProvenance,
+    DualSolitonRelaxationDiagnostics,
     DualSolitonRelaxationEvidence,
+    DualSolitonRelaxationSample,
+    DualSolitonRelaxationSampleLedger,
     RelaxationConservationThresholds,
     assess_dual_soliton_relaxation,
+    materialize_dual_soliton_relaxation_diagnostic_provenance,
+    materialize_dual_soliton_relaxation_sample_ledger,
+    read_verified_dual_soliton_relaxation_diagnostic_provenance,
+    read_verified_dual_soliton_relaxation_sample_ledger,
 )
 from .outer_inner_handoff import (
     HandoffDecision,
@@ -198,7 +207,11 @@ __all__ = [
     "DualSolitonRunPreflight",
     "DualSolitonRuntimeIdentity",
     "DualSolitonRelaxationAssessment",
+    "DualSolitonRelaxationDiagnosticProvenance",
+    "DualSolitonRelaxationDiagnostics",
     "DualSolitonRelaxationEvidence",
+    "DualSolitonRelaxationSample",
+    "DualSolitonRelaxationSampleLedger",
     "DualSolitonComponent",
     "PureFDMDualSolitonSeed",
     "RelaxationConservationThresholds",
@@ -275,6 +288,7 @@ __all__ = [
     "read_verified_capture_seed_materialization_binding",
     "read_verified_fdm_capture_seed_zoom_binding",
     "read_verified_fdm_declared_run_input_binding",
+    "read_verified_pure_fdm_dual_soliton_runtime_identity",
     "read_verified_pure_fdm_dual_soliton_run_preflight",
     "read_lagramses_namelist_assignment",
     "validate_outer_inner_handoff",
@@ -283,5 +297,9 @@ __all__ = [
     "register_dm_comparison_capture_ensemble",
     "materialize_fdm_capture_seed_zoom_binding",
     "materialize_fdm_declared_run_input_binding",
+    "materialize_dual_soliton_relaxation_diagnostic_provenance",
+    "materialize_dual_soliton_relaxation_sample_ledger",
+    "read_verified_dual_soliton_relaxation_diagnostic_provenance",
+    "read_verified_dual_soliton_relaxation_sample_ledger",
 ]
 __version__ = "0.1.0"
