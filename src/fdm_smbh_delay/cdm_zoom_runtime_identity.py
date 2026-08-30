@@ -22,13 +22,14 @@ from .lagramses_cdm_orbit import read_bound_cdm_capture
 from .zoom_calibration import GalaxyMergerZoomCase
 
 
-CDM_NONCOMPACTING_ZOOM_RUNTIME_IDENTITY_SCHEMA_VERSION = 1
+CDM_NONCOMPACTING_ZOOM_RUNTIME_IDENTITY_SCHEMA_VERSION = 2
 _OUTPUT_DIRECTORY = re.compile(r"output_(\d{5})$")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _MYR_SECONDS = 3.15576e13
 _CASE_INPUT_ARTIFACTS = {
     "host_orbit_initial_conditions",
     "initial_conditions",
+    "baryon_configuration",
     "sink_initial_conditions",
 }
 _EXECUTION_IDENTITY_FIELDS = {
@@ -37,6 +38,14 @@ _EXECUTION_IDENTITY_FIELDS = {
     "cdm_zoom_host_orbit_initial_conditions_sha256",
     "cdm_zoom_initial_conditions_sha256",
     "cdm_zoom_sink_initial_conditions_sha256",
+}
+_MODEL_EXECUTION_IDENTITY_FIELDS = {
+    "model_zoom_manifest_sha256",
+    "model_zoom_case_id",
+    "model_zoom_capture_event_sha256",
+    "model_zoom_initial_conditions_sha256",
+    "model_zoom_baryon_configuration_sha256",
+    "model_zoom_sink_initial_conditions_sha256",
 }
 
 
@@ -127,6 +136,7 @@ class _VerifiedCDMZoomContract:
     expected_compilation_sha256: str
     case_input_artifact_sha256s: dict[str, str]
     execution_identity: dict[str, str]
+    model_execution_identity: dict[str, str]
 
 
 def _read_verified_contract(path: str | Path) -> _VerifiedCDMZoomContract:
@@ -152,7 +162,7 @@ def _read_verified_contract(path: str | Path) -> _VerifiedCDMZoomContract:
     if not isinstance(record, Mapping) or set(record) != expected_fields:
         raise ValueError("CDM zoom run contract fields are invalid")
     if (
-        record.get("schema_version") != 1
+        record.get("schema_version") != 2
         or record.get("status") != "ready_for_operator_submission"
         or record.get("dark_matter_model") != "cdm"
         or record.get("reasons") != []
@@ -204,6 +214,7 @@ def _read_verified_contract(path: str | Path) -> _VerifiedCDMZoomContract:
         "expected_compilation",
         "input_artifacts",
         "execution_identity",
+        "model_execution_identity",
     }:
         raise ValueError("CDM zoom run contract case-input identity is invalid")
     expected_build = case_identity.get("expected_build_git_hash")
@@ -244,6 +255,31 @@ def _read_verified_contract(path: str | Path) -> _VerifiedCDMZoomContract:
         )
     ):
         raise ValueError("CDM zoom run contract execution identity is invalid")
+    model_execution_identity = case_identity.get("model_execution_identity")
+    expected_model_execution_identity = {
+        "model_zoom_manifest_sha256": plan.grid.manifest_sha256,
+        "model_zoom_case_id": case.case_id,
+        "model_zoom_capture_event_sha256": binding["capture_event_sha256"],
+        "model_zoom_initial_conditions_sha256": artifact_sha256s["initial_conditions"],
+        "model_zoom_baryon_configuration_sha256": artifact_sha256s[
+            "baryon_configuration"
+        ],
+        "model_zoom_sink_initial_conditions_sha256": artifact_sha256s[
+            "sink_initial_conditions"
+        ],
+    }
+    if (
+        not isinstance(model_execution_identity, Mapping)
+        or set(model_execution_identity) != _MODEL_EXECUTION_IDENTITY_FIELDS
+        or model_execution_identity.get("model_zoom_case_id")
+        != expected_model_execution_identity["model_zoom_case_id"]
+        or any(
+            _sha256_field(model_execution_identity.get(name), name) != expected
+            for name, expected in expected_model_execution_identity.items()
+            if name != "model_zoom_case_id"
+        )
+    ):
+        raise ValueError("CDM zoom run contract model execution identity is invalid")
 
     run_inputs = record.get("run_inputs")
     if not isinstance(run_inputs, Mapping):
@@ -284,6 +320,7 @@ def _read_verified_contract(path: str | Path) -> _VerifiedCDMZoomContract:
         expected_compilation_sha256=compilation_sha256,
         case_input_artifact_sha256s=artifact_sha256s,
         execution_identity=expected_execution_identity,
+        model_execution_identity=expected_model_execution_identity,
     )
 
 
@@ -372,7 +409,7 @@ def read_verified_cdm_noncompacting_zoom_runtime_identity(
     if not isinstance(record, Mapping) or set(record) != expected_fields:
         raise ValueError("CDM zoom runtime identity fields are invalid")
     if (
-        record.get("schema_version") != 1
+        record.get("schema_version") != CDM_NONCOMPACTING_ZOOM_RUNTIME_IDENTITY_SCHEMA_VERSION
         or record.get("status") != "runtime_identity_verified"
         or record.get("dark_matter_model") != "cdm"
         or record.get("reasons") != []
@@ -458,6 +495,11 @@ def _verify_output(
     if provenance.parameter("cdm_zoom_execution_identity_status") != "available":
         raise ValueError("output does not attest the contracted CDM zoom input identity")
     for name, expected in contract.execution_identity.items():
+        if provenance.parameter(name) != expected:
+            raise ValueError(f"output {name} differs from its run contract")
+    if provenance.parameter("model_zoom_execution_identity_status") != "available":
+        raise ValueError("output does not attest the contracted model zoom input identity")
+    for name, expected in contract.model_execution_identity.items():
         if provenance.parameter(name) != expected:
             raise ValueError(f"output {name} differs from its run contract")
     namelist_copy = _output_file(directory, provenance.namelist_copy, "output namelist_copy")

@@ -55,6 +55,7 @@ from .dm_comparison import (
     read_dm_comparison_capture_registration,
     read_dm_comparison_family_manifest,
     read_dm_comparison_physics_input,
+    read_verified_dm_comparison_capture_ensemble,
     register_dm_comparison_capture_ensemble,
 )
 from .model_specific_physics import (
@@ -241,6 +242,7 @@ __all__ = [
     "read_dm_comparison_capture_registration",
     "read_dm_comparison_family_manifest",
     "read_dm_comparison_physics_input",
+    "read_verified_dm_comparison_capture_ensemble",
     "read_resolved_model_physics_result",
     "read_pure_fdm_outer_result",
     "validate_outer_inner_handoff",

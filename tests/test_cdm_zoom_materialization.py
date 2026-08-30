@@ -148,6 +148,7 @@ def _arguments(tmp_path: Path) -> dict[str, object]:
     for name in (
         "host_orbit_initial_conditions",
         "initial_conditions",
+        "baryon_configuration",
         "sink_initial_conditions",
     ):
         artifact = tmp_path / f"{name}.dat"
@@ -169,7 +170,13 @@ def _arguments(tmp_path: Path) -> dict[str, object]:
     }
     provisional, _ = assess_cdm_noncompacting_zoom_run_inputs(**arguments)
     namelist.write_text(
-        _namelist(execution_identity=dict(provisional.execution_identity)), encoding="utf-8"
+        _namelist(
+            execution_identity=(
+                dict(provisional.execution_identity)
+                | dict(provisional.model_execution_identity)
+            )
+        ),
+        encoding="utf-8",
     )
     return arguments
 
@@ -187,13 +194,16 @@ def _write_runtime_output(
     label = f"{number:05d}"
     directory = root / f"output_{label}"
     directory.mkdir()
-    identity_records = ""
+    cdm_identity_records = ""
+    model_identity_records = ""
     for line in namelist.splitlines():
         if "=" not in line:
             continue
         name, value = (item.strip() for item in line.split("=", 1))
         if name.startswith("cdm_zoom_") and name.endswith("_sha256"):
-            identity_records += f"{name} = {value.strip(chr(39) + chr(34))}\n"
+            cdm_identity_records += f"{name} = {value.strip(chr(39) + chr(34))}\n"
+        if name.startswith("model_zoom_"):
+            model_identity_records += f"{name} = {value.strip(chr(39) + chr(34))}\n"
     (directory / "COMPLETE").write_text(label + "\n", encoding="utf-8")
     (directory / f"dm_run_provenance_{label}.txt").write_text(
         "# dm_run_provenance_v1\n"
@@ -215,8 +225,11 @@ def _write_runtime_output(
         encoding="utf-8",
     )
     provenance = directory / f"dm_run_provenance_{label}.txt"
-    if identity_records:
-        identity_records = "cdm_zoom_execution_identity_status = available\n" + identity_records
+    identity_records = ""
+    if cdm_identity_records:
+        identity_records += "cdm_zoom_execution_identity_status = available\n" + cdm_identity_records
+    if model_identity_records:
+        identity_records += "model_zoom_execution_identity_status = available\n" + model_identity_records
     provenance.write_text(provenance.read_text(encoding="utf-8") + identity_records, encoding="utf-8")
     (directory / "namelist.txt").write_text(namelist, encoding="utf-8")
     (directory / "compilation.txt").write_text(compilation_text, encoding="utf-8")
@@ -255,6 +268,7 @@ def test_materializes_exact_cdm_case_capture_and_noncompacting_namelist(
     )
     assert "rmerge=0.0d0" in controls
     assert "smbh_capture_ledger_file='zoom_capture.jsonl'" in controls
+    assert "model_zoom_case_id='" + str(arguments["case_id"]) + "'" in controls
     assert "&PHYSICS_PARAMS" in controls
     assert record["case_input_identity"]["execution_identity"]
     assert Path(arguments["run_namelist_path"]).read_text(encoding="utf-8") == original_namelist
@@ -360,6 +374,7 @@ def test_runtime_identity_requires_completed_output_namelist_copy_to_match_contr
             rmerge="1.0d0",
             execution_identity=dict(
                 assess_cdm_noncompacting_zoom_run_inputs(**arguments)[0].execution_identity
+                | assess_cdm_noncompacting_zoom_run_inputs(**arguments)[0].model_execution_identity
             ),
         ),
     )

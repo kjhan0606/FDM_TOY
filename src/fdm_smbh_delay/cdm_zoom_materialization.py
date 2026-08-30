@@ -23,11 +23,12 @@ from .lagramses_cdm_orbit import read_bound_cdm_capture
 from .zoom_calibration import GalaxyMergerZoomCase
 
 
-CDM_NONCOMPACTING_ZOOM_RUN_CONTRACT_SCHEMA_VERSION = 1
+CDM_NONCOMPACTING_ZOOM_RUN_CONTRACT_SCHEMA_VERSION = 2
 _BUILD_GIT_HASH = re.compile(r"[0-9a-f]{40}")
 _REQUIRED_CASE_INPUT_ARTIFACTS = (
     "host_orbit_initial_conditions",
     "initial_conditions",
+    "baryon_configuration",
     "sink_initial_conditions",
 )
 _ASSIGNMENT = re.compile(
@@ -120,7 +121,34 @@ def _case(plan: CDMNonCompactingZoomPlan, case_id: str) -> GalaxyMergerZoomCase:
     return matches[0]
 
 
-def _required_smbh_controls(ledger_file: str, execution_identity: Mapping[str, str]) -> str:
+def _model_execution_identity(
+    plan: CDMNonCompactingZoomPlan,
+    case: GalaxyMergerZoomCase,
+    capture_binding: Mapping[str, Any],
+    artifacts: Mapping[str, Mapping[str, str]],
+) -> dict[str, str]:
+    capture_sha256 = capture_binding.get("capture_event_sha256")
+    if not isinstance(capture_sha256, str) or re.fullmatch(r"[0-9a-f]{64}", capture_sha256) is None:
+        raise ValueError("capture binding does not provide a lowercase event SHA-256")
+    return {
+        "model_zoom_manifest_sha256": plan.grid.manifest_sha256,
+        "model_zoom_case_id": case.case_id,
+        "model_zoom_capture_event_sha256": capture_sha256,
+        "model_zoom_initial_conditions_sha256": artifacts["initial_conditions"]["sha256"],
+        "model_zoom_baryon_configuration_sha256": artifacts["baryon_configuration"][
+            "sha256"
+        ],
+        "model_zoom_sink_initial_conditions_sha256": artifacts[
+            "sink_initial_conditions"
+        ]["sha256"],
+    }
+
+
+def _required_smbh_controls(
+    ledger_file: str,
+    execution_identity: Mapping[str, str],
+    model_execution_identity: Mapping[str, str],
+) -> str:
     escaped = ledger_file.replace("'", "''")
     return "\n".join(
         (
@@ -133,6 +161,7 @@ def _required_smbh_controls(ledger_file: str, execution_identity: Mapping[str, s
             "smbh_capture_ledger=.true.",
             f"smbh_capture_ledger_file='{escaped}'",
             *(f"{name}='{execution_identity[name]}'" for name in sorted(execution_identity)),
+            *(f"{name}='{model_execution_identity[name]}'" for name in sorted(model_execution_identity)),
             "/",
             "",
         )
@@ -172,7 +201,7 @@ def _case_input_artifacts(paths: Mapping[str, str | Path]) -> dict[str, dict[str
     if set(paths) != set(_REQUIRED_CASE_INPUT_ARTIFACTS):
         raise ValueError(
             "case input artifacts must name host_orbit_initial_conditions, "
-            "initial_conditions, and sink_initial_conditions"
+            "initial_conditions, baryon_configuration, and sink_initial_conditions"
         )
     return {name: _artifact(paths[name], f"case input artifact {name}") for name in sorted(paths)}
 
@@ -219,6 +248,7 @@ class CDMNonCompactingZoomRunContract:
     expected_compilation: Mapping[str, str]
     case_input_artifacts: Mapping[str, Mapping[str, str]]
     execution_identity: Mapping[str, str]
+    model_execution_identity: Mapping[str, str]
     status: str
     reasons: tuple[str, ...]
 
@@ -251,6 +281,7 @@ class CDMNonCompactingZoomRunContract:
                     for name, artifact in self.case_input_artifacts.items()
                 },
                 "execution_identity": dict(self.execution_identity),
+                "model_execution_identity": dict(self.model_execution_identity),
             },
             "run_inputs": {
                 "namelist": _source(self.run_namelist_path),
@@ -305,6 +336,9 @@ def assess_cdm_noncompacting_zoom_run_inputs(
     compilation = _artifact(expected_compilation_path, "expected compilation manifest")
     input_artifacts = _case_input_artifacts(case_input_artifact_paths)
     execution_identity = _execution_identity(plan, binding, input_artifacts)
+    model_execution_identity = _model_execution_identity(
+        plan, selected_case, binding, input_artifacts
+    )
     original_ledger = str(binding["capture_ledger_path"])
     if Path(expected_ledger_file).expanduser().is_absolute() and (
         str(Path(expected_ledger_file).expanduser().resolve()) == original_ledger
@@ -341,6 +375,12 @@ def assess_cdm_noncompacting_zoom_run_inputs(
                 reasons.append(f"{name} differs from the materialized CDM zoom identity")
         except ValueError as error:
             reasons.append(str(error))
+    for name, expected in model_execution_identity.items():
+        try:
+            if _fortran_string(_unique(physics_assignments, name)).lower() != expected:
+                reasons.append(f"{name} differs from the materialized model zoom identity")
+        except ValueError as error:
+            reasons.append(str(error))
     try:
         if _number(_unique(assignments, "levelmax")) != selected_case.numerics.levelmax:
             reasons.append("levelmax differs from the selected CDM zoom case")
@@ -367,6 +407,7 @@ def assess_cdm_noncompacting_zoom_run_inputs(
             expected_compilation=compilation,
             case_input_artifacts=input_artifacts,
             execution_identity=execution_identity,
+            model_execution_identity=model_execution_identity,
             status=(
                 "ready_for_operator_submission"
                 if not reasons
@@ -416,7 +457,16 @@ def materialize_cdm_noncompacting_zoom_run_contract(
     controls_path = destination / "required_smbh_controls.nml"
     _write_atomic(
         controls_path,
-        _required_smbh_controls(contract.capture_ledger_file, contract.execution_identity),
+        _required_smbh_controls(
+            contract.capture_ledger_file,
+            contract.execution_identity,
+            _model_execution_identity(
+                contract.plan,
+                contract.case,
+                contract.capture_binding,
+                contract.case_input_artifacts,
+            ),
+        ),
     )
     record = contract.as_dict(controls_fragment_path=controls_path)
     _write_atomic(

@@ -148,6 +148,18 @@ def _cdm_zoom_execution_identity() -> dict[str, str]:
     }
 
 
+def _model_zoom_execution_identity(model: str) -> dict[str, str]:
+    return {
+        "model_zoom_execution_identity_status": "available",
+        "model_zoom_manifest_sha256": "6" * 64,
+        "model_zoom_case_id": f"{model}-fine-replicate-0",
+        "model_zoom_capture_event_sha256": "7" * 64,
+        "model_zoom_initial_conditions_sha256": "8" * 64,
+        "model_zoom_baryon_configuration_sha256": "a" * 64,
+        "model_zoom_sink_initial_conditions_sha256": "9" * 64,
+    }
+
+
 def _write_provenance(path: Path, records: dict[str, str]) -> None:
     path.write_text(
         "# dm_run_provenance_v1\n" + "".join(f"{key} = {value}\n" for key, value in records.items()),
@@ -192,6 +204,21 @@ def test_rejects_cdm_zoom_execution_digest_without_status(tmp_path: Path) -> Non
     path = tmp_path / "cdm.txt"
     _write_provenance(path, records)
     with pytest.raises(ValueError, match="digests require a status"):
+        read_dark_matter_run_provenance(path)
+
+
+@pytest.mark.parametrize("model", ("cdm", "sidm", "fdm"))
+def test_reads_common_execution_identity_for_each_model(tmp_path: Path, model: str) -> None:
+    path = tmp_path / f"{model}.txt"
+    _write_provenance(path, _records(model) | _model_zoom_execution_identity(model))
+    provenance = read_dark_matter_run_provenance(path)
+    assert provenance.parameter("model_zoom_execution_identity_status") == "available"
+    assert provenance.parameter("model_zoom_case_id") == f"{model}-fine-replicate-0"
+
+    incomplete = _records(model) | _model_zoom_execution_identity(model)
+    del incomplete["model_zoom_capture_event_sha256"]
+    _write_provenance(path, incomplete)
+    with pytest.raises(ValueError, match="requires all fields"):
         read_dark_matter_run_provenance(path)
 
 

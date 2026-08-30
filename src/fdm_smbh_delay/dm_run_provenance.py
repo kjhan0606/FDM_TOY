@@ -154,6 +154,39 @@ def read_dark_matter_run_provenance(path: str | Path) -> DarkMatterRunProvenance
             raise ValueError("smbh_compaction_mode disagrees with smbh_merge_radius_cells")
         parameters["smbh_merge_radius_cells"] = merge_radius
         parameters["smbh_compaction_mode"] = compaction_mode
+    model_execution_identity_status = "model_zoom_execution_identity_status"
+    model_execution_identity_digests = (
+        "model_zoom_manifest_sha256",
+        "model_zoom_capture_event_sha256",
+        "model_zoom_initial_conditions_sha256",
+        "model_zoom_baryon_configuration_sha256",
+        "model_zoom_sink_initial_conditions_sha256",
+    )
+    model_execution_identity_fields = ("model_zoom_case_id",) + model_execution_identity_digests
+    present_model_identity = [
+        key for key in model_execution_identity_fields if key in records
+    ]
+    if model_execution_identity_status in records:
+        status = records[model_execution_identity_status]
+        if status == "unavailable":
+            if present_model_identity:
+                raise ValueError("unavailable model zoom execution identity cannot carry fields")
+            parameters[model_execution_identity_status] = status
+        elif status != "available":
+            raise ValueError("model zoom execution identity status is unsupported")
+        else:
+            if len(present_model_identity) != len(model_execution_identity_fields):
+                raise ValueError("available model zoom execution identity requires all fields")
+            case_id = _required(records, "model_zoom_case_id")
+            parameters["model_zoom_case_id"] = case_id
+            for key in model_execution_identity_digests:
+                digest = records[key]
+                if _SHA256.fullmatch(digest) is None:
+                    raise ValueError(f"{key} must be a SHA-256 digest")
+                parameters[key] = digest.lower()
+            parameters[model_execution_identity_status] = status
+    elif present_model_identity:
+        raise ValueError("model zoom execution-identity fields require a status")
     execution_identity_status = "cdm_zoom_execution_identity_status"
     execution_identity_digests = (
         "cdm_zoom_plan_manifest_sha256",

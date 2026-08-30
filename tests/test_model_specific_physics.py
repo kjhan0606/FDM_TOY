@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import hashlib
 import json
 from pathlib import Path
@@ -13,6 +13,7 @@ import pytest
 import yaml
 
 from fdm_smbh_delay.constants import G_INTERNAL
+from fdm_smbh_delay.capture_ledger import read_capture_ledger
 from fdm_smbh_delay.model_specific_physics import (
     assess_model_specific_phase_ensemble,
     compare_model_specific_resolution_pair,
@@ -178,7 +179,10 @@ def _case(model: str, *, finest_cell_size_pc: float, replicate: int = 0) -> Gala
 
 
 def _write_ready_inventory_assessment(
-    root: Path, model: str
+    root: Path,
+    model: str,
+    *,
+    model_zoom_identity: dict[str, str],
 ) -> tuple[Path, dict[str, Path]]:
     """Create a v2 inventory fixture with real, hash-bound ledger files."""
 
@@ -187,6 +191,9 @@ def _write_ready_inventory_assessment(
     output.mkdir(parents=True, exist_ok=True)
     (output / "COMPLETE").write_text(label + "\n", encoding="utf-8")
     _write_capture_ledger(output / "smbh_capture_ledger_v1.jsonl")
+    capture_event_sha256 = read_capture_ledger(
+        output / "smbh_capture_ledger_v1.jsonl"
+    ).events[0].event_sha256
     (output / "POISSON_PHI_VALID").write_text(
         "LAGRAMSES_POISSON_PHI_VALID_V1\n42 21 1.25 0.5\n", encoding="utf-8"
     )
@@ -312,6 +319,13 @@ def _write_ready_inventory_assessment(
         "compilation_copy = compilation.txt\n"
         "smbh_capture_ledger_enabled = .true.\n"
         "smbh_capture_ledger_file = smbh_capture_ledger_v1.jsonl\n"
+        "model_zoom_execution_identity_status = available\n"
+        f"model_zoom_manifest_sha256 = {model_zoom_identity['manifest_sha256']}\n"
+        f"model_zoom_case_id = {model_zoom_identity['case_id']}\n"
+        f"model_zoom_capture_event_sha256 = {capture_event_sha256}\n"
+        f"model_zoom_initial_conditions_sha256 = {model_zoom_identity['initial_conditions_sha256']}\n"
+        f"model_zoom_baryon_configuration_sha256 = {model_zoom_identity['baryon_configuration_sha256']}\n"
+        f"model_zoom_sink_initial_conditions_sha256 = {model_zoom_identity['sink_initial_conditions_sha256']}\n"
     )
     if model == "cdm":
         common += "dm_transport = collisionless_nbody\n"
@@ -339,8 +353,23 @@ def _write_ready_inventory_assessment(
     return assessment_path, ledgers
 
 
-def _physics_input(tmp_path: Path) -> tuple[Path, dict[str, dict[str, str]]]:
+def _physics_input(
+    tmp_path: Path,
+    *,
+    case: GalaxyMergerZoomCase,
+    manifest_sha256: str,
+    selected_case_id_override: str | None = None,
+) -> tuple[Path, dict[str, dict[str, str]]]:
     ensemble = tmp_path / "capture_ensemble.json"
+    shared_inputs: dict[str, dict[str, str]] = {}
+    for name in ("initial_conditions", "baryon_configuration", "smbh_seed_catalog"):
+        path = tmp_path / "shared" / f"{name}.dat"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(name + "\n", encoding="utf-8")
+        shared_inputs[name] = {
+            "path": str(path.relative_to(tmp_path)),
+            "sha256": _sha256(path),
+        }
     artifact_names = {
         "cdm": ("environment_profile", "force_ledger", "conservation_ledger"),
         "sidm": (
@@ -365,7 +394,27 @@ def _physics_input(tmp_path: Path) -> tuple[Path, dict[str, dict[str, str]]]:
     for model, names in artifact_names.items():
         artifacts[model] = {}
         hashes[model] = {}
-        assessment_path, inventory_ledgers = _write_ready_inventory_assessment(tmp_path, model)
+        assessment_path, inventory_ledgers = _write_ready_inventory_assessment(
+            tmp_path,
+            model,
+            model_zoom_identity={
+                "manifest_sha256": manifest_sha256,
+                "case_id": (
+                    (
+                        selected_case_id_override
+                        if selected_case_id_override is not None
+                        else case.case_id
+                    )
+                    if model == case.physics.dark_matter_model
+                    else f"{model}-comparison-only"
+                ),
+                "initial_conditions_sha256": shared_inputs["initial_conditions"]["sha256"],
+                "baryon_configuration_sha256": shared_inputs["baryon_configuration"][
+                    "sha256"
+                ],
+                "sink_initial_conditions_sha256": shared_inputs["smbh_seed_catalog"]["sha256"],
+            },
+        )
         inventory_assessments[model] = {
             "path": str(assessment_path.relative_to(tmp_path)),
             "sha256": _sha256(assessment_path),
@@ -417,15 +466,6 @@ def _physics_input(tmp_path: Path) -> tuple[Path, dict[str, dict[str, str]]]:
                 "path": str(ledger_path.relative_to(tmp_path)),
                 "sha256": hashes[model]["wave_ledger"],
             }
-    shared_inputs: dict[str, dict[str, str]] = {}
-    for name in ("initial_conditions", "baryon_configuration", "smbh_seed_catalog"):
-        path = tmp_path / "shared" / f"{name}.dat"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(name + "\n", encoding="utf-8")
-        shared_inputs[name] = {
-            "path": str(path.relative_to(tmp_path)),
-            "sha256": _sha256(path),
-        }
     manifest_path = tmp_path / "comparison_family.json"
     _write_json(
         manifest_path,
@@ -512,14 +552,14 @@ def _result_record(
             minimum_wake_resolution_cells=8.0,
         )
     result: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": 3,
         "status": "complete",
         "case_id": case.case_id,
         "case": case.as_dict(),
         "dark_matter_model": model,
         "zoom_manifest_sha256": manifest_sha256,
         "capture_event_uid": "capture-7-9",
-        "physics_input_path": str(physics_input.name),
+        "physics_input_path": str(physics_input),
         "physics_input_sha256": _sha256(physics_input),
         "environment_channels": _channels(),
         "rate_points": [
@@ -545,6 +585,9 @@ def _result_record(
     inventory_artifact = assessment_record["inventory"]["source"]
     ensemble_path = physics_input.parent / physics_record["capture_ensemble_path"]
     ensemble_record = json.loads(ensemble_path.read_text(encoding="utf-8"))
+    result["capture_event_sha256"] = ensemble_record["capture_bindings"][model][
+        "capture_event"
+    ]["event_sha256"]
     run_artifact = ensemble_record["capture_bindings"][model]["run_provenance"]["source"]
 
     def absolute_artifact(artifact: dict[str, str]) -> dict[str, str]:
@@ -558,13 +601,14 @@ def _result_record(
         f"{model}-r{case.replicate}-l{case.numerics.levelmax}.json"
     )
     rate_ledger = {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "diagnosed",
         "case_id": result["case_id"],
         "case": result["case"],
         "dark_matter_model": result["dark_matter_model"],
         "zoom_manifest_sha256": result["zoom_manifest_sha256"],
         "capture_event_uid": result["capture_event_uid"],
+        "capture_event_sha256": result["capture_event_sha256"],
         "normal_output_inventory": absolute_artifact(inventory_artifact),
         "run_provenance": absolute_artifact(run_artifact),
         "environment_channels": result["environment_channels"],
@@ -573,7 +617,7 @@ def _result_record(
         "model_evidence": result["model_evidence"],
     }
     _write_json(rate_ledger_path, rate_ledger)
-    result["schema_version"] = 2
+    result["schema_version"] = 3
     result["rate_ledger_path"] = str(rate_ledger_path)
     result["rate_ledger_sha256"] = _sha256(rate_ledger_path)
     return result
@@ -581,8 +625,10 @@ def _result_record(
 
 @pytest.mark.parametrize("model", ("cdm", "sidm", "fdm"))
 def test_each_model_keeps_its_own_required_evidence(tmp_path: Path, model: str) -> None:
-    physics_input, hashes = _physics_input(tmp_path)
     case = _case(model, finest_cell_size_pc=0.5)
+    physics_input, hashes = _physics_input(
+        tmp_path, case=case, manifest_sha256="a" * 64
+    )
     path = tmp_path / f"{model}.json"
     _write_json(
         path,
@@ -607,12 +653,17 @@ def test_each_model_keeps_its_own_required_evidence(tmp_path: Path, model: str) 
 
 
 def test_fdm_resolution_and_phase_acceptance_never_adds_an_analytic_drag(tmp_path: Path) -> None:
-    physics_input, hashes = _physics_input(tmp_path)
     manifest = "a" * 64
     members = []
     for replicate in (0, 1):
         fine = _case("fdm", finest_cell_size_pc=0.5, replicate=replicate)
         coarse = _case("fdm", finest_cell_size_pc=1.0, replicate=replicate)
+        fine_input, fine_hashes = _physics_input(
+            tmp_path / f"fine-input-r{replicate}", case=fine, manifest_sha256=manifest
+        )
+        coarse_input, coarse_hashes = _physics_input(
+            tmp_path / f"coarse-input-r{replicate}", case=coarse, manifest_sha256=manifest
+        )
         fine_path = tmp_path / f"fine-r{replicate}.json"
         coarse_path = tmp_path / f"coarse-r{replicate}.json"
         _write_json(
@@ -620,8 +671,8 @@ def test_fdm_resolution_and_phase_acceptance_never_adds_an_analytic_drag(tmp_pat
             _result_record(
                 case=fine,
                 manifest_sha256=manifest,
-                physics_input=physics_input,
-                artifacts=hashes["fdm"],
+                physics_input=fine_input,
+                artifacts=fine_hashes["fdm"],
             ),
         )
         _write_json(
@@ -629,8 +680,8 @@ def test_fdm_resolution_and_phase_acceptance_never_adds_an_analytic_drag(tmp_pat
             _result_record(
                 case=coarse,
                 manifest_sha256=manifest,
-                physics_input=physics_input,
-                artifacts=hashes["fdm"],
+                physics_input=coarse_input,
+                artifacts=coarse_hashes["fdm"],
                 power_factor=1.05,
             ),
         )
@@ -651,8 +702,10 @@ def test_fdm_resolution_and_phase_acceptance_never_adds_an_analytic_drag(tmp_pat
 
 
 def test_rejects_fdm_analytic_force_or_input_hash_mismatch(tmp_path: Path) -> None:
-    physics_input, hashes = _physics_input(tmp_path)
     case = _case("fdm", finest_cell_size_pc=0.5)
+    physics_input, hashes = _physics_input(
+        tmp_path, case=case, manifest_sha256="a" * 64
+    )
     record = _result_record(
         case=case,
         manifest_sha256="a" * 64,
@@ -678,8 +731,10 @@ def test_rejects_fdm_analytic_force_or_input_hash_mismatch(tmp_path: Path) -> No
 
 
 def test_result_must_reuse_its_registered_capture_event(tmp_path: Path) -> None:
-    physics_input, hashes = _physics_input(tmp_path)
     case = _case("cdm", finest_cell_size_pc=0.5)
+    physics_input, hashes = _physics_input(
+        tmp_path, case=case, manifest_sha256="a" * 64
+    )
     record = _result_record(
         case=case,
         manifest_sha256="a" * 64,
@@ -692,9 +747,103 @@ def test_result_must_reuse_its_registered_capture_event(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="differs from its registered capture ensemble"):
         read_resolved_model_physics_result(path, case=case, zoom_manifest_sha256="a" * 64)
 
+    record = _result_record(
+        case=case,
+        manifest_sha256="a" * 64,
+        physics_input=physics_input,
+        artifacts=hashes["cdm"],
+    )
+    record["capture_event_sha256"] = "f" * 64
+    path = tmp_path / "wrong-capture-sha.json"
+    _write_json(path, record)
+    with pytest.raises(ValueError, match="capture_event_sha256 differs"):
+        read_resolved_model_physics_result(path, case=case, zoom_manifest_sha256="a" * 64)
+
+
+def test_result_requires_the_baryon_configuration_attested_by_its_family(
+    tmp_path: Path,
+) -> None:
+    case = _case("fdm", finest_cell_size_pc=0.5)
+    physics_input, hashes = _physics_input(
+        tmp_path, case=case, manifest_sha256="a" * 64
+    )
+    input_record = json.loads(physics_input.read_text(encoding="utf-8"))
+    ensemble_path = physics_input.parent / input_record["capture_ensemble_path"]
+    ensemble = json.loads(ensemble_path.read_text(encoding="utf-8"))
+    provenance_path = Path(ensemble["capture_bindings"]["fdm"]["run_provenance"]["source"]["path"])
+    provenance_path.write_text(
+        provenance_path.read_text(encoding="utf-8").replace(
+            "model_zoom_baryon_configuration_sha256 = "
+            + _sha256(tmp_path / "shared" / "baryon_configuration.dat"),
+            "model_zoom_baryon_configuration_sha256 = " + "f" * 64,
+        ),
+        encoding="utf-8",
+    )
+    refreshed_ensemble = register_dm_comparison_capture_ensemble(
+        read_dm_comparison_capture_registration(tmp_path / "capture_registration.json")
+    )
+    assert refreshed_ensemble.registered
+    _write_json(ensemble_path, refreshed_ensemble.as_dict())
+    input_record["capture_ensemble_sha256"] = _sha256(ensemble_path)
+    _write_json(physics_input, input_record)
+    record = _result_record(
+        case=case,
+        manifest_sha256="a" * 64,
+        physics_input=physics_input,
+        artifacts=hashes["fdm"],
+    )
+    path = tmp_path / "wrong-baryon-attestation.json"
+    _write_json(path, record)
+    with pytest.raises(ValueError, match="model_zoom_baryon_configuration_sha256 differs"):
+        read_resolved_model_physics_result(path, case=case, zoom_manifest_sha256="a" * 64)
+
+
+def test_resolution_pair_requires_the_same_capture_event_sha256(tmp_path: Path) -> None:
+    manifest = "a" * 64
+    fine = _case("fdm", finest_cell_size_pc=0.5)
+    coarse = _case("fdm", finest_cell_size_pc=1.0)
+    fine_input, fine_hashes = _physics_input(
+        tmp_path / "fine", case=fine, manifest_sha256=manifest
+    )
+    coarse_input, coarse_hashes = _physics_input(
+        tmp_path / "coarse", case=coarse, manifest_sha256=manifest
+    )
+    fine_path = tmp_path / "fine.json"
+    coarse_path = tmp_path / "coarse.json"
+    _write_json(
+        fine_path,
+        _result_record(
+            case=fine,
+            manifest_sha256=manifest,
+            physics_input=fine_input,
+            artifacts=fine_hashes["fdm"],
+        ),
+    )
+    _write_json(
+        coarse_path,
+        _result_record(
+            case=coarse,
+            manifest_sha256=manifest,
+            physics_input=coarse_input,
+            artifacts=coarse_hashes["fdm"],
+        ),
+    )
+    fine_result = read_resolved_model_physics_result(
+        fine_path, case=fine, zoom_manifest_sha256=manifest
+    )
+    coarse_result = read_resolved_model_physics_result(
+        coarse_path, case=coarse, zoom_manifest_sha256=manifest
+    )
+    with pytest.raises(ValueError, match="does not share one capture"):
+        compare_model_specific_resolution_pair(
+            fine_result,
+            replace(coarse_result, capture_event_sha256="f" * 64),
+        )
+
 
 def test_capture_ensemble_is_rebuilt_from_its_family_and_capture_event(tmp_path: Path) -> None:
-    physics_input, _ = _physics_input(tmp_path)
+    case = _case("fdm", finest_cell_size_pc=0.5)
+    physics_input, _ = _physics_input(tmp_path, case=case, manifest_sha256="a" * 64)
     input_record = json.loads(physics_input.read_text(encoding="utf-8"))
     ensemble_path = physics_input.parent / input_record["capture_ensemble_path"]
     assert read_verified_dm_comparison_capture_ensemble(ensemble_path).registered
@@ -708,8 +857,10 @@ def test_capture_ensemble_is_rebuilt_from_its_family_and_capture_event(tmp_path:
 def test_result_rate_values_and_output_identity_must_match_the_rate_ledger(
     tmp_path: Path,
 ) -> None:
-    physics_input, hashes = _physics_input(tmp_path)
     case = _case("cdm", finest_cell_size_pc=0.5)
+    physics_input, hashes = _physics_input(
+        tmp_path, case=case, manifest_sha256="a" * 64
+    )
     record = _result_record(
         case=case,
         manifest_sha256="a" * 64,
@@ -738,8 +889,29 @@ def test_result_rate_values_and_output_identity_must_match_the_rate_ledger(
         read_resolved_model_physics_result(path, case=case, zoom_manifest_sha256="a" * 64)
 
 
+def test_result_rejects_a_normal_output_attested_for_another_case(tmp_path: Path) -> None:
+    case = _case("fdm", finest_cell_size_pc=0.5)
+    physics_input, hashes = _physics_input(
+        tmp_path,
+        case=case,
+        manifest_sha256="a" * 64,
+        selected_case_id_override="fdm-other-resolution-replicate",
+    )
+    record = _result_record(
+        case=case,
+        manifest_sha256="a" * 64,
+        physics_input=physics_input,
+        artifacts=hashes["fdm"],
+    )
+    path = tmp_path / "wrong-executed-case.json"
+    _write_json(path, record)
+    with pytest.raises(ValueError, match="model zoom case differs"):
+        read_resolved_model_physics_result(path, case=case, zoom_manifest_sha256="a" * 64)
+
+
 def test_fdm_full_wave_ledger_is_distinct_from_raw_provenance(tmp_path: Path) -> None:
-    physics_input, _ = _physics_input(tmp_path)
+    case = _case("fdm", finest_cell_size_pc=0.5)
+    physics_input, _ = _physics_input(tmp_path, case=case, manifest_sha256="a" * 64)
     record = json.loads(physics_input.read_text(encoding="utf-8"))
     ledger_path = tmp_path / record["artifacts"]["fdm"]["wave_ledger"]["path"]
     ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
@@ -802,11 +974,20 @@ def test_non_submitting_cli_validates_resolution_and_phase_records(tmp_path: Pat
     config = tmp_path / "grid.yaml"
     config.write_text(yaml.safe_dump(specification), encoding="utf-8")
     grid = build_zoom_grid(specification)
-    physics_input, hashes = _physics_input(tmp_path)
     pairs: list[tuple[Path, Path]] = []
     for replicate in (0, 1):
         cases = [case for case in grid.cases if case.replicate == replicate]
         coarse, fine = sorted(cases, key=lambda case: case.numerics.finest_cell_size_pc, reverse=True)
+        fine_input, fine_hashes = _physics_input(
+            tmp_path / f"cli-fine-input-r{replicate}",
+            case=fine,
+            manifest_sha256=grid.manifest_sha256,
+        )
+        coarse_input, coarse_hashes = _physics_input(
+            tmp_path / f"cli-coarse-input-r{replicate}",
+            case=coarse,
+            manifest_sha256=grid.manifest_sha256,
+        )
         fine_path = tmp_path / f"cli-fine-r{replicate}.json"
         coarse_path = tmp_path / f"cli-coarse-r{replicate}.json"
         _write_json(
@@ -814,8 +995,8 @@ def test_non_submitting_cli_validates_resolution_and_phase_records(tmp_path: Pat
             _result_record(
                 case=fine,
                 manifest_sha256=grid.manifest_sha256,
-                physics_input=physics_input,
-                artifacts=hashes["fdm"],
+                physics_input=fine_input,
+                artifacts=fine_hashes["fdm"],
             ),
         )
         _write_json(
@@ -823,8 +1004,8 @@ def test_non_submitting_cli_validates_resolution_and_phase_records(tmp_path: Pat
             _result_record(
                 case=coarse,
                 manifest_sha256=grid.manifest_sha256,
-                physics_input=physics_input,
-                artifacts=hashes["fdm"],
+                physics_input=coarse_input,
+                artifacts=coarse_hashes["fdm"],
                 power_factor=1.05,
             ),
         )

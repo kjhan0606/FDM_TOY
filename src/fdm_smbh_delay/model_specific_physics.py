@@ -32,8 +32,8 @@ from .resolved_physics_inventory import (
 from .zoom_calibration import GalaxyMergerZoomCase
 
 
-MODEL_SPECIFIC_PHYSICS_RESULT_SCHEMA_VERSION = 2
-MODEL_SPECIFIC_RATE_LEDGER_SCHEMA_VERSION = 1
+MODEL_SPECIFIC_PHYSICS_RESULT_SCHEMA_VERSION = 3
+MODEL_SPECIFIC_RATE_LEDGER_SCHEMA_VERSION = 2
 _MODELS = ("cdm", "sidm", "fdm")
 _CHANNELS = ("stars", "gas", "dark_matter")
 _SHA256_RE = re.compile(r"[0-9a-fA-F]{64}")
@@ -258,10 +258,13 @@ class ResolvedModelPhysicsResult:
     source_path: Path
     source_sha256: str
     capture_event_uid: str
+    capture_event_sha256: str
     physics_input_path: Path
     physics_input_sha256: str
     rate_ledger_path: Path
     rate_ledger_sha256: str
+    comparison_family_id: str
+    comparison_shared_input_sha256s: tuple[tuple[str, str], ...]
     channels: tuple[tuple[str, ResolvedEnvironmentChannel], ...]
     rate_points: tuple[HandoffRatePoint, ...]
     maximum_relative_energy_error: float
@@ -274,7 +277,17 @@ class ResolvedModelPhysicsResult:
         _sha256(self.source_sha256, "source_sha256")
         _sha256(self.physics_input_sha256, "physics_input_sha256")
         _sha256(self.rate_ledger_sha256, "rate_ledger_sha256")
+        _nonempty(self.comparison_family_id, "comparison_family_id")
+        if {name for name, _ in self.comparison_shared_input_sha256s} != {
+            "initial_conditions",
+            "baryon_configuration",
+            "smbh_seed_catalog",
+        }:
+            raise ValueError("comparison shared-input identities are invalid")
+        for name, digest in self.comparison_shared_input_sha256s:
+            _sha256(digest, f"{name} SHA-256")
         _nonempty(self.capture_event_uid, "capture_event_uid")
+        _sha256(self.capture_event_sha256, "capture_event_sha256")
         if self.model_evidence.dark_matter_model != self.case.physics.dark_matter_model:
             raise ValueError("result model evidence does not match its zoom case")
         names = tuple(name for name, _ in self.channels)
@@ -324,6 +337,7 @@ class ResolvedModelPhysicsResult:
             "zoom_manifest_sha256": self.zoom_manifest_sha256,
             "source": {"path": str(self.source_path), "sha256": self.source_sha256},
             "capture_event_uid": self.capture_event_uid,
+            "capture_event_sha256": self.capture_event_sha256,
             "physics_input": {
                 "path": str(self.physics_input_path),
                 "sha256": self.physics_input_sha256,
@@ -331,6 +345,10 @@ class ResolvedModelPhysicsResult:
             "rate_ledger": {
                 "path": str(self.rate_ledger_path),
                 "sha256": self.rate_ledger_sha256,
+            },
+            "comparison_family": {
+                "family_id": self.comparison_family_id,
+                "shared_input_sha256s": dict(self.comparison_shared_input_sha256s),
             },
             "environment_channels": {
                 name: channel.as_dict() for name, channel in self.channels
@@ -398,13 +416,7 @@ def _registered_capture_binding(
 ) -> Mapping[str, Any]:
     """Re-read the accepted ensemble and return one model's bound capture record."""
 
-    ensemble_path = _resolve(physics_input.capture_ensemble_path, physics_input.source_path.parent)
-    try:
-        if _file_sha256(ensemble_path) != physics_input.capture_ensemble_sha256:
-            raise ValueError("capture ensemble SHA-256 differs")
-        ensemble = read_verified_dm_comparison_capture_ensemble(ensemble_path).as_dict()
-    except (OSError, ValueError) as error:
-        raise ValueError(f"accepted capture ensemble is invalid: {error}") from error
+    ensemble = _registered_capture_ensemble(physics_input).as_dict()
     bindings = ensemble.get("capture_bindings")
     binding = bindings.get(model) if isinstance(bindings, Mapping) else None
     if not isinstance(binding, Mapping):
@@ -419,6 +431,16 @@ def _registered_capture_binding(
     _nonempty(source.get("path"), f"accepted {model} run-provenance path")
     _sha256(source.get("sha256"), f"accepted {model} run-provenance SHA-256")
     return binding
+
+
+def _registered_capture_ensemble(physics_input: DMComparisonPhysicsInput) -> Any:
+    ensemble_path = _resolve(physics_input.capture_ensemble_path, physics_input.source_path.parent)
+    try:
+        if _file_sha256(ensemble_path) != physics_input.capture_ensemble_sha256:
+            raise ValueError("capture ensemble SHA-256 differs")
+        return read_verified_dm_comparison_capture_ensemble(ensemble_path)
+    except (OSError, ValueError) as error:
+        raise ValueError(f"accepted capture ensemble is invalid: {error}") from error
 
 
 def _registered_capture_event_uid(
@@ -463,6 +485,58 @@ def _same_float(left: float, right: float) -> bool:
     return math.isclose(left, right, rel_tol=1.0e-12, abs_tol=1.0e-14)
 
 
+def _require_model_zoom_execution_identity(
+    run: DarkMatterRunProvenance,
+    *,
+    case: GalaxyMergerZoomCase,
+    zoom_manifest_sha256: str,
+    capture_binding: Mapping[str, Any],
+    capture_ensemble: Any,
+) -> None:
+    """Bind the resolved result's requested case to the sidecar read by the solver."""
+
+    if run.parameter("model_zoom_execution_identity_status") != "available":
+        raise ValueError("normal-output sidecar lacks an available model zoom execution identity")
+    expected_digests = {
+        "model_zoom_manifest_sha256": _sha256(
+            zoom_manifest_sha256, "zoom_manifest_sha256"
+        ),
+        "model_zoom_capture_event_sha256": _sha256(
+            capture_binding["capture_event"]["event_sha256"], "capture event SHA-256"
+        ),
+        "model_zoom_initial_conditions_sha256": capture_ensemble.smoke.preflight.manifest.shared_input_map[
+            "initial_conditions"
+        ].sha256,
+        "model_zoom_baryon_configuration_sha256": capture_ensemble.smoke.preflight.manifest.shared_input_map[
+            "baryon_configuration"
+        ].sha256,
+        "model_zoom_sink_initial_conditions_sha256": capture_ensemble.smoke.preflight.manifest.shared_input_map[
+            "smbh_seed_catalog"
+        ].sha256,
+    }
+    if run.parameter("model_zoom_case_id") != case.case_id:
+        raise ValueError("normal-output sidecar model zoom case differs from its result")
+    for name, expected in expected_digests.items():
+        if run.parameter(name) != expected:
+            raise ValueError(f"normal-output sidecar {name} differs from its result")
+    if run.dark_matter_model == "sidm":
+        expected_sidm = {
+            "sidm_cross_section_cm2_g": case.physics.sidm_cross_section_cm2_g,
+            "sidm_v0_km_s": case.physics.sidm_v0_km_s,
+            "sidm_power": case.physics.sidm_power,
+            "sidm_type": case.physics.sidm_type,
+            "sidm_angular": case.physics.sidm_angular,
+            "sidm_inelastic": case.physics.sidm_inelastic,
+        }
+        if any(run.parameter(name) != value for name, value in expected_sidm.items()):
+            raise ValueError("normal-output SIDM controls differ from the zoom case")
+    elif run.dark_matter_model == "fdm":
+        if not _same_float(
+            float(run.parameter("m_axion_ev")), float(case.physics.fdm_particle_mass_ev)
+        ):
+            raise ValueError("normal-output FDM particle mass differs from the zoom case")
+
+
 def _read_rate_ledger(
     record: Mapping[str, Any],
     *,
@@ -472,6 +546,7 @@ def _read_rate_ledger(
     physics_input: DMComparisonPhysicsInput,
     inventory_assessment: ResolvedPhysicsInventoryAssessment,
     capture_binding: Mapping[str, Any],
+    capture_ensemble: Any,
 ) -> tuple[Path, str]:
     """Require an independent, output-bound source for every accepted rate field."""
 
@@ -493,6 +568,7 @@ def _read_rate_ledger(
         "dark_matter_model",
         "zoom_manifest_sha256",
         "capture_event_uid",
+        "capture_event_sha256",
         "normal_output_inventory",
         "run_provenance",
         "environment_channels",
@@ -513,6 +589,8 @@ def _read_rate_ledger(
         or _sha256(ledger.get("zoom_manifest_sha256"), "rate ledger zoom_manifest_sha256")
         != _sha256(zoom_manifest_sha256, "zoom_manifest_sha256")
         or ledger.get("capture_event_uid") != record.get("capture_event_uid")
+        or _sha256(ledger.get("capture_event_sha256"), "rate ledger capture_event_sha256")
+        != _sha256(record.get("capture_event_sha256"), "capture_event_sha256")
     ):
         raise ValueError("model-specific rate ledger provenance differs from its result")
     inventory_path, inventory_sha256 = _artifact_path_and_sha256(
@@ -551,6 +629,13 @@ def _read_rate_ledger(
         or _normal_output_directory(run_path) != _normal_output_directory(inventory_path)
     ):
         raise ValueError("rate ledger run provenance differs from its normal-output inventory")
+    _require_model_zoom_execution_identity(
+        run,
+        case=case,
+        zoom_manifest_sha256=zoom_manifest_sha256,
+        capture_binding=capture_binding,
+        capture_ensemble=capture_ensemble,
+    )
     for key in ("environment_channels", "rate_points", "diagnostics", "model_evidence"):
         if ledger.get(key) != record.get(key):
             raise ValueError(f"model-specific rate ledger {key} differs from its result")
@@ -575,6 +660,7 @@ def read_resolved_model_physics_result(
         "dark_matter_model",
         "zoom_manifest_sha256",
         "capture_event_uid",
+        "capture_event_sha256",
         "physics_input_path",
         "physics_input_sha256",
         "rate_ledger_path",
@@ -617,9 +703,16 @@ def read_resolved_model_physics_result(
     if inventory_assessment.gas_required != (case.physics.gas_fraction > 0.0):
         raise ValueError("normal-output inventory gas requirement differs from the zoom case")
     capture_event_uid = _nonempty(record.get("capture_event_uid"), "capture_event_uid")
+    capture_event_sha256 = _sha256(record.get("capture_event_sha256"), "capture_event_sha256")
+    capture_ensemble = _registered_capture_ensemble(physics_input)
     capture_binding = _registered_capture_binding(physics_input, case.physics.dark_matter_model)
     if capture_event_uid != _registered_capture_event_uid(physics_input, case.physics.dark_matter_model):
         raise ValueError("result capture_event_uid differs from its registered capture ensemble")
+    capture = capture_binding.get("capture_event")
+    if not isinstance(capture, Mapping) or capture_event_sha256 != _sha256(
+        capture.get("event_sha256"), "registered capture_event_sha256"
+    ):
+        raise ValueError("result capture_event_sha256 differs from its registered capture ensemble")
     channels = record.get("environment_channels")
     if not isinstance(channels, Mapping) or set(channels) != set(_CHANNELS):
         raise ValueError("resolved environment channels are invalid")
@@ -663,6 +756,7 @@ def read_resolved_model_physics_result(
         physics_input=physics_input,
         inventory_assessment=inventory_assessment,
         capture_binding=capture_binding,
+        capture_ensemble=capture_ensemble,
     )
     try:
         return ResolvedModelPhysicsResult(
@@ -671,10 +765,21 @@ def read_resolved_model_physics_result(
             source_path=source,
             source_sha256=_file_sha256(source),
             capture_event_uid=capture_event_uid,
+            capture_event_sha256=capture_event_sha256,
             physics_input_path=physics_input_path,
             physics_input_sha256=expected_input_sha,
             rate_ledger_path=rate_ledger_path,
             rate_ledger_sha256=rate_ledger_sha256,
+            comparison_family_id=capture_ensemble.smoke.preflight.manifest.family_id,
+            comparison_shared_input_sha256s=tuple(
+                sorted(
+                    (
+                        name,
+                        artifact.sha256,
+                    )
+                    for name, artifact in capture_ensemble.smoke.preflight.manifest.shared_inputs
+                )
+            ),
             channels=parsed_channels,
             rate_points=tuple(points),
             maximum_relative_energy_error=diagnostics.get("maximum_relative_energy_error"),
@@ -809,12 +914,16 @@ def compare_model_specific_resolution_pair(
         raise ValueError("resolution pair does not share one model physics point and phase")
     if reference.case.numerics.finest_cell_size_pc >= comparison.case.numerics.finest_cell_size_pc:
         raise ValueError("reference must use a finer cell size than comparison")
+    if reference.zoom_manifest_sha256 != comparison.zoom_manifest_sha256:
+        raise ValueError("resolution pair does not share one zoom manifest")
     if (
-        reference.zoom_manifest_sha256 != comparison.zoom_manifest_sha256
-        or reference.physics_input_path != comparison.physics_input_path
-        or reference.physics_input_sha256 != comparison.physics_input_sha256
+        reference.capture_event_uid != comparison.capture_event_uid
+        or reference.capture_event_sha256 != comparison.capture_event_sha256
+        or reference.comparison_family_id != comparison.comparison_family_id
+        or reference.comparison_shared_input_sha256s
+        != comparison.comparison_shared_input_sha256s
     ):
-        raise ValueError("resolution pair does not share one immutable comparison input")
+        raise ValueError("resolution pair does not share one capture and comparison family")
     reasons: list[str] = []
     for run, label in ((reference, "reference"), (comparison, "comparison")):
         if run.maximum_relative_energy_error > maximum_conservation_error:
@@ -929,10 +1038,13 @@ def assess_model_specific_phase_ensemble(
             reference.dark_matter_model != first.dark_matter_model
             or reference.case.physics != first.case.physics
             or reference.zoom_manifest_sha256 != first.zoom_manifest_sha256
-            or reference.physics_input_path != first.physics_input_path
-            or reference.physics_input_sha256 != first.physics_input_sha256
+            or reference.capture_event_uid != first.capture_event_uid
+            or reference.capture_event_sha256 != first.capture_event_sha256
+            or reference.comparison_family_id != first.comparison_family_id
+            or reference.comparison_shared_input_sha256s
+            != first.comparison_shared_input_sha256s
         ):
-            raise ValueError("phase ensemble members do not share one immutable model point")
+            raise ValueError("phase ensemble members do not share one capture and model point")
         if reference.case.replicate in replicates:
             raise ValueError("model-specific phase ensemble has a duplicate replicate")
         replicates.add(reference.case.replicate)

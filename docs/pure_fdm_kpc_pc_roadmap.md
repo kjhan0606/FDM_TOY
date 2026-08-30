@@ -130,10 +130,15 @@ match exactly. That ledger must in turn name the exact inventory and
 dm_run_provenance sidecar from the registered normal output; their model,
 output directory, step, time, and scale factor are rechecked. This prevents a
 result JSON from being relabelled with another output or edited rate values.
-It is analytical provenance, not yet an attestation that lagRamses executed
-the selected case/resolution/phase: the all-model execution-identity sidecar
-is the following implementation stage. No current production result has
-passed that later gate.
+lagRamses now emits a common CDM/SIDM/FDM model-zoom execution identity when
+the materialized namelist supplies the manifest SHA-256, exact case ID,
+capture-event SHA-256, and initial-condition/baryon-configuration/sink-input
+SHA-256 values. The reader
+requires that identity from the same normal-output sidecar and compares it
+with the requested case, registered capture, and shared inputs; an unavailable
+identity is censored. The sidecar does not by itself recompute a rate from raw
+time series, so a production estimator must still bind its source series and
+settings before its diagnosed rates become a scientific acceptance.
 
 These commands only inspect registered JSON evidence and never submit work:
 
