@@ -31,7 +31,7 @@ from .model_zoom_materialization import (
 from .dm_run_provenance import read_dark_matter_run_provenance
 
 
-FDM_ZOOM_RUNTIME_OUTPUT_IDENTITY_SCHEMA_VERSION = 1
+FDM_ZOOM_RUNTIME_OUTPUT_IDENTITY_SCHEMA_VERSION = 2
 _OUTPUT_DIRECTORY = re.compile(r"output_(\d{5})$")
 _GROUP_DIRECTORY = re.compile(r"group_(\d{5})$")
 _BUILD_SHA256 = re.compile(r"[0-9a-f]{40}")
@@ -259,8 +259,8 @@ def _verify_output(
         raise ValueError("output run-provenance scale factor differs from info aexp")
     raw_path = root / f"fdm_outer_wave_provenance_{output_number}.txt"
     raw = read_lagramses_fdm_outer_wave_provenance(raw_path)
-    if raw.source_schema_version not in {2, 3}:
-        raise ValueError("FDM output requires dual-soliton raw provenance V2 or V3")
+    if raw.source_schema_version not in {2, 3, 4, 5}:
+        raise ValueError("FDM output requires dual-soliton raw provenance V2, V3, V4, or V5")
     if raw.psi_snapshot_prefix != f"fdm_{output_number}.out":
         raise ValueError("raw FDM psi snapshot prefix differs from its output number")
     seed_identity = validate_pure_fdm_dual_soliton_runtime_identity(
@@ -291,6 +291,19 @@ def _verify_output(
         or run.parameter("fdm_first_wave_level") != raw.fdm_first_wave_level
     ):
         raise ValueError("DM run-provenance FDM controls differ from raw wave provenance")
+    raw_record: dict[str, Any] = {"path": str(raw_path), "sha256": raw.source_sha256}
+    if raw.source_schema_version >= 4:
+        raw_record.update(
+            {
+                "source_schema_version": raw.source_schema_version,
+                "execution_instance_id": raw.execution_instance_id,
+                "restart_parent_output": raw.restart_parent_output,
+            }
+        )
+    if raw.source_schema_version == 5:
+        raw_record["restart_parent_execution_instance_id"] = (
+            raw.restart_parent_execution_instance_id
+        )
     return {
         "output_number": output_number,
         "output_directory": str(root),
@@ -301,7 +314,7 @@ def _verify_output(
             "sha256": run.source_sha256,
             "build_git_hash": run.build_git_hash,
         },
-        "raw_fdm_provenance": {"path": str(raw_path), "sha256": raw.source_sha256},
+        "raw_fdm_provenance": raw_record,
         "namelist_copy": {"path": str(namelist_copy), "sha256": _sha256(namelist_copy)},
         "compilation_copy": {"path": str(compilation_copy), "sha256": compilation_hash},
         "info": {"path": str(info_path), "sha256": _sha256(info_path)},
@@ -340,6 +353,72 @@ def _output_set_reasons(outputs: list[dict[str, Any]]) -> list[str]:
         for left, right in zip(ordered[:-1], ordered[1:])
     ):
         reasons.append("output aexp values decrease with time")
+    raw_records = [record["raw_fdm_provenance"] for record in ordered]
+    execution_records = [
+        raw
+        for raw in raw_records
+        if raw.get("source_schema_version") in {4, 5}
+    ]
+    if execution_records and len(execution_records) != len(raw_records):
+        reasons.append("outputs mix execution-instance provenance with older raw provenance")
+    if len(execution_records) == len(raw_records):
+        instance_ids = [raw["execution_instance_id"] for raw in raw_records]
+        parent_outputs = [raw["restart_parent_output"] for raw in raw_records]
+        if any(not isinstance(value, str) or not value for value in instance_ids):
+            reasons.append("execution-instance output lacks an identifier")
+        if any(isinstance(value, bool) or not isinstance(value, int) for value in parent_outputs):
+            reasons.append("execution-instance output has an invalid restart-parent output")
+        token_parents: dict[str, set[int]] = {}
+        token_parent_identity_pairs: dict[str, set[tuple[int, str | None]]] = {}
+        for token, parent, raw in zip(instance_ids, parent_outputs, raw_records):
+            if isinstance(token, str) and isinstance(parent, int) and not isinstance(parent, bool):
+                token_parents.setdefault(token, set()).add(parent)
+                parent_token = (
+                    raw.get("restart_parent_execution_instance_id")
+                    if raw.get("source_schema_version") == 5
+                    else "none" if parent == 0 else None
+                )
+                token_parent_identity_pairs.setdefault(token, set()).add(
+                    (parent, parent_token)
+                )
+        if any(len(parents) != 1 for parents in token_parents.values()):
+            reasons.append("one execution-instance identifier has inconsistent restart parents")
+        if any(
+            len(parent_pairs) != 1
+            for parent_pairs in token_parent_identity_pairs.values()
+        ):
+            reasons.append(
+                "one execution-instance identifier has inconsistent restart parent tokens"
+            )
+        if parent_outputs and parent_outputs[0] != 0:
+            reasons.append("first listed execution segment has an unlisted restart parent")
+        seen_tokens = {instance_ids[0]} if instance_ids else set()
+        for previous, current, child_parent in zip(
+            ordered[:-1], ordered[1:], parent_outputs[1:]
+        ):
+            previous_token = previous["raw_fdm_provenance"]["execution_instance_id"]
+            current_token = current["raw_fdm_provenance"]["execution_instance_id"]
+            if current_token == previous_token:
+                continue
+            if current_token in seen_tokens:
+                reasons.append("output sequence reuses an earlier execution-instance identifier")
+            seen_tokens.add(current_token)
+            if child_parent != int(previous["output_number"]):
+                reasons.append(
+                    "execution-instance transition does not name the preceding output as its restart parent"
+                )
+            current_raw = current["raw_fdm_provenance"]
+            if current_raw.get("source_schema_version") != 5:
+                reasons.append(
+                    "execution-instance transition lacks a V5 exact parent token"
+                )
+            elif (
+                current_raw.get("restart_parent_execution_instance_id")
+                != previous_token
+            ):
+                reasons.append(
+                    "execution-instance transition parent token differs from the preceding output"
+                )
     return reasons
 
 
@@ -367,8 +446,9 @@ class FDMZoomRuntimeOutputIdentity:
                 "completed-output identity only; this binds the listed normal-output "
                 "metadata to one declared FDM seed/zoom input, but does not establish "
                 "complete MPI shard coverage, solver input consumption beyond the copied "
-                "namelist/model-zoom sidecar, relaxation, conservation, resolution, "
-                "extractor execution, or a physical delay"
+                "namelist/model-zoom sidecar, globally collision-free restart lineage, "
+                "relaxation, conservation, resolution, extractor execution, or a "
+                "physical delay"
             ),
             "declared_run_input_binding": {
                 "path": str(self.declared_run_path),

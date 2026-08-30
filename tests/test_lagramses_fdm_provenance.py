@@ -30,7 +30,7 @@ def _write_record(path: Path, *, source_schema_version: int = 2, **replacements:
         "complete_current_stencil_fraction": "9.8D-01",
         "psi_snapshot_prefix": "fdm_00042.out",
     }
-    if source_schema_version in {2, 3}:
+    if source_schema_version in {2, 3, 4, 5}:
         values.update(
             {
                 "fdm_dual_soliton_ic": "T",
@@ -45,9 +45,13 @@ def _write_record(path: Path, *, source_schema_version: int = 2, **replacements:
             }
         )
     elif source_schema_version != 1:
-        raise ValueError("test writer only supports raw provenance V1/V2/V3")
-    if source_schema_version == 3:
+        raise ValueError("test writer only supports raw provenance V1/V2/V3/V4/V5")
+    if source_schema_version >= 3:
         values.update({"mpi_ncpu": "2", "restart_parent_output": "0"})
+    if source_schema_version >= 4:
+        values.update({"execution_instance_id": "instance-a"})
+    if source_schema_version == 5:
+        values.update({"restart_parent_execution_instance_id": "none"})
     values.update(replacements)
     lines = [f"# fdm_outer_wave_provenance_v{source_schema_version}"]
     lines.extend(f"{key} = {value}" for key, value in values.items())
@@ -96,6 +100,64 @@ def test_reader_rejects_invalid_v3_output_set_fields(
 ) -> None:
     path = tmp_path / "provenance-v3.txt"
     _write_record(path, source_schema_version=3, **replacements)
+    with pytest.raises(ValueError, match=message):
+        read_lagramses_fdm_outer_wave_provenance(path)
+
+
+def test_reader_accepts_v4_execution_instance_without_upgrading_v3_json(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "provenance-v4.txt"
+    _write_record(path, source_schema_version=4, execution_instance_id="run-42.alpha")
+    record = read_lagramses_fdm_outer_wave_provenance(path)
+    assert record.source_schema_version == 4
+    assert record.execution_instance_id == "run-42.alpha"
+    assert record.as_dict()["execution_instance_id"] == "run-42.alpha"
+
+
+@pytest.mark.parametrize("identifier", ("", "contains space", "slash/not-allowed"))
+def test_reader_rejects_invalid_v4_execution_instance_identifier(
+    tmp_path: Path, identifier: str
+) -> None:
+    path = tmp_path / "provenance-v4.txt"
+    _write_record(path, source_schema_version=4, execution_instance_id=identifier)
+    with pytest.raises(ValueError, match="execution_instance_id is invalid"):
+        read_lagramses_fdm_outer_wave_provenance(path)
+
+
+def test_reader_requires_an_exact_v5_parent_execution_token_for_restarts(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "provenance-v5.txt"
+    _write_record(
+        path,
+        source_schema_version=5,
+        restart_parent_output="41",
+        restart_parent_execution_instance_id="instance-parent",
+    )
+    record = read_lagramses_fdm_outer_wave_provenance(path)
+    assert record.restart_parent_execution_instance_id == "instance-parent"
+    assert record.as_dict()["restart_parent_execution_instance_id"] == "instance-parent"
+
+
+@pytest.mark.parametrize(
+    ("replacements", "message"),
+    [
+        (
+            {"restart_parent_output": "0", "restart_parent_execution_instance_id": "instance-a"},
+            "initial V5 provenance",
+        ),
+        (
+            {"restart_parent_output": "1", "restart_parent_execution_instance_id": "none"},
+            "restart_parent_execution_instance_id is invalid",
+        ),
+    ],
+)
+def test_reader_rejects_unbound_v5_parent_execution_identity(
+    tmp_path: Path, replacements: dict[str, str], message: str
+) -> None:
+    path = tmp_path / "provenance-v5.txt"
+    _write_record(path, source_schema_version=5, **replacements)
     with pytest.raises(ValueError, match=message):
         read_lagramses_fdm_outer_wave_provenance(path)
 

@@ -465,10 +465,13 @@ def _write_fdm_runtime_output(
     grouped: bool = False,
     compilation_text: str = "last commit = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
     time_code: float | None = None,
-    raw_provenance_version: int = 3,
+    raw_provenance_version: int = 5,
+    execution_instance_id: str = "instance-a",
+    restart_parent_output: int = 0,
+    restart_parent_execution_instance_id: str = "none",
 ) -> Path:
-    if raw_provenance_version not in {2, 3}:
-        raise ValueError("test FDM runtime output supports raw provenance V2/V3")
+    if raw_provenance_version not in {2, 3, 4, 5}:
+        raise ValueError("test FDM runtime output supports raw provenance V2/V3/V4/V5")
     label = f"{number:05d}"
     output = root / f"output_{label}"
     output.mkdir()
@@ -524,11 +527,18 @@ def _write_fdm_runtime_output(
         encoding="utf-8",
     )
     first, second = seed.solitons
-    output_set_fields = (
-        "mpi_ncpu = 2\nrestart_parent_output = 0\n"
-        if raw_provenance_version == 3
-        else ""
-    )
+    output_set_fields = ""
+    if raw_provenance_version >= 3:
+        output_set_fields += (
+            f"mpi_ncpu = 2\nrestart_parent_output = {restart_parent_output}\n"
+        )
+    if raw_provenance_version >= 4:
+        output_set_fields += f"execution_instance_id = {execution_instance_id}\n"
+    if raw_provenance_version == 5:
+        output_set_fields += (
+            "restart_parent_execution_instance_id = "
+            f"{restart_parent_execution_instance_id}\n"
+        )
     (output / f"fdm_outer_wave_provenance_{label}.txt").write_text(
         f"# fdm_outer_wave_provenance_v{raw_provenance_version}\n"
         f"time_code = {actual_time:.16e}\n"
@@ -662,6 +672,159 @@ def test_rejects_a_mixed_build_or_raw_time_in_fdm_output_set(tmp_path: Path) -> 
     assert any("time/step differs" in reason for reason in decision.reasons)
 
 
+def test_v5_output_identity_accepts_one_contiguous_restart_transition(
+    tmp_path: Path,
+) -> None:
+    declared, namelist, seed_manifest = _declared_run_binding(tmp_path)
+    first = _write_fdm_runtime_output(
+        tmp_path,
+        number=1,
+        run_namelist=namelist,
+        seed_manifest=seed_manifest,
+        execution_instance_id="instance-a",
+    )
+    second = _write_fdm_runtime_output(
+        tmp_path,
+        number=2,
+        run_namelist=namelist,
+        seed_manifest=seed_manifest,
+        execution_instance_id="instance-a",
+    )
+    third = _write_fdm_runtime_output(
+        tmp_path,
+        number=3,
+        run_namelist=namelist,
+        seed_manifest=seed_manifest,
+        execution_instance_id="instance-b",
+        restart_parent_output=2,
+        restart_parent_execution_instance_id="instance-a",
+    )
+    fourth = _write_fdm_runtime_output(
+        tmp_path,
+        number=4,
+        run_namelist=namelist,
+        seed_manifest=seed_manifest,
+        execution_instance_id="instance-b",
+        restart_parent_output=2,
+        restart_parent_execution_instance_id="instance-a",
+    )
+    decision = assess_fdm_declared_zoom_runtime_outputs(
+        declared, [first, second, third, fourth]
+    )
+    assert decision.verified
+
+
+def test_v5_output_identity_rejects_a_restart_transition_without_its_preceding_parent(
+    tmp_path: Path,
+) -> None:
+    declared, namelist, seed_manifest = _declared_run_binding(tmp_path)
+    first = _write_fdm_runtime_output(
+        tmp_path,
+        number=1,
+        run_namelist=namelist,
+        seed_manifest=seed_manifest,
+        execution_instance_id="instance-a",
+    )
+    second = _write_fdm_runtime_output(
+        tmp_path,
+        number=2,
+        run_namelist=namelist,
+        seed_manifest=seed_manifest,
+        execution_instance_id="instance-a",
+    )
+    third = _write_fdm_runtime_output(
+        tmp_path,
+        number=3,
+        run_namelist=namelist,
+        seed_manifest=seed_manifest,
+        execution_instance_id="instance-b",
+        restart_parent_output=1,
+        restart_parent_execution_instance_id="instance-a",
+    )
+    decision = assess_fdm_declared_zoom_runtime_outputs(declared, [first, second, third])
+    assert not decision.verified
+    assert any("does not name the preceding output" in reason for reason in decision.reasons)
+
+
+def test_v5_output_identity_rejects_an_unlisted_first_restart_parent(
+    tmp_path: Path,
+) -> None:
+    declared, namelist, seed_manifest = _declared_run_binding(tmp_path)
+    output = _write_fdm_runtime_output(
+        tmp_path,
+        number=3,
+        run_namelist=namelist,
+        seed_manifest=seed_manifest,
+        execution_instance_id="instance-b",
+        restart_parent_output=2,
+        restart_parent_execution_instance_id="instance-a",
+    )
+    decision = assess_fdm_declared_zoom_runtime_outputs(declared, [output])
+    assert not decision.verified
+    assert "first listed execution segment has an unlisted restart parent" in decision.reasons
+
+
+def test_v5_output_identity_rejects_a_wrong_exact_parent_execution_token(
+    tmp_path: Path,
+) -> None:
+    declared, namelist, seed_manifest = _declared_run_binding(tmp_path)
+    parent = _write_fdm_runtime_output(
+        tmp_path,
+        number=1,
+        run_namelist=namelist,
+        seed_manifest=seed_manifest,
+        execution_instance_id="instance-a",
+    )
+    child = _write_fdm_runtime_output(
+        tmp_path,
+        number=2,
+        run_namelist=namelist,
+        seed_manifest=seed_manifest,
+        execution_instance_id="instance-b",
+        restart_parent_output=1,
+        restart_parent_execution_instance_id="sibling-instance-a",
+    )
+    decision = assess_fdm_declared_zoom_runtime_outputs(declared, [parent, child])
+    assert not decision.verified
+    assert any("parent token differs" in reason for reason in decision.reasons)
+
+
+def test_v5_output_identity_rejects_inconsistent_parent_tokens_within_one_instance(
+    tmp_path: Path,
+) -> None:
+    declared, namelist, seed_manifest = _declared_run_binding(tmp_path)
+    parent = _write_fdm_runtime_output(
+        tmp_path,
+        number=1,
+        run_namelist=namelist,
+        seed_manifest=seed_manifest,
+        execution_instance_id="instance-a",
+    )
+    child_first = _write_fdm_runtime_output(
+        tmp_path,
+        number=2,
+        run_namelist=namelist,
+        seed_manifest=seed_manifest,
+        execution_instance_id="instance-b",
+        restart_parent_output=1,
+        restart_parent_execution_instance_id="instance-a",
+    )
+    child_later = _write_fdm_runtime_output(
+        tmp_path,
+        number=3,
+        run_namelist=namelist,
+        seed_manifest=seed_manifest,
+        execution_instance_id="instance-b",
+        restart_parent_output=1,
+        restart_parent_execution_instance_id="sibling-instance-a",
+    )
+    decision = assess_fdm_declared_zoom_runtime_outputs(
+        declared, [parent, child_first, child_later]
+    )
+    assert not decision.verified
+    assert any("inconsistent restart parent tokens" in reason for reason in decision.reasons)
+
+
 def test_saved_fdm_output_identity_rejects_a_changed_raw_provenance(tmp_path: Path) -> None:
     declared, namelist, seed_manifest = _declared_run_binding(tmp_path)
     output = _write_fdm_runtime_output(
@@ -724,4 +887,20 @@ def test_saved_fdm_output_identity_rejects_an_overclaimed_interpretation(tmp_pat
     identity_path = tmp_path / "fdm-runtime-output-identity.json"
     identity_path.write_text(json.dumps(record), encoding="utf-8")
     with pytest.raises(ValueError, match="no longer matches its source inputs"):
+        read_verified_fdm_declared_zoom_runtime_outputs(identity_path)
+
+
+def test_saved_fdm_output_identity_v1_fails_closed_after_lineage_schema_upgrade(
+    tmp_path: Path,
+) -> None:
+    declared, namelist, seed_manifest = _declared_run_binding(tmp_path)
+    output = _write_fdm_runtime_output(
+        tmp_path, number=1, run_namelist=namelist, seed_manifest=seed_manifest
+    )
+    record = assess_fdm_declared_zoom_runtime_outputs(declared, [output]).as_dict()
+    assert record["schema_version"] == 2
+    record["schema_version"] = 1
+    identity_path = tmp_path / "legacy-fdm-runtime-output-identity.json"
+    identity_path.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(ValueError, match="not verified"):
         read_verified_fdm_declared_zoom_runtime_outputs(identity_path)

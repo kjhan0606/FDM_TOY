@@ -339,9 +339,9 @@ def _snapshot_file_sets_for_provenance(
     """Enumerate the complete per-CPU FDM and AMR file sets for one output."""
 
     provenance = read_lagramses_fdm_outer_wave_provenance(provenance_path)
-    if provenance.source_schema_version != 3 or provenance.mpi_ncpu is None:
+    if provenance.source_schema_version not in {3, 4, 5} or provenance.mpi_ncpu is None:
         raise ValueError(
-            "relaxation sample ledger requires V3 raw FDM provenance with mpi_ncpu"
+            "relaxation sample ledger requires V3/V4/V5 raw FDM provenance with mpi_ncpu"
         )
     prefix = provenance.psi_snapshot_prefix
     if not prefix.startswith("fdm_"):

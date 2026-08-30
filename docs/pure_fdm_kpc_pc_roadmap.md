@@ -273,6 +273,11 @@ runtime component parameter vectors, so a controlled two-core output can be
 bound back to its materialized seed.  It records the expected MPI rank count
 for the per-rank FDM and AMR files, allowing a downstream source ledger to
 reject an incomplete shard set rather than infer completeness from a subset.
+V4 further records a solver-invocation execution-instance token; it can
+separate adjacent restart segments but is not a globally unique lineage proof.
+V5 binds a restarted child to the execution token read from its concrete
+parent raw-provenance file, so a downstream output-set checker can reject a
+same-number checkpoint from a sibling branch.
 It is raw provenance only: the full snapshots remain mandatory for local
 profiles, core motion/modes, granules, force work, and a complete outer wave
 ledger.  The lagRamses patch document is
@@ -469,7 +474,7 @@ verified status proves only that the declared
 one configuration.  It still does not prove solver consumption; that claim
 starts only with a separately validated runtime provenance record.
 
-After the first normal FDM output, verify the runtime V2/V3 provenance against
+After the first normal FDM output, verify the runtime V2/V3/V4/V5 provenance against
 the same materialized seed:
 
 ```bash
@@ -479,7 +484,7 @@ python scripts/validate_dual_soliton_runtime_identity.py \
   results/pure_fdm_dual_soliton_runtime_identity.json
 ```
 
-`runtime_seed_identity_verified` establishes only that the raw V2/V3 output
+`runtime_seed_identity_verified` establishes only that the raw V2/V3/V4/V5 output
 declares the same all-wave two-core configuration and passes the raw
 force/current coverage gate.  It does not relax, calibrate, or otherwise
 accept the physical merger calculation.
@@ -508,11 +513,15 @@ between the raw FDM and DM run-provenance controls.  It supports the normal
 `output_XXXXX/group_00001/` metadata layout without guessing group
 directories.
 
-The current writer does not emit a run UUID or restart/checkpoint-parent
-lineage.  Thus this output-set decision is not an attestation that all listed
-outputs come from one uninterrupted restart branch.  A suspected branch mix
-remains conditional and cannot support a production relaxation or delay
-result until the future solver-side lineage record is available.
+V4 emits one execution-instance token per solver invocation.  V5 records the
+parent token read from the concrete restart-parent raw provenance.  The
+verifier requires each token to have one restart parent, rejects a first
+listed segment with an unlisted parent, and permits a token transition only
+when the child names both the immediately preceding output number and its
+exact parent token.  V2/V3 output identity remains conditional because it has
+no such discriminator.  V5 still does not supply a cryptographic run UUID or
+a complete checkpoint lineage, so a suspected token collision or fork remains
+conditional and cannot support a production delay result.
 
 The relaxation consumer re-reads that saved decision, re-hashes its seed
 manifest and raw provenance, and reconstructs the decision before use.  A
@@ -520,7 +529,7 @@ copied status field, a changed raw provenance file, or a stale seed manifest
 therefore cannot authorize the relaxation window.
 
 Before writing the relaxation evidence table, a manual Lageunha extractor
-must list the raw V3 provenance path for every selected output in a small
+must list the raw V3/V4/V5 provenance path for every selected output in a small
 JSON manifest (`raw_fdm_provenance_paths`).  The binding code reads each
 record itself, verifies its two-soliton configuration against the seed, and
 requires and hashes every per-CPU `fdm_*.outNNNNN` and corresponding
@@ -539,7 +548,7 @@ python scripts/materialize_dual_soliton_relaxation_sample_ledger.py \
 
 The resulting ledger is required by the relaxation evidence.  It requires the
 manifest's raw-provenance paths to be exactly the verified output-set paths;
-an omitted, added, or substituted V3 output is rejected.  It is still source
+an omitted, added, or substituted V3/V4/V5 output is rejected.  It is still source
 identity only: the core properties and the wave mass, Hamiltonian, and
 angular-momentum series must still be measured from those sources by a
 declared extractor.  Bind that diagnostic series to both the exact sample
@@ -564,11 +573,11 @@ relaxation inputs and must be re-extracted rather than relabelled as verified.
 V2 output identity remains useful for declared-case/run-root/namelist/build
 provenance, but it cannot enter the relaxation source ledger because it lacks
 the expected MPI-rank count.  V3 closes the declared shard-set completeness
-check, not solver execution or restart-branch lineage.  Similarly, extractor
-bytes and a declared version do not prove extractor execution.  The current
-assessment is only a conditional declared-series threshold result; it cannot
-be cited as a relaxation or conservation pass until extractor-execution and
-continuous-branch attestations are implemented.
+check; V5 adds an exact parent-token check at each listed restart transition.
+Neither proves extractor execution or a globally collision-free checkpoint
+lineage.  The current assessment is only a conditional declared-series
+threshold result; it cannot be cited as a relaxation or conservation pass
+until extractor-execution and continuous-branch attestations are implemented.
 
 The bounded initial relaxation window is assessed separately from the full
 time-resolved snapshots.  Its evidence table must preserve both core masses,

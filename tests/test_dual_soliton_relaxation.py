@@ -309,12 +309,12 @@ def test_relaxation_sample_ledger_accepts_grouped_v3_shards(tmp_path: Path) -> N
     )
 
 
-def test_runtime_output_identity_accepts_v2_but_relaxation_ledger_requires_v3(
+def test_runtime_output_identity_accepts_v2_but_relaxation_ledger_requires_v3_or_later(
     tmp_path: Path,
 ) -> None:
     identity = tmp_path / "runtime-identity.json"
     _identity(identity, raw_provenance_version=2)
-    with pytest.raises(ValueError, match="requires V3 raw FDM provenance"):
+    with pytest.raises(ValueError, match="requires V3/V4/V5 raw FDM provenance"):
         _sample_ledger(identity)
 
 

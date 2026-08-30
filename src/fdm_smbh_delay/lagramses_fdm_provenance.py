@@ -44,6 +44,10 @@ _V3_OUTPUT_SET_KEYS = {
     "restart_parent_output",
 }
 _V3_REQUIRED_KEYS = _V2_REQUIRED_KEYS | _V3_OUTPUT_SET_KEYS
+_V4_EXECUTION_INSTANCE_KEYS = {"execution_instance_id"}
+_V4_REQUIRED_KEYS = _V3_REQUIRED_KEYS | _V4_EXECUTION_INSTANCE_KEYS
+_V5_RESTART_PARENT_EXECUTION_KEYS = {"restart_parent_execution_instance_id"}
+_V5_REQUIRED_KEYS = _V4_REQUIRED_KEYS | _V5_RESTART_PARENT_EXECUTION_KEYS
 
 
 def _file_sha256(path: Path) -> str:
@@ -107,6 +111,8 @@ class LagRamsesFDMOuterWaveProvenance:
     nstep_coarse: int
     mpi_ncpu: int | None
     restart_parent_output: int | None
+    execution_instance_id: str | None
+    restart_parent_execution_instance_id: str | None
     m_axion_ev: float
     hbar_code: float
     fdm_use_hjm: bool
@@ -206,13 +212,24 @@ class LagRamsesFDMOuterWaveProvenance:
         if self.source_schema_version == 3:
             record["mpi_ncpu"] = self.mpi_ncpu
             record["restart_parent_output"] = self.restart_parent_output
+        elif self.source_schema_version == 4:
+            record["mpi_ncpu"] = self.mpi_ncpu
+            record["restart_parent_output"] = self.restart_parent_output
+            record["execution_instance_id"] = self.execution_instance_id
+        elif self.source_schema_version == 5:
+            record["mpi_ncpu"] = self.mpi_ncpu
+            record["restart_parent_output"] = self.restart_parent_output
+            record["execution_instance_id"] = self.execution_instance_id
+            record["restart_parent_execution_instance_id"] = (
+                self.restart_parent_execution_instance_id
+            )
         return record
 
 
 def read_lagramses_fdm_outer_wave_provenance(
     path: str | Path,
 ) -> LagRamsesFDMOuterWaveProvenance:
-    """Parse one V1/V2/V3 raw record and reject missing, duplicate, or altered keys."""
+    """Parse one V1/V2/V3/V4/V5 raw record and reject missing, duplicate, or altered keys."""
 
     resolved = Path(path).expanduser().resolve()
     try:
@@ -231,6 +248,12 @@ def read_lagramses_fdm_outer_wave_provenance(
     elif header == "# fdm_outer_wave_provenance_v3":
         source_schema_version = 3
         required_keys = _V3_REQUIRED_KEYS
+    elif header == "# fdm_outer_wave_provenance_v4":
+        source_schema_version = 4
+        required_keys = _V4_REQUIRED_KEYS
+    elif header == "# fdm_outer_wave_provenance_v5":
+        source_schema_version = 5
+        required_keys = _V5_REQUIRED_KEYS
     else:
         raise ValueError("unsupported lagRamses FDM provenance schema")
     values: dict[str, str] = {}
@@ -337,7 +360,7 @@ def read_lagramses_fdm_outer_wave_provenance(
 
     mpi_ncpu: int | None = None
     restart_parent_output: int | None = None
-    if source_schema_version == 3:
+    if source_schema_version >= 3:
         mpi_ncpu = _integer(values["mpi_ncpu"], "mpi_ncpu", nonnegative=True)
         if not 1 <= mpi_ncpu <= 99999:
             raise ValueError("mpi_ncpu must lie in [1, 99999]")
@@ -346,6 +369,38 @@ def read_lagramses_fdm_outer_wave_provenance(
             "restart_parent_output",
             nonnegative=True,
         )
+    execution_instance_id: str | None = None
+    if source_schema_version >= 4:
+        execution_instance_id = values["execution_instance_id"]
+        if (
+            not execution_instance_id
+            or len(execution_instance_id) > 80
+            or any(
+                character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+                for character in execution_instance_id
+            )
+        ):
+            raise ValueError("execution_instance_id is invalid")
+    restart_parent_execution_instance_id: str | None = None
+    if source_schema_version == 5:
+        restart_parent_execution_instance_id = values[
+            "restart_parent_execution_instance_id"
+        ]
+        if restart_parent_output == 0:
+            if restart_parent_execution_instance_id != "none":
+                raise ValueError(
+                    "initial V5 provenance must use restart_parent_execution_instance_id=none"
+                )
+        elif (
+            not restart_parent_execution_instance_id
+            or restart_parent_execution_instance_id == "none"
+            or len(restart_parent_execution_instance_id) > 80
+            or any(
+                character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+                for character in restart_parent_execution_instance_id
+            )
+        ):
+            raise ValueError("restart_parent_execution_instance_id is invalid")
 
     return LagRamsesFDMOuterWaveProvenance(
         source_path=resolved,
@@ -356,6 +411,8 @@ def read_lagramses_fdm_outer_wave_provenance(
         nstep_coarse=_integer(values["nstep_coarse"], "nstep_coarse", nonnegative=True),
         mpi_ncpu=mpi_ncpu,
         restart_parent_output=restart_parent_output,
+        execution_instance_id=execution_instance_id,
+        restart_parent_execution_instance_id=restart_parent_execution_instance_id,
         m_axion_ev=_float(values["m_axion_ev"], "m_axion_ev", nonnegative=True),
         hbar_code=_float(values["hbar_code"], "hbar_code", nonnegative=True),
         fdm_use_hjm=_logical(values["fdm_use_hjm"], "fdm_use_hjm"),
