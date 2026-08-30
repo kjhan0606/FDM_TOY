@@ -4,6 +4,7 @@ import pytest
 
 from fdm_smbh_delay.delay_budget import (
     DelaySegment,
+    compose_delay_segments,
     compose_true_merge_time,
     cosmic_age_myr,
     redshift_after_delay,
@@ -20,6 +21,26 @@ def test_complete_true_merge_budget() -> None:
     assert result.status == "complete"
     assert result.total_delay_myr == pytest.approx(54.0)
     assert result.true_merge_time_myr == pytest.approx(1054.0)
+
+
+def test_model_neutral_composer_preserves_the_caller_stage_names() -> None:
+    result = compose_delay_segments(
+        1000.0,
+        (
+            DelaySegment("capture_to_hard_binary", "complete", 20.0),
+            DelaySegment("hard_binary_to_gw_regime", "complete", 4.0),
+        ),
+    )
+    assert result.status == "complete"
+    assert result.total_delay_myr == pytest.approx(24.0)
+    with pytest.raises(ValueError, match="names must be unique"):
+        compose_delay_segments(
+            1.0,
+            (
+                DelaySegment("same", "complete", 1.0),
+                DelaySegment("same", "complete", 1.0),
+            ),
+        )
 
 
 def test_missing_or_timeout_is_never_silently_zero() -> None:

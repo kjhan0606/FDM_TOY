@@ -112,6 +112,11 @@ The returned complete segment retains the zoom source case and SHA-256. An
 unmeasured physical point returns a censored segment; the consumer never
 interpolates or extrapolates the zoom correction.
 
+CDM comparison runs use a separate, provenance-gated capture-to-hardening-to-
+GW interface.  It requires accepted CDM resolution and phase evidence for
+each environmental interval and rejects HR5-style fixed population delays:
+[`docs/CDM_COALESCENCE_INTERFACE.md`](docs/CDM_COALESCENCE_INTERFACE.md).
+
 ## Example configuration
 
 ```yaml

@@ -89,13 +89,36 @@ def compose_true_merge_time(
 ) -> TrueMergeEstimate:
     """Add three physical intervals without treating missing physics as zero."""
 
+    return compose_delay_segments(
+        sink_time_myr,
+        (kpc_to_pc, fdm_pc_to_0p01pc, gravitational_wave),
+    )
+
+
+def compose_delay_segments(
+    sink_time_myr: float,
+    segments: tuple[DelaySegment, ...],
+) -> TrueMergeEstimate:
+    """Compose named physical intervals without assigning missing time to zero.
+
+    This is deliberately model-neutral.  Callers retain their model-specific
+    segment names and must establish the physics of every completed segment
+    before asking this function to add it.
+    """
+
     if (
         isinstance(sink_time_myr, bool)
         or not math.isfinite(sink_time_myr)
         or sink_time_myr < 0.0
     ):
         raise ValueError("sink_time_myr must be finite and non-negative")
-    segments = (kpc_to_pc, fdm_pc_to_0p01pc, gravitational_wave)
+    if not segments:
+        raise ValueError("at least one physical delay segment is required")
+    names = tuple(segment.name for segment in segments)
+    if any(not isinstance(name, str) or not name.strip() for name in names):
+        raise ValueError("delay segment names must be non-empty text")
+    if len(set(names)) != len(names):
+        raise ValueError("delay segment names must be unique")
     missing = tuple(segment.name for segment in segments if segment.status == "missing")
     censored = tuple(
         segment.name
