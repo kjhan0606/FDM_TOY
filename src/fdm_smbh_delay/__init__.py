@@ -58,6 +58,12 @@ from .cdm_zoom_runtime_identity import (
     CDMNonCompactingZoomRuntimeIdentity,
     assess_cdm_noncompacting_zoom_runtime_identity,
 )
+from .fdm_zoom_runtime_identity import (
+    FDMZoomRuntimeOutputIdentity,
+    VerifiedFDMZoomRuntimeOutputs,
+    assess_fdm_declared_zoom_runtime_outputs,
+    read_verified_fdm_declared_zoom_runtime_outputs,
+)
 from .dm_comparison import (
     DMComparisonCaptureEnsemble,
     DMComparisonCaptureRegistration,
@@ -183,6 +189,8 @@ __all__ = [
     "CaptureSeedMaterializationBinding",
     "FDMCaptureSeedZoomBinding",
     "FDMDeclaredRunInputBinding",
+    "FDMZoomRuntimeOutputIdentity",
+    "VerifiedFDMZoomRuntimeOutputs",
     "CaptureSolitonConfiguration",
     "CaptureDMRunBinding",
     "CDMNonCompactingZoomRunContract",
@@ -266,6 +274,7 @@ __all__ = [
     "assess_capture_seed_materialization_binding",
     "assess_fdm_capture_seed_zoom_binding",
     "assess_fdm_declared_run_input_binding",
+    "assess_fdm_declared_zoom_runtime_outputs",
     "assess_dm_comparison_physics_inputs",
     "assess_dm_comparison_smoke_outputs",
     "assess_model_specific_phase_ensemble",
@@ -288,6 +297,7 @@ __all__ = [
     "read_verified_capture_seed_materialization_binding",
     "read_verified_fdm_capture_seed_zoom_binding",
     "read_verified_fdm_declared_run_input_binding",
+    "read_verified_fdm_declared_zoom_runtime_outputs",
     "read_verified_pure_fdm_dual_soliton_runtime_identity",
     "read_verified_pure_fdm_dual_soliton_run_preflight",
     "read_lagramses_namelist_assignment",

@@ -23,6 +23,7 @@ from fdm_smbh_delay.dual_soliton_seed import (
     DualSolitonComponent,
     PureFDMDualSolitonSeed,
     materialize_pure_fdm_dual_soliton_seed,
+    read_materialized_pure_fdm_dual_soliton_seed,
 )
 from fdm_smbh_delay.dual_soliton_preflight import (
     preflight_pure_fdm_dual_soliton_run,
@@ -32,6 +33,10 @@ from fdm_smbh_delay.fdm_zoom_seed_binding import (
     materialize_fdm_declared_run_input_binding,
     read_verified_fdm_capture_seed_zoom_binding,
     read_verified_fdm_declared_run_input_binding,
+)
+from fdm_smbh_delay.fdm_zoom_runtime_identity import (
+    assess_fdm_declared_zoom_runtime_outputs,
+    read_verified_fdm_declared_zoom_runtime_outputs,
 )
 from fdm_smbh_delay.model_zoom_materialization import (
     materialize_model_zoom_execution_contract,
@@ -254,6 +259,10 @@ def _prepare(
             (
                 "&PHYSICS_PARAMS",
                 *(f"{key}='{value}'" for key, value in sorted(identity.items())),
+                "smbh=.true.",
+                "rmerge=0.0d0",
+                "smbh_capture_ledger=.true.",
+                "smbh_capture_ledger_file='capture.jsonl'",
                 "/",
                 "&RUN_PARAMS",
                 "use_fdm=.true.",
@@ -336,6 +345,7 @@ def test_materializes_and_rechecks_fdm_capture_seed_zoom_identity(tmp_path: Path
     declared = materialize_fdm_declared_run_input_binding(
         fdm_capture_seed_zoom_binding_path=tmp_path / "binding" / "fdm_capture_seed_zoom_binding.json",
         dual_soliton_preflight_path=preflight_path,
+        expected_build_git_hash="a" * 40,
         output_directory=tmp_path / "declared-run",
     )
     assert declared["status"] == "fdm_declared_run_input_identity_verified"
@@ -382,10 +392,27 @@ def test_declared_run_binding_requires_case_wave_level_in_fdm_params(tmp_path: P
     record = materialize_fdm_declared_run_input_binding(
         fdm_capture_seed_zoom_binding_path=tmp_path / "binding" / "fdm_capture_seed_zoom_binding.json",
         dual_soliton_preflight_path=preflight_path,
+        expected_build_git_hash="a" * 40,
         output_directory=tmp_path / "declared-run",
     )
     assert record["status"] == "fdm_declared_run_input_identity_not_verified"
     assert any("fdm_first_wave_level" in reason for reason in record["reasons"])
+
+
+def test_preflight_requires_explicit_noncompacting_smbh_controls(tmp_path: Path) -> None:
+    _prepare(tmp_path)
+    namelist = tmp_path / "run.nml"
+    namelist.write_text(
+        namelist.read_text(encoding="utf-8").replace("rmerge=0.0d0", "rmerge=1.0d-15"),
+        encoding="utf-8",
+    )
+    decision = preflight_pure_fdm_dual_soliton_run(
+        seed_manifest_path=tmp_path / "seed" / "dual_soliton_seed_manifest.json",
+        run_namelist_path=namelist,
+        run_ic_sink_path=tmp_path / "seed" / "ic_sink",
+    )
+    assert not decision.ready
+    assert any("rmerge" in reason for reason in decision.reasons)
 
 
 def test_materializes_a_missing_source_as_a_nonverified_record(tmp_path: Path) -> None:
@@ -398,3 +425,294 @@ def test_materializes_a_missing_source_as_a_nonverified_record(tmp_path: Path) -
     assert record["status"] == "fdm_capture_seed_zoom_identity_not_verified"
     assert (output / "fdm_capture_seed_zoom_binding.json").is_file()
     assert record["sources"]["seed_manifest"]["sha256"] is None
+
+
+def _declared_run_binding(tmp_path: Path) -> tuple[Path, Path, Path]:
+    contract, capture_binding = _prepare(tmp_path)
+    materialize_fdm_capture_seed_zoom_binding(
+        model_zoom_contract_path=contract,
+        capture_seed_binding_path=capture_binding,
+        output_directory=tmp_path / "binding",
+    )
+    seed_manifest = tmp_path / "seed" / "dual_soliton_seed_manifest.json"
+    preflight = preflight_pure_fdm_dual_soliton_run(
+        seed_manifest_path=seed_manifest,
+        run_namelist_path=tmp_path / "run.nml",
+        run_ic_sink_path=tmp_path / "seed" / "ic_sink",
+    )
+    assert preflight.ready
+    preflight_path = tmp_path / "dual_soliton_preflight.json"
+    preflight_path.write_text(json.dumps(preflight.as_dict()), encoding="utf-8")
+    materialize_fdm_declared_run_input_binding(
+        fdm_capture_seed_zoom_binding_path=tmp_path / "binding" / "fdm_capture_seed_zoom_binding.json",
+        dual_soliton_preflight_path=preflight_path,
+        expected_build_git_hash="a" * 40,
+        output_directory=tmp_path / "declared-run",
+    )
+    return (
+        tmp_path / "declared-run" / "fdm_declared_run_input_binding.json",
+        tmp_path / "run.nml",
+        seed_manifest,
+    )
+
+
+def _write_fdm_runtime_output(
+    root: Path,
+    *,
+    number: int,
+    run_namelist: Path,
+    seed_manifest: Path,
+    grouped: bool = False,
+    compilation_text: str = "last commit = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+    time_code: float | None = None,
+) -> Path:
+    label = f"{number:05d}"
+    output = root / f"output_{label}"
+    output.mkdir()
+    metadata = output / "group_00001" if grouped else output
+    metadata.mkdir(exist_ok=True)
+    seed = read_materialized_pure_fdm_dual_soliton_seed(seed_manifest)
+    contract = json.loads(
+        (root / "zoom_contract" / "model_zoom_execution_contract.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    identity = contract["model_zoom_execution_identity"]
+    actual_time = float(number) / 10.0 if time_code is None else time_code
+    aexp = 0.5 + float(number) / 1000.0
+    (output / "COMPLETE").write_text(label + "\n", encoding="utf-8")
+    (metadata / "namelist.txt").write_bytes(run_namelist.read_bytes())
+    (metadata / "compilation.txt").write_text(compilation_text, encoding="utf-8")
+    (metadata / f"info_{label}.txt").write_text(
+        f"time = {actual_time:.16e}\n"
+        f"aexp = {aexp:.16e}\n"
+        "unit_t = 3.15576d13\n",
+        encoding="utf-8",
+    )
+    (metadata / f"dm_run_provenance_{label}.txt").write_text(
+        "# dm_run_provenance_v1\n"
+        "dark_matter_model = fdm\n"
+        "pic_enabled = .true.\n"
+        "sidm_enabled = .false.\n"
+        "fdm_enabled = .true.\n"
+        f"nstep_coarse = {number}\n"
+        f"time_code = {actual_time:.16e}\n"
+        f"aexp = {aexp:.16e}\n"
+        "build_git_hash = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+        "namelist_copy = namelist.txt\n"
+        "compilation_copy = compilation.txt\n"
+        "smbh_capture_ledger_enabled = .true.\n"
+        "smbh_capture_ledger_file = capture.jsonl\n"
+        "smbh_merge_radius_cells = 0.0\n"
+        "smbh_compaction_mode = no_finite_radius_rmerge_zero\n"
+        "model_zoom_execution_identity_status = available\n"
+        f"model_zoom_manifest_sha256 = {identity['model_zoom_manifest_sha256']}\n"
+        f"model_zoom_case_id = {identity['model_zoom_case_id']}\n"
+        "model_zoom_levelmax = 19\n"
+        f"model_zoom_capture_event_sha256 = {identity['model_zoom_capture_event_sha256']}\n"
+        f"model_zoom_initial_conditions_sha256 = {identity['model_zoom_initial_conditions_sha256']}\n"
+        f"model_zoom_baryon_configuration_sha256 = {identity['model_zoom_baryon_configuration_sha256']}\n"
+        f"model_zoom_sink_initial_conditions_sha256 = {identity['model_zoom_sink_initial_conditions_sha256']}\n"
+        f"m_axion_ev = {seed.m_axion_ev:.16e}\n"
+        "fdm_use_hjm = .false.\n"
+        "fdm_first_wave_level = 1\n"
+        "fdm_outer_ledger_enabled = .true.\n"
+        "fdm_force_accounting = resolved_wave_only\n",
+        encoding="utf-8",
+    )
+    first, second = seed.solitons
+    (output / f"fdm_outer_wave_provenance_{label}.txt").write_text(
+        "# fdm_outer_wave_provenance_v2\n"
+        f"time_code = {actual_time:.16e}\n"
+        f"aexp = {aexp:.16e}\n"
+        f"nstep_coarse = {number}\n"
+        f"m_axion_ev = {seed.m_axion_ev:.16e}\n"
+        "hbar_code = 2.0000000000000000e-03\n"
+        "fdm_use_hjm = .false.\n"
+        "fdm_first_wave_level = 1\n"
+        "analytic_fdm_drag_enabled = .false.\n"
+        "force_accounting = resolved_wave_only\n"
+        "leaf_mass_code = 7.0000000000000000e+00\n"
+        "integrated_current_code = 0.0 0.0 0.0\n"
+        "leaf_cell_count = 100.0\n"
+        "complete_current_stencil_cell_count = 98.0\n"
+        "complete_current_stencil_fraction = 0.98\n"
+        f"psi_snapshot_prefix = fdm_{label}.out\n"
+        "fdm_dual_soliton_ic = .true.\n"
+        f"fdm_dual_soliton_profile_c = {seed.profile_c:.16e}\n"
+        f"fdm_dual_soliton_rho0 = {first.rho0_code:.16e} {second.rho0_code:.16e}\n"
+        f"fdm_dual_soliton_rc_box = {first.core_radius_box:.16e} {second.core_radius_box:.16e}\n"
+        "fdm_dual_soliton_center_box_1 = "
+        + " ".join(f"{value:.16e}" for value in first.center_box)
+        + "\nfdm_dual_soliton_center_box_2 = "
+        + " ".join(f"{value:.16e}" for value in second.center_box)
+        + "\nfdm_dual_soliton_velocity_1 = "
+        + " ".join(f"{value:.16e}" for value in first.velocity_code)
+        + "\nfdm_dual_soliton_velocity_2 = "
+        + " ".join(f"{value:.16e}" for value in second.velocity_code)
+        + f"\nfdm_dual_soliton_phase = {first.phase_radians:.16e} {second.phase_radians:.16e}\n",
+        encoding="utf-8",
+    )
+    snapshot_directory = metadata
+    for shard in ("00001", "00002"):
+        (snapshot_directory / f"fdm_{label}.out{shard}").write_text(
+            f"FDM snapshot {label} shard {shard}\n", encoding="utf-8"
+        )
+        (snapshot_directory / f"amr_{label}.out{shard}").write_text(
+            f"AMR topology {label} shard {shard}\n", encoding="utf-8"
+        )
+    return output
+
+
+def test_binds_completed_fdm_outputs_to_one_declared_seed_zoom_run(tmp_path: Path) -> None:
+    declared, namelist, seed_manifest = _declared_run_binding(tmp_path)
+    first = _write_fdm_runtime_output(
+        tmp_path, number=1, run_namelist=namelist, seed_manifest=seed_manifest
+    )
+    second = _write_fdm_runtime_output(
+        tmp_path,
+        number=2,
+        run_namelist=namelist,
+        seed_manifest=seed_manifest,
+        grouped=True,
+    )
+    decision = assess_fdm_declared_zoom_runtime_outputs(declared, [first, second])
+    assert decision.verified
+    assert [item["output_number"] for item in decision.as_dict()["complete_outputs"]] == [
+        "00001",
+        "00002",
+    ]
+    identity_path = tmp_path / "fdm-runtime-output-identity.json"
+    identity_path.write_text(json.dumps(decision.as_dict()), encoding="utf-8")
+    verified = read_verified_fdm_declared_zoom_runtime_outputs(identity_path)
+    assert verified.declared_run.declared.zoom_case_id == decision.zoom_case_id
+    assert verified.raw_fdm_provenance_paths == (
+        first / "fdm_outer_wave_provenance_00001.txt",
+        second / "fdm_outer_wave_provenance_00002.txt",
+    )
+
+
+def test_rejects_an_output_with_a_different_copied_namelist(tmp_path: Path) -> None:
+    declared, namelist, seed_manifest = _declared_run_binding(tmp_path)
+    output = _write_fdm_runtime_output(
+        tmp_path, number=1, run_namelist=namelist, seed_manifest=seed_manifest
+    )
+    copied = output / "namelist.txt"
+    copied.write_text(copied.read_text(encoding="utf-8") + "! altered\n", encoding="utf-8")
+    decision = assess_fdm_declared_zoom_runtime_outputs(declared, [output])
+    assert not decision.verified
+    assert any("namelist copy differs" in reason for reason in decision.reasons)
+
+
+def test_rejects_a_runtime_output_with_smbh_compaction_enabled(tmp_path: Path) -> None:
+    declared, namelist, seed_manifest = _declared_run_binding(tmp_path)
+    output = _write_fdm_runtime_output(
+        tmp_path, number=1, run_namelist=namelist, seed_manifest=seed_manifest
+    )
+    provenance = output / "dm_run_provenance_00001.txt"
+    provenance.write_text(
+        provenance.read_text(encoding="utf-8")
+        .replace("smbh_merge_radius_cells = 0.0", "smbh_merge_radius_cells = 1.0")
+        .replace(
+            "smbh_compaction_mode = no_finite_radius_rmerge_zero",
+            "smbh_compaction_mode = enabled",
+        ),
+        encoding="utf-8",
+    )
+    decision = assess_fdm_declared_zoom_runtime_outputs(declared, [output])
+    assert not decision.verified
+    assert any("non-compacting SMBH mode" in reason for reason in decision.reasons)
+
+
+def test_rejects_a_mixed_build_or_raw_time_in_fdm_output_set(tmp_path: Path) -> None:
+    declared, namelist, seed_manifest = _declared_run_binding(tmp_path)
+    first = _write_fdm_runtime_output(
+        tmp_path, number=1, run_namelist=namelist, seed_manifest=seed_manifest
+    )
+    second = _write_fdm_runtime_output(
+        tmp_path,
+        number=2,
+        run_namelist=namelist,
+        seed_manifest=seed_manifest,
+        compilation_text=(
+            "last commit = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+            "different compilation controls\n"
+        ),
+    )
+    decision = assess_fdm_declared_zoom_runtime_outputs(declared, [first, second])
+    assert not decision.verified
+    assert "outputs do not share one compilation-copy SHA-256" in decision.reasons
+
+    raw = second / "fdm_outer_wave_provenance_00002.txt"
+    raw.write_text(
+        raw.read_text(encoding="utf-8").replace("time_code = 2.0000000000000001e-01", "time_code = 9.0000000000000002e-01"),
+        encoding="utf-8",
+    )
+    decision = assess_fdm_declared_zoom_runtime_outputs(declared, [first, second])
+    assert not decision.verified
+    assert any("time/step differs" in reason for reason in decision.reasons)
+
+
+def test_saved_fdm_output_identity_rejects_a_changed_raw_provenance(tmp_path: Path) -> None:
+    declared, namelist, seed_manifest = _declared_run_binding(tmp_path)
+    output = _write_fdm_runtime_output(
+        tmp_path, number=1, run_namelist=namelist, seed_manifest=seed_manifest
+    )
+    decision = assess_fdm_declared_zoom_runtime_outputs(declared, [output])
+    assert decision.verified
+    identity_path = tmp_path / "fdm-runtime-output-identity.json"
+    identity_path.write_text(json.dumps(decision.as_dict()), encoding="utf-8")
+    raw = output / "fdm_outer_wave_provenance_00001.txt"
+    raw.write_text(raw.read_text(encoding="utf-8") + "# changed\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="output metadata no longer matches"):
+        read_verified_fdm_declared_zoom_runtime_outputs(identity_path)
+
+
+def test_rejects_a_raw_snapshot_prefix_or_time_order_that_disagrees_with_output_labels(
+    tmp_path: Path,
+) -> None:
+    declared, namelist, seed_manifest = _declared_run_binding(tmp_path)
+    first = _write_fdm_runtime_output(
+        tmp_path,
+        number=1,
+        run_namelist=namelist,
+        seed_manifest=seed_manifest,
+        time_code=0.2,
+    )
+    second = _write_fdm_runtime_output(
+        tmp_path,
+        number=2,
+        run_namelist=namelist,
+        seed_manifest=seed_manifest,
+        time_code=0.1,
+    )
+    decision = assess_fdm_declared_zoom_runtime_outputs(declared, [first, second])
+    assert not decision.verified
+    assert "output times are not strictly increasing" in decision.reasons
+
+    raw = second / "fdm_outer_wave_provenance_00002.txt"
+    raw.write_text(
+        raw.read_text(encoding="utf-8").replace(
+            "psi_snapshot_prefix = fdm_00002.out",
+            "psi_snapshot_prefix = fdm_00001.out",
+        ),
+        encoding="utf-8",
+    )
+    decision = assess_fdm_declared_zoom_runtime_outputs(declared, [second])
+    assert not decision.verified
+    assert any("psi snapshot prefix" in reason for reason in decision.reasons)
+
+
+def test_saved_fdm_output_identity_rejects_an_overclaimed_interpretation(tmp_path: Path) -> None:
+    declared, namelist, seed_manifest = _declared_run_binding(tmp_path)
+    output = _write_fdm_runtime_output(
+        tmp_path, number=1, run_namelist=namelist, seed_manifest=seed_manifest
+    )
+    decision = assess_fdm_declared_zoom_runtime_outputs(declared, [output])
+    assert decision.verified
+    record = decision.as_dict()
+    record["interpretation"] = "physical relaxation has been demonstrated"
+    identity_path = tmp_path / "fdm-runtime-output-identity.json"
+    identity_path.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(ValueError, match="no longer matches its source inputs"):
+        read_verified_fdm_declared_zoom_runtime_outputs(identity_path)

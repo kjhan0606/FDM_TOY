@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 import subprocess
 import sys
@@ -12,15 +13,21 @@ from fdm_smbh_delay.dual_soliton_relaxation import (
     assess_dual_soliton_relaxation,
     materialize_dual_soliton_relaxation_diagnostic_provenance,
     materialize_dual_soliton_relaxation_sample_ledger,
+    read_verified_dual_soliton_relaxation_sample_ledger,
 )
 from fdm_smbh_delay.dual_soliton_preflight import (
     validate_pure_fdm_dual_soliton_runtime_identity,
 )
 from fdm_smbh_delay.dual_soliton_seed import (
-    DualSMBHSinkSeed,
-    DualSolitonComponent,
-    PureFDMDualSolitonSeed,
     materialize_pure_fdm_dual_soliton_seed,
+    read_materialized_pure_fdm_dual_soliton_seed,
+)
+from fdm_smbh_delay.fdm_zoom_runtime_identity import (
+    assess_fdm_declared_zoom_runtime_outputs,
+)
+from test_fdm_zoom_seed_binding import (
+    _declared_run_binding,
+    _write_fdm_runtime_output,
 )
 
 
@@ -31,68 +38,23 @@ def _identity(path: Path, *, status: str = "runtime_seed_identity_verified") -> 
             encoding="utf-8",
         )
         return
-    seed = PureFDMDualSolitonSeed(
-        case_id="case-a",
-        dark_matter_model="fdm",
-        stellar_status="absent",
-        gas_status="absent",
-        box_length_code=1.0,
-        m_axion_ev=1.0e-21,
-        profile_c=0.091,
-        solitons=(
-            DualSolitonComponent(4.0, 0.1, (0.35, 0.5, 0.5), (0.0, 0.02, 0.0), 0.0),
-            DualSolitonComponent(3.0, 0.1, (0.65, 0.5, 0.5), (0.0, -0.02, 0.0), 1.0),
-        ),
-        sinks=(
-            DualSMBHSinkSeed(
-                1.0e-4,
-                5.0e-5,
-                (0.35, 0.5, 0.5),
-                (0.0, 0.02, 0.0),
-                (0.0, 0.0, 1.0e-5),
-            ),
-            DualSMBHSinkSeed(
-                8.0e-5,
-                2.5e-5,
-                (0.65, 0.5, 0.5),
-                (0.0, -0.02, 0.0),
-                (0.0, 0.0, -1.0e-5),
-            ),
-        ),
-    )
-    materialized = path.parent / "seed"
-    materialize_pure_fdm_dual_soliton_seed(seed, materialized)
-    provenance = path.parent / "fdm_outer_wave_provenance.txt"
-    provenance.write_text(
-        "# fdm_outer_wave_provenance_v2\n"
-        "time_code = 1.0d0\n"
-        "aexp = 5.0d-1\n"
-        "nstep_coarse = 42\n"
-        "m_axion_ev = 1.0d-21\n"
-        "hbar_code = 2.0d-3\n"
-        "fdm_use_hjm = F\n"
-        "fdm_first_wave_level = 0\n"
-        "analytic_fdm_drag_enabled = F\n"
-        "force_accounting = resolved_wave_only\n"
-        "leaf_mass_code = 3.0d0\n"
-        "integrated_current_code = 1.0d-2 -2.0d-2 3.0d-2\n"
-        "leaf_cell_count = 100.0d0\n"
-        "complete_current_stencil_cell_count = 98.0d0\n"
-        "complete_current_stencil_fraction = 9.8d-1\n"
-        "psi_snapshot_prefix = fdm_00042.out\n"
-        "fdm_dual_soliton_ic = T\n"
-        "fdm_dual_soliton_profile_c = 9.1d-2\n"
-        "fdm_dual_soliton_rho0 = 4.0d0 3.0d0\n"
-        "fdm_dual_soliton_rc_box = 1.0d-1 1.0d-1\n"
-        "fdm_dual_soliton_center_box_1 = 3.5d-1 5.0d-1 5.0d-1\n"
-        "fdm_dual_soliton_center_box_2 = 6.5d-1 5.0d-1 5.0d-1\n"
-        "fdm_dual_soliton_velocity_1 = 0.0d0 2.0d-2 0.0d0\n"
-        "fdm_dual_soliton_velocity_2 = 0.0d0 -2.0d-2 0.0d0\n"
-        "fdm_dual_soliton_phase = 0.0d0 1.0d0\n",
-        encoding="utf-8",
-    )
+    declared, namelist, seed_manifest = _declared_run_binding(path.parent)
+    outputs = [
+        _write_fdm_runtime_output(
+            path.parent,
+            number=number,
+            run_namelist=namelist,
+            seed_manifest=seed_manifest,
+        )
+        for number in (1, 2, 3, 4)
+    ]
+    output_decision = assess_fdm_declared_zoom_runtime_outputs(declared, outputs)
+    assert output_decision.verified
+    output_identity = path.parent / "fdm-runtime-output-identity.json"
+    output_identity.write_text(json.dumps(output_decision.as_dict()), encoding="utf-8")
+    provenance = outputs[0] / "fdm_outer_wave_provenance_00001.txt"
     identity = validate_pure_fdm_dual_soliton_runtime_identity(
-        seed_manifest_path=materialized / "dual_soliton_seed_manifest.json",
+        seed_manifest_path=seed_manifest,
         provenance_path=provenance,
     )
     path.write_text(
@@ -102,39 +64,11 @@ def _identity(path: Path, *, status: str = "runtime_seed_identity_verified") -> 
 
 
 def _sample_ledger(identity_path: Path) -> Path:
-    runtime_provenance = identity_path.parent / "fdm_outer_wave_provenance.txt"
-    runtime_text = runtime_provenance.read_text(encoding="utf-8")
-    raw_provenance_paths = []
-    for index, (time_code, aexp, nstep_coarse) in enumerate(
-        ((0.0, 0.45, 1), (0.1, 0.46, 5), (0.2, 0.47, 9))
-    ):
-        output = identity_path.parent / f"output_{index:05d}"
-        output.mkdir()
-        prefix = f"fdm_{index:05d}.out"
-        provenance = output / "fdm_outer_wave_provenance.txt"
-        provenance.write_text(
-            runtime_text.replace("time_code = 1.0d0", f"time_code = {time_code:.1f}d0")
-            .replace("aexp = 5.0d-1", f"aexp = {aexp:.2f}d0")
-            .replace("nstep_coarse = 42", f"nstep_coarse = {nstep_coarse}")
-            .replace("psi_snapshot_prefix = fdm_00042.out", f"psi_snapshot_prefix = {prefix}"),
-            encoding="utf-8",
-        )
-        for shard in ("00001", "00002"):
-            (output / f"{prefix}{shard}").write_text(
-                f"wave {index} shard {shard}\n", encoding="utf-8"
-            )
-            (output / f"amr_{index:05d}.out{shard}").write_text(
-                f"AMR {index} shard {shard}\n", encoding="utf-8"
-            )
-        raw_provenance_paths.append(str(provenance))
-    for shard in ("00001", "00002"):
-        (identity_path.parent / f"fdm_00042.out{shard}").write_text(
-            f"wave runtime shard {shard}\n", encoding="utf-8"
-        )
-        (identity_path.parent / f"amr_00042.out{shard}").write_text(
-            f"AMR runtime shard {shard}\n", encoding="utf-8"
-        )
-    raw_provenance_paths.append(str(runtime_provenance))
+    output_identity = identity_path.parent / "fdm-runtime-output-identity.json"
+    output_record = json.loads(output_identity.read_text(encoding="utf-8"))
+    raw_provenance_paths = [
+        item["raw_fdm_provenance"]["path"] for item in output_record["complete_outputs"]
+    ]
     manifest = identity_path.parent / "sample-manifest.json"
     manifest.write_text(
         json.dumps(
@@ -145,6 +79,7 @@ def _sample_ledger(identity_path: Path) -> Path:
     ledger = identity_path.parent / "sample-ledger.json"
     materialize_dual_soliton_relaxation_sample_ledger(
         runtime_identity_path=identity_path,
+        runtime_output_identity_path=output_identity,
         sample_manifest_path=manifest,
         output_path=ledger,
     )
@@ -155,7 +90,7 @@ def _diagnostic_provenance(
     sample_ledger_path: Path, *, failing: bool = False
 ) -> Path:
     diagnostics = {
-        "sample_times_code": [0.0, 0.1, 0.2, 1.0],
+        "sample_times_code": [0.1, 0.2, 0.3, 0.4],
         "component_core_mass_code": [
             [4.0, 3.0],
             [4.0, 3.0],
@@ -208,11 +143,11 @@ def _evidence(
 ) -> dict[str, object]:
     return {
         "schema_version": 3,
-        "seed_case_id": "case-a",
+        "seed_case_id": "capture-seed",
         "runtime_identity_path": str(identity_path),
         "sample_ledger_path": str(sample_ledger_path),
         "diagnostic_provenance_path": str(diagnostic_provenance_path),
-        "relaxation_window_start_code": 0.1,
+        "relaxation_window_start_code": 0.2,
         "thresholds": {
             "maximum_relative_component_mass_drift": 0.02,
             "maximum_relative_component_radius_drift": 0.02,
@@ -308,7 +243,7 @@ def test_relaxation_rejects_a_runtime_provenance_changed_after_sample_binding(
     _identity(identity)
     sample_ledger = _sample_ledger(identity)
     diagnostic_provenance = _diagnostic_provenance(sample_ledger)
-    provenance = tmp_path / "fdm_outer_wave_provenance.txt"
+    provenance = tmp_path / "output_00001" / "fdm_outer_wave_provenance_00001.txt"
     provenance.write_text(
         provenance.read_text(encoding="utf-8") + "# altered after identity\n",
         encoding="utf-8",
@@ -336,6 +271,66 @@ def test_relaxation_rejects_a_changed_wave_snapshot_after_sample_binding(
     )
     with pytest.raises(ValueError, match="verified sample ledger"):
         assess_dual_soliton_relaxation(evidence)
+
+
+def test_relaxation_sample_ledger_requires_every_output_in_the_verified_set(
+    tmp_path: Path,
+) -> None:
+    identity = tmp_path / "runtime-identity.json"
+    _identity(identity)
+    sample_ledger = _sample_ledger(identity)
+    record = json.loads(sample_ledger.read_text(encoding="utf-8"))
+    record["samples"] = record["samples"][:-1]
+    sample_ledger.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(ValueError, match="raw provenance paths differ"):
+        read_verified_dual_soliton_relaxation_sample_ledger(sample_ledger)
+
+
+def test_relaxation_sample_ledger_rejects_a_different_seed_with_the_same_case_and_solitons(
+    tmp_path: Path,
+) -> None:
+    identity = tmp_path / "runtime-identity.json"
+    _identity(identity)
+    original_seed = read_materialized_pure_fdm_dual_soliton_seed(
+        tmp_path / "seed" / "dual_soliton_seed_manifest.json"
+    )
+    changed_first_sink = replace(
+        original_seed.sinks[0], angular_momentum_code=(0.0, 0.0, 9.0e-5)
+    )
+    changed_seed = replace(
+        original_seed, sinks=(changed_first_sink, original_seed.sinks[1])
+    )
+    materialize_pure_fdm_dual_soliton_seed(changed_seed, tmp_path / "changed-seed")
+    raw = tmp_path / "output_00001" / "fdm_outer_wave_provenance_00001.txt"
+    changed_identity = validate_pure_fdm_dual_soliton_runtime_identity(
+        seed_manifest_path=tmp_path / "changed-seed" / "dual_soliton_seed_manifest.json",
+        provenance_path=raw,
+    )
+    assert changed_identity.verified
+    changed_identity_path = tmp_path / "changed-runtime-identity.json"
+    changed_identity_path.write_text(json.dumps(changed_identity.as_dict()), encoding="utf-8")
+    output_identity = tmp_path / "fdm-runtime-output-identity.json"
+    output_record = json.loads(output_identity.read_text(encoding="utf-8"))
+    manifest = tmp_path / "changed-seed-sample-manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "raw_fdm_provenance_paths": [
+                    item["raw_fdm_provenance"]["path"]
+                    for item in output_record["complete_outputs"]
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="seed manifest differs"):
+        materialize_dual_soliton_relaxation_sample_ledger(
+            runtime_identity_path=changed_identity_path,
+            runtime_output_identity_path=output_identity,
+            sample_manifest_path=manifest,
+            output_path=tmp_path / "changed-seed-sample-ledger.json",
+        )
 
 
 def test_relaxation_rejects_a_tampered_nested_runtime_decision(

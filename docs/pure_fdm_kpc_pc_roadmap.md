@@ -430,8 +430,9 @@ treated as a similarity-class match merely because this declaration gate
 passes.
 
 Before the operator submits a completed run namelist, verify that its scalar
-FDM/AMR switches, all two-soliton components, and the run-directory
-`ic_sink` remain identical to the materialized seed:
+FDM/AMR switches, all two-soliton components, non-compacting SMBH controls
+(`smbh=.true.`, `rmerge=0`, and the capture ledger), and the run-directory
+`ic_sink` remain identical to the materialized seed/configuration:
 
 ```bash
 python scripts/preflight_dual_soliton_run.py \
@@ -452,14 +453,16 @@ all-wave preflight and the earlier capture-to-seed-to-zoom declaration:
 
 ```bash
 python scripts/materialize_fdm_declared_run_input_binding.py \
+  --expected-build-git-hash <40-character-lagRamses-revision> \
   results/fdm_capture_seed_zoom_binding/fdm_capture_seed_zoom_binding.json \
   results/pure_fdm_dual_soliton_preflight.json \
   results/fdm_declared_run_input_binding
 ```
 
 This re-reads both decisions, requires their seed manifest to be identical,
-and requires the checked run namelist to be byte-identical to the one in the
-common zoom contract.  Its verified status proves only that the declared
+requires the checked run namelist to be byte-identical to the one in the
+common zoom contract, and records the exact intended lagRamses revision.  Its
+verified status proves only that the declared
 `&PHYSICS_PARAMS` identity and the all-wave `&FDM_PARAMS`/`ic_sink` input are
 one configuration.  It still does not prove solver consumption; that claim
 starts only with a separately validated runtime provenance record.
@@ -479,12 +482,35 @@ declares the same all-wave two-core configuration and passes the raw
 force/current coverage gate.  It does not relax, calibrate, or otherwise
 accept the physical merger calculation.
 
-It also does not yet attest that the solver consumed the exact declared
-namelist or `ic_sink`, nor that the output belongs to the model-zoom case.
-Those claims require a later solver-side execution attestation that records
-the declared contract, seed/input hashes, and output-set identity.  Until
-then, this record is not sufficient to register an output as a controlled
-FDM zoom realization.
+It also does not itself attest that the solver consumed the exact declared
+namelist or `ic_sink`, nor that an output belongs to the declared model-zoom
+case.  Therefore, enumerate every normal output intended for a temporal
+series and bind the copied namelist, compilation record, model-zoom sidecar,
+`COMPLETE` marker, and root-level raw FDM provenance to the saved declared-run
+input:
+
+```bash
+python scripts/validate_fdm_declared_zoom_runtime.py \
+  --output results/fdm_declared_zoom_runtime_identity.json \
+  results/fdm_declared_run_input_binding/fdm_declared_run_input_binding.json \
+  output_00042 output_00043 output_00044
+```
+
+Only `fdm_runtime_output_identity_verified` permits these explicitly listed
+normal outputs to be described as one declared FDM output set.  The verifier
+requires the intended build revision to agree among the declaration, DM
+sidecar, and compilation record; the explicit non-compacting `rmerge=0`
+mode; a common run root; monotonic time, step, and scale factor; exact
+copied-namelist identity; exact common model-zoom hashes; and agreement
+between the raw FDM and DM run-provenance controls.  It supports the normal
+`output_XXXXX/group_00001/` metadata layout without guessing group
+directories.
+
+The current writer does not emit a run UUID or restart/checkpoint-parent
+lineage.  Thus this output-set decision is not an attestation that all listed
+outputs come from one uninterrupted restart branch.  A suspected branch mix
+remains conditional and cannot support a production relaxation or delay
+result until the future solver-side lineage record is available.
 
 The relaxation consumer re-reads that saved decision, re-hashes its seed
 manifest and raw provenance, and reconstructs the decision before use.  A
@@ -502,12 +528,15 @@ source set without reading full fields or launching an FFT:
 
 ```bash
 python scripts/materialize_dual_soliton_relaxation_sample_ledger.py \
+  --runtime-output-identity results/fdm_declared_zoom_runtime_identity.json \
   results/pure_fdm_dual_soliton_runtime_identity.json \
   results/dual_soliton_relaxation_sample_manifest.json \
   results/dual_soliton_relaxation_sample_ledger.json
 ```
 
-The resulting ledger is required by the relaxation evidence.  It is source
+The resulting ledger is required by the relaxation evidence.  It requires the
+manifest's raw-provenance paths to be exactly the verified output-set paths;
+an omitted, added, or substituted V2 output is rejected.  It is still source
 identity only: the core properties and the wave mass, Hamiltonian, and
 angular-momentum series must still be measured from those sources by a
 declared extractor.  Bind that diagnostic series to both the exact sample
@@ -529,13 +558,14 @@ The relaxation evidence schema requires both the source ledger and the
 diagnostic provenance.  Earlier evidence files without those records are not
 relaxation inputs and must be re-extracted rather than relabelled as verified.
 
-Raw V2 does not record the expected MPI-rank count, an execution/output-set
-identity, or a solver-side namelist/input attestation.  It therefore cannot
-prove that the discovered shard list is complete or that the selected outputs
-belong to one execution sequence.  Similarly, extractor bytes and a declared
-version do not prove extractor execution.  The current assessment is only a
-conditional declared-series threshold result; it cannot be cited as a
-relaxation or conservation pass until those V3 solver and extractor
+Raw V2 still does not record the expected MPI-rank count, so the verifier
+cannot prove that a discovered FDM/AMR shard list is complete.  The new
+output-set identity closes the separate declared-case/run-root/namelist/build
+join, but it deliberately does not promote a V2 field set into a complete MPI
+snapshot.  Similarly, extractor bytes and a declared version do not prove
+extractor execution.  The current assessment is only a conditional
+declared-series threshold result; it cannot be cited as a relaxation or
+conservation pass until V3 shard-completeness and extractor-execution
 attestations are implemented.
 
 The bounded initial relaxation window is assessed separately from the full

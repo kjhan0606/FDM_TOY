@@ -13,6 +13,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import tempfile
 from typing import Any, Mapping
 
@@ -36,6 +37,8 @@ from .model_zoom_materialization import (
 
 
 FDM_CAPTURE_SEED_ZOOM_BINDING_SCHEMA_VERSION = 1
+FDM_DECLARED_RUN_INPUT_BINDING_SCHEMA_VERSION = 2
+_GIT_REVISION = re.compile(r"[0-9a-f]{40}")
 
 
 def _sha256(path: Path) -> str:
@@ -311,6 +314,7 @@ class FDMDeclaredRunInputBinding:
 
     fdm_capture_seed_zoom_binding_path: Path
     dual_soliton_preflight_path: Path
+    expected_build_git_hash: str | None
     zoom_case_id: str | None
     seed_case_id: str | None
     status: str
@@ -322,12 +326,12 @@ class FDMDeclaredRunInputBinding:
 
     def as_dict(self) -> dict[str, Any]:
         return {
-            "schema_version": 1,
+            "schema_version": FDM_DECLARED_RUN_INPUT_BINDING_SCHEMA_VERSION,
             "status": self.status,
             "interpretation": (
-                "declared run-input identity only; this does not attest that lagRamses "
-                "consumed the files, completed a run, relaxed the seed, resolved a "
-                "wave wake, or estimated a physical delay"
+                "declared run-input/build identity only; this does not attest that "
+                "lagRamses consumed the files, completed a run, relaxed the seed, "
+                "resolved a wave wake, or estimated a physical delay"
             ),
             "sources": {
                 "fdm_capture_seed_zoom_binding": _artifact(
@@ -337,6 +341,7 @@ class FDMDeclaredRunInputBinding:
             },
             "zoom_case_id": self.zoom_case_id,
             "seed_case_id": self.seed_case_id,
+            "expected_build_git_hash": self.expected_build_git_hash,
             "reasons": list(self.reasons),
         }
 
@@ -345,6 +350,7 @@ def assess_fdm_declared_run_input_binding(
     *,
     fdm_capture_seed_zoom_binding_path: str | Path,
     dual_soliton_preflight_path: str | Path,
+    expected_build_git_hash: str,
 ) -> FDMDeclaredRunInputBinding:
     """Require one checked all-wave run namelist for one FDM zoom declaration."""
 
@@ -353,6 +359,13 @@ def assess_fdm_declared_run_input_binding(
     zoom_case_id: str | None = None
     seed_case_id: str | None = None
     reasons: list[str] = []
+    expected_build: str | None = None
+    if not isinstance(expected_build_git_hash, str) or _GIT_REVISION.fullmatch(
+        expected_build_git_hash
+    ) is None:
+        reasons.append("expected_build_git_hash must be a 40-character lowercase revision")
+    else:
+        expected_build = expected_build_git_hash
     fdm_binding: FDMCaptureSeedZoomBinding | None = None
     preflight: DualSolitonRunPreflight | None = None
     contract: VerifiedModelZoomExecutionContract | None = None
@@ -420,6 +433,7 @@ def assess_fdm_declared_run_input_binding(
     return FDMDeclaredRunInputBinding(
         fdm_capture_seed_zoom_binding_path=fdm_binding_path,
         dual_soliton_preflight_path=preflight_path,
+        expected_build_git_hash=expected_build,
         zoom_case_id=zoom_case_id,
         seed_case_id=seed_case_id,
         status=status,
@@ -444,12 +458,13 @@ def read_verified_fdm_declared_run_input_binding(
         "sources",
         "zoom_case_id",
         "seed_case_id",
+        "expected_build_git_hash",
         "reasons",
     }
     if (
         not isinstance(record, Mapping)
         or set(record) != expected_fields
-        or record.get("schema_version") != 1
+        or record.get("schema_version") != FDM_DECLARED_RUN_INPUT_BINDING_SCHEMA_VERSION
         or record.get("status") != "fdm_declared_run_input_identity_verified"
         or record.get("reasons") != []
     ):
@@ -480,6 +495,7 @@ def read_verified_fdm_declared_run_input_binding(
     decision = assess_fdm_declared_run_input_binding(
         fdm_capture_seed_zoom_binding_path=paths["fdm_capture_seed_zoom_binding"],
         dual_soliton_preflight_path=paths["dual_soliton_run_preflight"],
+        expected_build_git_hash=record.get("expected_build_git_hash"),
     )
     if not decision.verified or decision.as_dict() != record:
         raise ValueError("FDM declared-run binding no longer matches its source decisions")
@@ -490,6 +506,7 @@ def materialize_fdm_declared_run_input_binding(
     *,
     fdm_capture_seed_zoom_binding_path: str | Path,
     dual_soliton_preflight_path: str | Path,
+    expected_build_git_hash: str,
     output_directory: str | Path,
 ) -> dict[str, Any]:
     """Write one non-submitting declaration that joins FDM run-input gates."""
@@ -497,6 +514,7 @@ def materialize_fdm_declared_run_input_binding(
     decision = assess_fdm_declared_run_input_binding(
         fdm_capture_seed_zoom_binding_path=fdm_capture_seed_zoom_binding_path,
         dual_soliton_preflight_path=dual_soliton_preflight_path,
+        expected_build_git_hash=expected_build_git_hash,
     )
     destination = Path(output_directory).expanduser().resolve()
     try:

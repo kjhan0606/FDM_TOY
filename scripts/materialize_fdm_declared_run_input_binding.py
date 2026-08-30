@@ -16,11 +16,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("fdm_capture_seed_zoom_binding", type=Path)
     parser.add_argument("dual_soliton_run_preflight", type=Path)
+    parser.add_argument("--expected-build-git-hash", required=True)
     parser.add_argument("output_directory", type=Path)
     args = parser.parse_args()
     record = materialize_fdm_declared_run_input_binding(
         fdm_capture_seed_zoom_binding_path=args.fdm_capture_seed_zoom_binding,
         dual_soliton_preflight_path=args.dual_soliton_run_preflight,
+        expected_build_git_hash=args.expected_build_git_hash,
         output_directory=args.output_directory,
     )
     print(json.dumps(record, indent=2, sort_keys=True))

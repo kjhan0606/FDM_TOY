@@ -436,6 +436,8 @@ def preflight_pure_fdm_dual_soliton_run(
     reasons: list[str] = []
 
     expected_logicals = {
+        ("physics_params", "smbh"): True,
+        ("physics_params", "smbh_capture_ledger"): True,
         ("run_params", "use_fdm"): True,
         ("run_params", "poisson"): True,
         ("run_params", "sink"): True,
@@ -455,6 +457,7 @@ def preflight_pure_fdm_dual_soliton_run(
             reasons.append(str(error))
 
     expected_numbers: dict[tuple[str, str], float] = {
+        ("physics_params", "rmerge"): 0.0,
         ("amr_params", "boxlen"): seed.box_length_code,
         ("fdm_params", "m_axion"): seed.m_axion_ev,
         ("fdm_params", "fdm_dual_soliton_profile_c"): seed.profile_c,
@@ -469,7 +472,10 @@ def preflight_pure_fdm_dual_soliton_run(
     for (group, name), expected in expected_numbers.items():
         try:
             actual = _number(_unique_value(values, group, name))
-            if not math.isclose(actual, expected, rel_tol=1.0e-12, abs_tol=1.0e-14):
+            if group == "physics_params" and name == "rmerge":
+                if actual != 0.0:
+                    reasons.append("rmerge in &PHYSICS_PARAMS must be exactly 0 for non-compacting FDM")
+            elif not math.isclose(actual, expected, rel_tol=1.0e-12, abs_tol=1.0e-14):
                 reasons.append(
                     f"{name} in &{group.upper()} does not match the materialized seed"
                 )

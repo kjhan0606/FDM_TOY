@@ -23,11 +23,15 @@ from .dual_soliton_preflight import (
     read_verified_pure_fdm_dual_soliton_runtime_identity,
     validate_pure_fdm_dual_soliton_runtime_identity,
 )
+from .fdm_zoom_runtime_identity import (
+    VerifiedFDMZoomRuntimeOutputs,
+    read_verified_fdm_declared_zoom_runtime_outputs,
+)
 from .lagramses_fdm_provenance import read_lagramses_fdm_outer_wave_provenance
 
 
 DUAL_SOLITON_RELAXATION_SCHEMA_VERSION = 3
-DUAL_SOLITON_RELAXATION_SAMPLE_LEDGER_SCHEMA_VERSION = 1
+DUAL_SOLITON_RELAXATION_SAMPLE_LEDGER_SCHEMA_VERSION = 2
 DUAL_SOLITON_RELAXATION_ASSESSMENT_SCHEMA_VERSION = 2
 DUAL_SOLITON_RELAXATION_DIAGNOSTIC_PROVENANCE_SCHEMA_VERSION = 1
 
@@ -268,6 +272,8 @@ class DualSolitonRelaxationSampleLedger:
     source_sha256: str
     runtime_identity_path: Path
     runtime_identity_sha256: str
+    runtime_output_identity_path: Path
+    runtime_output_identity_sha256: str
     raw_provenance_path: Path
     raw_provenance_sha256: str
     samples: tuple[DualSolitonRelaxationSample, ...]
@@ -276,12 +282,14 @@ class DualSolitonRelaxationSampleLedger:
         for name in (
             "source_path",
             "runtime_identity_path",
+            "runtime_output_identity_path",
             "raw_provenance_path",
         ):
             object.__setattr__(self, name, Path(getattr(self, name)).expanduser().resolve())
         for name in (
             "source_sha256",
             "runtime_identity_sha256",
+            "runtime_output_identity_sha256",
             "raw_provenance_sha256",
         ):
             digest = getattr(self, name)
@@ -310,6 +318,10 @@ class DualSolitonRelaxationSampleLedger:
                 "runtime_identity": {
                     "path": str(self.runtime_identity_path),
                     "sha256": self.runtime_identity_sha256,
+                },
+                "runtime_output_identity": {
+                    "path": str(self.runtime_output_identity_path),
+                    "sha256": self.runtime_output_identity_sha256,
                 },
                 "raw_fdm_provenance": {
                     "path": str(self.raw_provenance_path),
@@ -411,7 +423,22 @@ def _read_relaxation_sample_manifest(path: Path) -> tuple[Path, ...]:
 def _validate_relaxation_sample_ledger(
     ledger: DualSolitonRelaxationSampleLedger,
     runtime_identity: DualSolitonRuntimeIdentity,
+    runtime_outputs: VerifiedFDMZoomRuntimeOutputs,
 ) -> None:
+    expected_seed_path = runtime_outputs.declared_run.fdm_binding.seed_manifest_path
+    if (
+        runtime_identity.seed_manifest_path != expected_seed_path
+        or _sha256(runtime_identity.seed_manifest_path) != _sha256(expected_seed_path)
+    ):
+        raise ValueError("FDM output-set identity seed manifest differs from runtime identity")
+    if runtime_outputs.declared_run.declared.seed_case_id != runtime_identity.seed_case_id:
+        raise ValueError("FDM output-set identity seed case differs from runtime identity")
+    expected_raw_paths = set(runtime_outputs.raw_fdm_provenance_paths)
+    sample_raw_paths = {sample.raw_provenance_path for sample in ledger.samples}
+    if sample_raw_paths != expected_raw_paths:
+        raise ValueError(
+            "relaxation sample ledger raw provenance paths differ from the verified FDM output set"
+        )
     if (
         ledger.raw_provenance_path != runtime_identity.provenance_path
         or ledger.raw_provenance_sha256 != _sha256(runtime_identity.provenance_path)
@@ -485,10 +512,14 @@ def read_verified_dual_soliton_relaxation_sample_ledger(
     sources = record["sources"]
     if not isinstance(sources, Mapping) or set(sources) != {
         "runtime_identity",
+        "runtime_output_identity",
         "raw_fdm_provenance",
     }:
         raise ValueError("dual-soliton relaxation sample ledger sources are invalid")
     identity_path, identity_hash = _read_artifact(sources["runtime_identity"], "runtime identity")
+    output_identity_path, output_identity_hash = _read_artifact(
+        sources["runtime_output_identity"], "FDM runtime output identity"
+    )
     raw_path, raw_hash = _read_artifact(
         sources["raw_fdm_provenance"], "raw FDM provenance"
     )
@@ -498,12 +529,15 @@ def read_verified_dual_soliton_relaxation_sample_ledger(
         source_sha256=_sha256(source),
         runtime_identity_path=identity_path,
         runtime_identity_sha256=identity_hash,
+        runtime_output_identity_path=output_identity_path,
+        runtime_output_identity_sha256=output_identity_hash,
         raw_provenance_path=raw_path,
         raw_provenance_sha256=raw_hash,
         samples=samples,
     )
     runtime_identity = read_verified_pure_fdm_dual_soliton_runtime_identity(identity_path)
-    _validate_relaxation_sample_ledger(ledger, runtime_identity)
+    runtime_outputs = read_verified_fdm_declared_zoom_runtime_outputs(output_identity_path)
+    _validate_relaxation_sample_ledger(ledger, runtime_identity, runtime_outputs)
     if ledger.as_dict() != record:
         raise ValueError("dual-soliton relaxation sample ledger no longer matches its sources")
     return ledger
@@ -512,6 +546,7 @@ def read_verified_dual_soliton_relaxation_sample_ledger(
 def materialize_dual_soliton_relaxation_sample_ledger(
     *,
     runtime_identity_path: str | Path,
+    runtime_output_identity_path: str | Path,
     sample_manifest_path: str | Path,
     output_path: str | Path,
 ) -> dict[str, Any]:
@@ -523,9 +558,11 @@ def materialize_dual_soliton_relaxation_sample_ledger(
     """
 
     identity_path = Path(runtime_identity_path).expanduser().resolve()
+    output_identity_path = Path(runtime_output_identity_path).expanduser().resolve()
     manifest_path = Path(sample_manifest_path).expanduser().resolve()
     destination = Path(output_path).expanduser().resolve()
     runtime_identity = read_verified_pure_fdm_dual_soliton_runtime_identity(identity_path)
+    runtime_outputs = read_verified_fdm_declared_zoom_runtime_outputs(output_identity_path)
     raw_provenance_paths = _read_relaxation_sample_manifest(manifest_path)
     samples = tuple(
         _sample_from_raw_provenance(
@@ -538,11 +575,13 @@ def materialize_dual_soliton_relaxation_sample_ledger(
         source_sha256="0" * 64,
         runtime_identity_path=identity_path,
         runtime_identity_sha256=_sha256(identity_path),
+        runtime_output_identity_path=output_identity_path,
+        runtime_output_identity_sha256=_sha256(output_identity_path),
         raw_provenance_path=runtime_identity.provenance_path,
         raw_provenance_sha256=_sha256(runtime_identity.provenance_path),
         samples=samples,
     )
-    _validate_relaxation_sample_ledger(ledger, runtime_identity)
+    _validate_relaxation_sample_ledger(ledger, runtime_identity, runtime_outputs)
     if destination.exists():
         raise ValueError("dual-soliton relaxation sample-ledger output must not already exist")
     record = ledger.as_dict()

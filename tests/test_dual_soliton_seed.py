@@ -142,7 +142,13 @@ def test_cli_materializes_new_directory_without_submission(tmp_path: Path) -> No
 
 
 def _run_namelist(materialized: Path) -> str:
-    return """&RUN_PARAMS
+    return """&PHYSICS_PARAMS
+  smbh=.true.
+  rmerge=0.0d0
+  smbh_capture_ledger=.true.
+  smbh_capture_ledger_file='smbh_capture_ledger_v1.jsonl'
+/
+&RUN_PARAMS
   use_fdm=.true.
   poisson=.true.
   sink=.true.
