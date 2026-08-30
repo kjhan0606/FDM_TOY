@@ -564,7 +564,51 @@ python scripts/materialize_dual_soliton_relaxation_diagnostic_provenance.py \
 The diagnostic manifest records the extractor path and version with the
 measured series.  This provides reproducible source and method identity; it
 does not yet attest that the extractor was executed, so it cannot replace the
-later paired-resolution and conservation checks.
+later paired-resolution and conservation checks.  This declared-series path
+remains useful for developing the extractor, but it must not be reported as an
+executed relaxation measurement.
+
+For an actual Lageunha run, use the bounded execution wrapper.  It verifies the
+sample ledger before launching, invokes the command with `shell=False`, forces
+the numerical-library thread environment to one, and appends the ledger and a
+private temporary result path as the extractor's two positional arguments.  A
+validated result is hard-linked to the requested `--result` path only after
+the command exits successfully:
+
+```bash
+python scripts/run_dual_soliton_relaxation_extractor.py \
+  --sample-ledger results/dual_soliton_relaxation_sample_ledger.json \
+  --result results/dual_soliton_relaxation_extractor_result.json \
+  --attestation results/dual_soliton_relaxation_extractor_attestation.json \
+  --working-directory /path/to/lageunha/working/directory \
+  --extractor python /path/to/lageunha_relaxation_extractor.py
+```
+
+The extractor must write a strict JSON result containing
+`dual_soliton_relaxation_extractor_result`, its version, the exact sample-ledger
+path and SHA-256, and the diagnostics arrays.  A non-zero exit, malformed or
+ledger-mismatched result, pre-existing output, or timeout produces no
+attestation.  The attestation re-hashes the command files, result, and sample
+ledger and records the command, arguments, UTC interval, host, and one-thread
+environment.  It is a wrapper-declared execution record, not an OS audit and
+not proof that the extractor's internal implementation correctly measured the
+physics.
+
+Bind that execution record to a diagnostic provenance file before using it in
+the relaxation assessment:
+
+```bash
+python scripts/materialize_dual_soliton_relaxation_executed_provenance.py \
+  results/dual_soliton_relaxation_sample_ledger.json \
+  results/dual_soliton_relaxation_extractor_attestation.json \
+  results/dual_soliton_relaxation_executed_diagnostic_provenance.json
+```
+
+The assessment then emits an explicit
+`relaxation_conservation_executed_series_*` status.  That status is still
+conditional: it records a wrapper-declared command execution and source-bound threshold
+diagnostics, not a converged relaxation pass, an outer-merger calibration, or
+a physical coalescence delay.
 
 The relaxation evidence schema requires both the source ledger and the
 diagnostic provenance.  Earlier evidence files without those records are not
@@ -574,10 +618,11 @@ V2 output identity remains useful for declared-case/run-root/namelist/build
 provenance, but it cannot enter the relaxation source ledger because it lacks
 the expected MPI-rank count.  V3 closes the declared shard-set completeness
 check; V5 adds an exact parent-token check at each listed restart transition.
-Neither proves extractor execution or a globally collision-free checkpoint
-lineage.  The current assessment is only a conditional declared-series
-threshold result; it cannot be cited as a relaxation or conservation pass
-until extractor-execution and continuous-branch attestations are implemented.
+Neither proves a globally collision-free checkpoint lineage or the extractor's
+internal physical method.  The manual diagnostic path remains a conditional
+declared-series threshold result; the execution-attested path records the
+command and result but is still not a converged relaxation or conservation
+pass.
 
 The bounded initial relaxation window is assessed separately from the full
 time-resolved snapshots.  Its evidence table must preserve both core masses,

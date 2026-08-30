@@ -128,9 +128,19 @@ from .dual_soliton_relaxation import (
     RelaxationConservationThresholds,
     assess_dual_soliton_relaxation,
     materialize_dual_soliton_relaxation_diagnostic_provenance,
+    materialize_dual_soliton_relaxation_executed_diagnostic_provenance,
     materialize_dual_soliton_relaxation_sample_ledger,
     read_verified_dual_soliton_relaxation_diagnostic_provenance,
     read_verified_dual_soliton_relaxation_sample_ledger,
+)
+from .relaxation_extractor_attestation import (
+    DualSolitonRelaxationExecutedDiagnosticProvenance,
+    DualSolitonRelaxationExtractorAttestation,
+    DualSolitonRelaxationExtractorResult,
+    ExtractorExecutionError,
+    read_verified_dual_soliton_relaxation_executed_diagnostic_provenance,
+    read_verified_dual_soliton_relaxation_extractor_attestation,
+    run_dual_soliton_relaxation_extractor,
 )
 from .outer_inner_handoff import (
     HandoffDecision,
@@ -220,6 +230,10 @@ __all__ = [
     "DualSolitonRelaxationEvidence",
     "DualSolitonRelaxationSample",
     "DualSolitonRelaxationSampleLedger",
+    "DualSolitonRelaxationExecutedDiagnosticProvenance",
+    "DualSolitonRelaxationExtractorAttestation",
+    "DualSolitonRelaxationExtractorResult",
+    "ExtractorExecutionError",
     "DualSolitonComponent",
     "PureFDMDualSolitonSeed",
     "RelaxationConservationThresholds",
@@ -308,8 +322,12 @@ __all__ = [
     "materialize_fdm_capture_seed_zoom_binding",
     "materialize_fdm_declared_run_input_binding",
     "materialize_dual_soliton_relaxation_diagnostic_provenance",
+    "materialize_dual_soliton_relaxation_executed_diagnostic_provenance",
     "materialize_dual_soliton_relaxation_sample_ledger",
     "read_verified_dual_soliton_relaxation_diagnostic_provenance",
     "read_verified_dual_soliton_relaxation_sample_ledger",
+    "read_verified_dual_soliton_relaxation_executed_diagnostic_provenance",
+    "read_verified_dual_soliton_relaxation_extractor_attestation",
+    "run_dual_soliton_relaxation_extractor",
 ]
 __version__ = "0.1.0"

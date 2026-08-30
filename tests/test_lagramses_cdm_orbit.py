@@ -85,6 +85,7 @@ def _runtime_identity(root: Path, binding: Path, outputs: list[Path]) -> Path:
     for name in (
         "host_orbit_initial_conditions",
         "initial_conditions",
+        "baryon_configuration",
         "sink_initial_conditions",
     ):
         (root / f"{name}.dat").write_text(name + "\n", encoding="utf-8")
@@ -106,6 +107,7 @@ def _runtime_identity(root: Path, binding: Path, outputs: list[Path]) -> Path:
             for name in (
                 "host_orbit_initial_conditions",
                 "initial_conditions",
+                "baryon_configuration",
                 "sink_initial_conditions",
             )
         },
@@ -115,7 +117,12 @@ def _runtime_identity(root: Path, binding: Path, outputs: list[Path]) -> Path:
         "/\n",
         "".join(
             f"{name}='{value}'\n"
-            for name, value in sorted(provisional.execution_identity.items())
+            for name, value in sorted(
+                {
+                    **provisional.execution_identity,
+                    **provisional.model_execution_identity,
+                }.items()
+            )
         )
         + "/\n",
     )
@@ -127,9 +134,16 @@ def _runtime_identity(root: Path, binding: Path, outputs: list[Path]) -> Path:
         provenance.write_text(
             provenance.read_text(encoding="utf-8")
             + "cdm_zoom_execution_identity_status = available\n"
+            + "model_zoom_execution_identity_status = available\n"
+            + "model_zoom_levelmax = 21\n"
             + "".join(
                 f"{name} = {value}\n"
-                for name, value in sorted(provisional.execution_identity.items())
+                for name, value in sorted(
+                    {
+                        **provisional.execution_identity,
+                        **provisional.model_execution_identity,
+                    }.items()
+                )
             ),
             encoding="utf-8",
         )

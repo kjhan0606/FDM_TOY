@@ -792,6 +792,19 @@ def read_verified_dual_soliton_relaxation_diagnostic_provenance(
         record = json.loads(source.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise ValueError(f"cannot read dual-soliton diagnostic provenance: {error}") from error
+    # Keep the historical declared-series reader as the public entry point,
+    # while routing the execution-attested schema through its stricter source
+    # chain.  The local import avoids a module cycle: the attestation module
+    # reuses the diagnostics and sample-ledger types defined above.
+    if (
+        isinstance(record, Mapping)
+        and record.get("status") == "dual_soliton_relaxation_executed_diagnostic_provenance"
+    ):
+        from .relaxation_extractor_attestation import (
+            read_verified_dual_soliton_relaxation_executed_diagnostic_provenance,
+        )
+
+        return read_verified_dual_soliton_relaxation_executed_diagnostic_provenance(source)  # type: ignore[return-value]
     if (
         not isinstance(record, Mapping)
         or set(record) != {
@@ -829,6 +842,37 @@ def read_verified_dual_soliton_relaxation_diagnostic_provenance(
     if provenance.as_dict() != record:
         raise ValueError("dual-soliton diagnostic provenance no longer matches its sources")
     return provenance
+
+
+def materialize_dual_soliton_relaxation_executed_diagnostic_provenance(
+    *,
+    sample_ledger_path: str | Path,
+    extractor_attestation_path: str | Path,
+    output_path: str | Path,
+) -> dict[str, Any]:
+    """Materialize an executed diagnostic record from a verified attestation."""
+
+    from .relaxation_extractor_attestation import (
+        materialize_dual_soliton_relaxation_executed_diagnostic_provenance as materialize,
+    )
+
+    return materialize(
+        sample_ledger_path=sample_ledger_path,
+        extractor_attestation_path=extractor_attestation_path,
+        output_path=output_path,
+    )
+
+
+def read_verified_dual_soliton_relaxation_executed_diagnostic_provenance(
+    path: str | Path,
+) -> Any:
+    """Read an execution-attested diagnostic record without loosening gates."""
+
+    from .relaxation_extractor_attestation import (
+        read_verified_dual_soliton_relaxation_executed_diagnostic_provenance as read,
+    )
+
+    return read(path)
 
 
 def materialize_dual_soliton_relaxation_diagnostic_provenance(
@@ -950,22 +994,35 @@ class DualSolitonRelaxationAssessment:
     def conditionally_within_thresholds(self) -> bool:
         """Whether declared, source-bound diagnostics meet the stated thresholds.
 
-        This remains conditional until solver output-set and extractor-execution
-        attestations exist; it is deliberately not a scientific relaxation pass.
+        This remains conditional because even an execution record does not
+        validate the extractor's internal physical method; it is deliberately
+        not a scientific relaxation pass.
         """
 
-        return self.status == "relaxation_conservation_declared_series_within_thresholds"
+        return self.status in {
+            "relaxation_conservation_declared_series_within_thresholds",
+            "relaxation_conservation_executed_series_within_thresholds",
+        }
 
     def as_dict(self) -> dict[str, Any]:
-        return {
-            "schema_version": DUAL_SOLITON_RELAXATION_ASSESSMENT_SCHEMA_VERSION,
-            "status": self.status,
-            "interpretation": (
+        if self.status.startswith("relaxation_conservation_executed_series_"):
+            interpretation = (
+                "source-bound extractor output with a wrapper-declared command "
+                "execution record; OS-level execution and the extractor's internal "
+                "physical method, convergence, and a physical coalescence delay "
+                "remain unvalidated"
+            )
+        else:
+            interpretation = (
                 "source-bound declared diagnostic series only; solver output-set and "
                 "extractor-execution attestations remain required before a relaxation "
                 "or conservation pass. This is neither an outer-merger calibration nor "
                 "a physical coalescence delay"
-            ),
+            )
+        return {
+            "schema_version": DUAL_SOLITON_RELAXATION_ASSESSMENT_SCHEMA_VERSION,
+            "status": self.status,
+            "interpretation": interpretation,
             "source": {"path": str(self.source_path), "sha256": self.source_sha256},
             "runtime_identity": {
                 "path": str(self.runtime_identity_path),
@@ -1047,6 +1104,7 @@ def assess_dual_soliton_relaxation(
     diagnostic_provenance = _verified_diagnostic_provenance(
         evidence.diagnostic_provenance_path, sample_ledger
     )
+    execution_attested = getattr(diagnostic_provenance, "extractor_attestation_path", None) is not None
     diagnostics = diagnostic_provenance.diagnostics
     window = diagnostics.sample_times_code >= evidence.relaxation_window_start_code
     if int(np.count_nonzero(window)) < 3:
@@ -1088,6 +1146,11 @@ def assess_dual_soliton_relaxation(
             reasons.append(f"{name} exceeds the declared relaxation threshold")
     if minimum_separation_ratio < thresholds.minimum_core_separation_to_radius_ratio:
         reasons.append("two core centres enter the declared relaxation separation guard")
+    status_prefix = (
+        "relaxation_conservation_executed_series"
+        if execution_attested
+        else "relaxation_conservation_declared_series"
+    )
     return DualSolitonRelaxationAssessment(
         source_path=source,
         source_sha256=_sha256(source),
@@ -1099,9 +1162,9 @@ def assess_dual_soliton_relaxation(
         diagnostic_provenance_sha256=diagnostic_provenance.source_sha256,
         seed_case_id=evidence.seed_case_id,
         status=(
-            "relaxation_conservation_declared_series_within_thresholds"
+            f"{status_prefix}_within_thresholds"
             if not reasons
-            else "relaxation_conservation_declared_series_outside_thresholds"
+            else f"{status_prefix}_outside_thresholds"
         ),
         metrics=metrics,
         reasons=tuple(reasons),
