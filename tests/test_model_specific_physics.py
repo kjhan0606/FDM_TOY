@@ -322,6 +322,7 @@ def _write_ready_inventory_assessment(
         "model_zoom_execution_identity_status = available\n"
         f"model_zoom_manifest_sha256 = {model_zoom_identity['manifest_sha256']}\n"
         f"model_zoom_case_id = {model_zoom_identity['case_id']}\n"
+        f"model_zoom_levelmax = {model_zoom_identity['levelmax']}\n"
         f"model_zoom_capture_event_sha256 = {capture_event_sha256}\n"
         f"model_zoom_initial_conditions_sha256 = {model_zoom_identity['initial_conditions_sha256']}\n"
         f"model_zoom_baryon_configuration_sha256 = {model_zoom_identity['baryon_configuration_sha256']}\n"
@@ -359,6 +360,7 @@ def _physics_input(
     case: GalaxyMergerZoomCase,
     manifest_sha256: str,
     selected_case_id_override: str | None = None,
+    selected_levelmax_override: int | None = None,
 ) -> tuple[Path, dict[str, dict[str, str]]]:
     ensemble = tmp_path / "capture_ensemble.json"
     shared_inputs: dict[str, dict[str, str]] = {}
@@ -407,6 +409,12 @@ def _physics_input(
                     )
                     if model == case.physics.dark_matter_model
                     else f"{model}-comparison-only"
+                ),
+                "levelmax": str(
+                    selected_levelmax_override
+                    if selected_levelmax_override is not None
+                    and model == case.physics.dark_matter_model
+                    else case.numerics.levelmax
                 ),
                 "initial_conditions_sha256": shared_inputs["initial_conditions"]["sha256"],
                 "baryon_configuration_sha256": shared_inputs["baryon_configuration"][
@@ -906,6 +914,26 @@ def test_result_rejects_a_normal_output_attested_for_another_case(tmp_path: Path
     path = tmp_path / "wrong-executed-case.json"
     _write_json(path, record)
     with pytest.raises(ValueError, match="model zoom case differs"):
+        read_resolved_model_physics_result(path, case=case, zoom_manifest_sha256="a" * 64)
+
+
+def test_result_rejects_a_normal_output_with_another_resolution_level(tmp_path: Path) -> None:
+    case = _case("fdm", finest_cell_size_pc=0.5)
+    physics_input, hashes = _physics_input(
+        tmp_path,
+        case=case,
+        manifest_sha256="a" * 64,
+        selected_levelmax_override=case.numerics.levelmax - 1,
+    )
+    record = _result_record(
+        case=case,
+        manifest_sha256="a" * 64,
+        physics_input=physics_input,
+        artifacts=hashes["fdm"],
+    )
+    path = tmp_path / "wrong-executed-level.json"
+    _write_json(path, record)
+    with pytest.raises(ValueError, match="model zoom level differs"):
         read_resolved_model_physics_result(path, case=case, zoom_manifest_sha256="a" * 64)
 
 

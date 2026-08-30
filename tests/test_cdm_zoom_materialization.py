@@ -196,6 +196,7 @@ def _write_runtime_output(
     directory.mkdir()
     cdm_identity_records = ""
     model_identity_records = ""
+    model_levelmax: str | None = None
     for line in namelist.splitlines():
         if "=" not in line:
             continue
@@ -204,6 +205,8 @@ def _write_runtime_output(
             cdm_identity_records += f"{name} = {value.strip(chr(39) + chr(34))}\n"
         if name.startswith("model_zoom_"):
             model_identity_records += f"{name} = {value.strip(chr(39) + chr(34))}\n"
+        if name == "levelmax":
+            model_levelmax = value.strip()
     (directory / "COMPLETE").write_text(label + "\n", encoding="utf-8")
     (directory / f"dm_run_provenance_{label}.txt").write_text(
         "# dm_run_provenance_v1\n"
@@ -229,7 +232,12 @@ def _write_runtime_output(
     if cdm_identity_records:
         identity_records += "cdm_zoom_execution_identity_status = available\n" + cdm_identity_records
     if model_identity_records:
-        identity_records += "model_zoom_execution_identity_status = available\n" + model_identity_records
+        assert model_levelmax is not None
+        identity_records += (
+            "model_zoom_execution_identity_status = available\n"
+            f"model_zoom_levelmax = {model_levelmax}\n"
+            + model_identity_records
+        )
     provenance.write_text(provenance.read_text(encoding="utf-8") + identity_records, encoding="utf-8")
     (directory / "namelist.txt").write_text(namelist, encoding="utf-8")
     (directory / "compilation.txt").write_text(compilation_text, encoding="utf-8")

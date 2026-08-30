@@ -36,6 +36,10 @@ from .cdm_zoom_materialization import (
     assess_cdm_noncompacting_zoom_run_inputs,
     materialize_cdm_noncompacting_zoom_run_contract,
 )
+from .model_zoom_materialization import (
+    ModelZoomExecutionContract,
+    materialize_model_zoom_execution_contract,
+)
 from .cdm_zoom_runtime_identity import (
     CDMNonCompactingZoomRuntimeIdentity,
     assess_cdm_noncompacting_zoom_runtime_identity,

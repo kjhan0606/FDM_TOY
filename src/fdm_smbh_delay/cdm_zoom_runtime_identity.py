@@ -499,6 +499,8 @@ def _verify_output(
             raise ValueError(f"output {name} differs from its run contract")
     if provenance.parameter("model_zoom_execution_identity_status") != "available":
         raise ValueError("output does not attest the contracted model zoom input identity")
+    if provenance.parameter("model_zoom_levelmax") != contract.case.numerics.levelmax:
+        raise ValueError("output model_zoom_levelmax differs from its run contract")
     for name, expected in contract.model_execution_identity.items():
         if provenance.parameter(name) != expected:
             raise ValueError(f"output {name} differs from its run contract")

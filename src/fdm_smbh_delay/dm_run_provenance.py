@@ -162,7 +162,10 @@ def read_dark_matter_run_provenance(path: str | Path) -> DarkMatterRunProvenance
         "model_zoom_baryon_configuration_sha256",
         "model_zoom_sink_initial_conditions_sha256",
     )
-    model_execution_identity_fields = ("model_zoom_case_id",) + model_execution_identity_digests
+    model_execution_identity_fields = (
+        "model_zoom_case_id",
+        "model_zoom_levelmax",
+    ) + model_execution_identity_digests
     present_model_identity = [
         key for key in model_execution_identity_fields if key in records
     ]
@@ -179,6 +182,10 @@ def read_dark_matter_run_provenance(path: str | Path) -> DarkMatterRunProvenance
                 raise ValueError("available model zoom execution identity requires all fields")
             case_id = _required(records, "model_zoom_case_id")
             parameters["model_zoom_case_id"] = case_id
+            levelmax = _integer(records, "model_zoom_levelmax", nonnegative=True)
+            if levelmax < 1:
+                raise ValueError("model_zoom_levelmax must be positive")
+            parameters["model_zoom_levelmax"] = levelmax
             for key in model_execution_identity_digests:
                 digest = records[key]
                 if _SHA256.fullmatch(digest) is None:

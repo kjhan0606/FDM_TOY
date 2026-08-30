@@ -516,6 +516,8 @@ def _require_model_zoom_execution_identity(
     }
     if run.parameter("model_zoom_case_id") != case.case_id:
         raise ValueError("normal-output sidecar model zoom case differs from its result")
+    if run.parameter("model_zoom_levelmax") != case.numerics.levelmax:
+        raise ValueError("normal-output sidecar model zoom level differs from its result")
     for name, expected in expected_digests.items():
         if run.parameter(name) != expected:
             raise ValueError(f"normal-output sidecar {name} differs from its result")

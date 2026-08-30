@@ -153,6 +153,7 @@ def _model_zoom_execution_identity(model: str) -> dict[str, str]:
         "model_zoom_execution_identity_status": "available",
         "model_zoom_manifest_sha256": "6" * 64,
         "model_zoom_case_id": f"{model}-fine-replicate-0",
+        "model_zoom_levelmax": "20",
         "model_zoom_capture_event_sha256": "7" * 64,
         "model_zoom_initial_conditions_sha256": "8" * 64,
         "model_zoom_baryon_configuration_sha256": "a" * 64,
