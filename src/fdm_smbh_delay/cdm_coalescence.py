@@ -22,10 +22,12 @@ from .gw import peters_time_myr
 
 
 CDM_DELAY_STAGE_SCHEMA_VERSION = 2
+CDM_RATE_TRACK_SCHEMA_VERSION = 2
 CDM_DELAY_STAGES = ("capture_to_hard_binary", "hard_binary_to_gw_regime")
 _SHA256 = re.compile(r"[0-9a-fA-F]{64}")
 _STATUSES = {"complete", "timeout", "censored", "missing", "invalid"}
 _CALIBRATION_METHOD = "resolved_cdm_rate_integration"
+_RATE_ESTIMATOR_METHOD = "blocked_log_separation_linear_regression_v1"
 
 
 def _file_sha256(path: Path) -> str:
@@ -184,13 +186,122 @@ def _accepted_phase_ensemble(
         raise ValueError("CDM phase ensemble physics_id differs from stage summary")
 
 
+def _raw_orbit_samples(path: Path, expected_physics_id: str) -> list[tuple[float, float]]:
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"cannot read CDM raw orbit track: {error}") from error
+    if not isinstance(record, Mapping):
+        raise ValueError("CDM raw orbit track must be a JSON object")
+    if (
+        record.get("schema_version") != 1
+        or record.get("status") != "raw_relative_orbit_track"
+        or record.get("dark_matter_model") != "cdm"
+        or record.get("physics_id") != expected_physics_id
+    ):
+        raise ValueError("CDM raw orbit track identity is invalid")
+    samples = record.get("samples")
+    if not isinstance(samples, list):
+        raise ValueError("CDM raw orbit track samples are invalid")
+    parsed: list[tuple[float, float]] = []
+    for index, sample in enumerate(samples):
+        if not isinstance(sample, Mapping):
+            raise ValueError(f"CDM raw orbit sample {index} is invalid")
+        parsed.append(
+            (
+                _nonnegative(sample.get("time_myr"), f"raw orbit sample {index} time_myr"),
+                _positive(sample.get("separation_pc"), f"raw orbit sample {index} separation_pc"),
+            )
+        )
+    if any(left[0] >= right[0] for left, right in zip(parsed[:-1], parsed[1:])):
+        raise ValueError("CDM raw orbit sample times must be strictly increasing")
+    return parsed
+
+
+def _block_rate_points(
+    samples: list[tuple[float, float]],
+    *,
+    samples_per_block: int,
+) -> list[dict[str, float]]:
+    if samples_per_block < 5:
+        raise ValueError("samples_per_block must be at least five")
+    block_count = len(samples) // samples_per_block
+    if block_count < 3:
+        raise ValueError("raw orbit track requires at least three complete regression blocks")
+    points: list[dict[str, float]] = []
+    for block_index in range(block_count):
+        block = samples[
+            block_index * samples_per_block : (block_index + 1) * samples_per_block
+        ]
+        mean_time = sum(item[0] for item in block) / samples_per_block
+        logarithms = [math.log(item[1]) for item in block]
+        mean_log_separation = sum(logarithms) / samples_per_block
+        denominator = sum((time - mean_time) ** 2 for time, _ in block)
+        if denominator <= 0.0:
+            raise ValueError("raw orbit regression block has no time span")
+        slope = sum(
+            (time - mean_time) * (log_separation - mean_log_separation)
+            for (time, _), log_separation in zip(block, logarithms)
+        ) / denominator
+        if not math.isfinite(slope) or slope >= 0.0:
+            raise ValueError("raw orbit regression block is not secularly decaying")
+        points.append(
+            {
+                "separation_pc": math.exp(mean_log_separation),
+                "dln_separation_dt_per_myr": slope,
+            }
+        )
+    if any(
+        left["separation_pc"] <= right["separation_pc"]
+        for left, right in zip(points[:-1], points[1:])
+    ):
+        raise ValueError("orbit-averaged separations are not strictly decreasing")
+    return points
+
+
+def derive_cdm_secular_rate_track(
+    raw_orbit_track_path: str | Path,
+    *,
+    stage: str,
+    samples_per_block: int,
+) -> dict[str, Any]:
+    """Make a reproducible candidate rate table from fixed raw-orbit blocks."""
+
+    if stage not in CDM_DELAY_STAGES:
+        raise ValueError("stage is not a CDM delay stage")
+    source = Path(raw_orbit_track_path).expanduser().resolve()
+    try:
+        raw_record = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"cannot read CDM raw orbit track: {error}") from error
+    if not isinstance(raw_record, Mapping):
+        raise ValueError("CDM raw orbit track must be a JSON object")
+    physics_id = _nonempty(raw_record.get("physics_id"), "CDM raw orbit physics_id")
+    samples = _raw_orbit_samples(source, physics_id)
+    points = _block_rate_points(samples, samples_per_block=samples_per_block)
+    return {
+        "schema_version": CDM_RATE_TRACK_SCHEMA_VERSION,
+        "status": "complete",
+        "dark_matter_model": "cdm",
+        "stage": stage,
+        "physics_id": physics_id,
+        "estimator": {
+            "method": _RATE_ESTIMATOR_METHOD,
+            "raw_orbit_track_path": str(source),
+            "raw_orbit_track_sha256": _file_sha256(source),
+            "samples_per_block": samples_per_block,
+        },
+        "rate_points": points,
+    }
+
+
 def read_cdm_resolved_rate_track(
     path: str | Path,
     *,
     expected_stage: str,
     expected_physics_id: str,
 ) -> CDMResolvedRateTrack:
-    """Read a measured CDM decay-rate track without extrapolating its support."""
+    """Read a reproducible CDM decay-rate track without extrapolating support."""
 
     if expected_stage not in CDM_DELAY_STAGES:
         raise ValueError("expected_stage is not a CDM delay stage")
@@ -205,24 +316,49 @@ def read_cdm_resolved_rate_track(
         "dark_matter_model",
         "stage",
         "physics_id",
+        "estimator",
         "rate_points",
     }
     if not isinstance(record, Mapping) or set(record) != expected_fields:
         raise ValueError("CDM resolved rate-track fields are invalid")
-    if record.get("schema_version") != 1 or record.get("status") != "complete":
-        raise ValueError("CDM resolved rate track must be a complete schema-v1 record")
+    if (
+        record.get("schema_version") != CDM_RATE_TRACK_SCHEMA_VERSION
+        or record.get("status") != "complete"
+    ):
+        raise ValueError("CDM resolved rate track must be a complete schema-v2 record")
     if record.get("dark_matter_model") != "cdm":
         raise ValueError("CDM resolved rate track requires dark_matter_model=cdm")
     if record.get("stage") != expected_stage:
         raise ValueError("CDM resolved rate track stage differs from the delay stage")
     if record.get("physics_id") != expected_physics_id:
         raise ValueError("CDM resolved rate track physics_id differs from the phase ensemble")
+    estimator = record.get("estimator")
+    if not isinstance(estimator, Mapping) or set(estimator) != {
+        "method",
+        "raw_orbit_track_path",
+        "raw_orbit_track_sha256",
+        "samples_per_block",
+    } or estimator.get("method") != _RATE_ESTIMATOR_METHOD:
+        raise ValueError("CDM resolved rate-track estimator is invalid")
+    reference = _nonempty(estimator.get("raw_orbit_track_path"), "raw_orbit_track_path")
+    raw_path = _resolve(reference, source.parent)
+    expected_raw_sha256 = _sha256(
+        estimator.get("raw_orbit_track_sha256"),
+        "raw_orbit_track_sha256",
+    )
+    if _file_sha256(raw_path) != expected_raw_sha256:
+        raise ValueError("CDM raw orbit track SHA-256 differs from rate track")
+    block_size = estimator.get("samples_per_block")
+    if isinstance(block_size, bool) or not isinstance(block_size, int):
+        raise ValueError("samples_per_block must be an integer")
+    raw_samples = _raw_orbit_samples(raw_path, expected_physics_id)
+    expected_points = _block_rate_points(raw_samples, samples_per_block=block_size)
     points = record.get("rate_points")
-    if not isinstance(points, list) or len(points) < 3:
-        raise ValueError("CDM resolved rate track requires at least three rate points")
+    if not isinstance(points, list) or len(points) != len(expected_points):
+        raise ValueError("CDM resolved rate track points differ from its raw orbit track")
     separations: list[float] = []
     rates: list[float] = []
-    for index, point in enumerate(points):
+    for index, (point, expected) in enumerate(zip(points, expected_points)):
         if not isinstance(point, Mapping) or set(point) != {
             "separation_pc",
             "dln_separation_dt_per_myr",
@@ -233,17 +369,19 @@ def read_cdm_resolved_rate_track(
         if isinstance(raw_rate, bool):
             raise ValueError("CDM resolved rate track must have negative dln_separation_dt_per_myr")
         try:
-            decay_rate = -float(raw_rate)
+            signed_rate = float(raw_rate)
         except (TypeError, ValueError) as error:
             raise ValueError(
                 "CDM resolved rate track must have negative dln_separation_dt_per_myr"
             ) from error
-        if not math.isfinite(decay_rate) or decay_rate <= 0.0:
+        if not math.isfinite(signed_rate) or signed_rate >= 0.0:
             raise ValueError("CDM resolved rate track must have negative dln_separation_dt_per_myr")
+        if not math.isclose(separation, expected["separation_pc"], rel_tol=1.0e-12):
+            raise ValueError("CDM rate separation differs from its raw orbit regression")
+        if not math.isclose(signed_rate, expected["dln_separation_dt_per_myr"], rel_tol=1.0e-12):
+            raise ValueError("CDM rate differs from its raw orbit regression")
         separations.append(separation)
-        rates.append(decay_rate)
-    if any(left <= right for left, right in zip(separations[:-1], separations[1:])):
-        raise ValueError("CDM resolved rate-track separations must be strictly decreasing")
+        rates.append(-signed_rate)
     return CDMResolvedRateTrack(
         source_path=source,
         source_sha256=_file_sha256(source),

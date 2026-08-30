@@ -94,6 +94,23 @@ binding, snapshot hashes, periodic minimum-image separations, and instantaneous 
 a monotonic rate table: eccentric oscillations, stalled phases, and force
 source attribution must be assessed before building a CDM delay stage.
 
+For a strictly shrinking, sufficiently sampled candidate, form a fixed-block
+secular table with a documented regression rather than manually entering a
+rate.  The builder requires at least three complete blocks and five samples in
+each block; a block with non-negative secular slope is rejected.
+
+```bash
+python scripts/derive_cdm_secular_rate_track.py cdm_raw_pair_orbit.json \
+  --stage capture_to_hard_binary --samples-per-block 8 \
+  --output cdm_secular_rates.json
+```
+
+The resulting rate table hashes the exact raw orbit track and its estimator
+settings.  The downstream reader recomputes every rate and support point from
+that raw track.  This establishes reproducibility, not adequacy: the accepted
+CDM resolution/phase ensemble and force/conservation evidence remain required
+before the stage-delay builder can use it.
+
 An uncalibrated, unresolved, stalled, or over-cosmic-time interval instead has
 a non-complete status, no delay or interval, no `calibration`, and an explicit
 reason.  It remains censored in the composed result.

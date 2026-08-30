@@ -10,8 +10,10 @@ import pytest
 from fdm_smbh_delay.cdm_coalescence import (
     build_cdm_delay_stage_record,
     compose_cdm_coalescence_time,
+    derive_cdm_secular_rate_track,
     peters_gravitational_wave_segment,
     read_cdm_delay_stage_summary,
+    read_cdm_resolved_rate_track,
 )
 from fdm_smbh_delay.cdm_true_time_cli import main
 
@@ -49,29 +51,27 @@ def _rate_track(
     end_pc: float,
 ) -> Path:
     rate = -math.log(start_pc / end_pc) / delay_myr
-    return _write_json(
-        tmp_path / f"{stage}_rate_track.json",
+    step = delay_myr / 10.0
+    raw = _write_json(
+        tmp_path / f"{stage}_raw_orbit.json",
         {
             "schema_version": 1,
-            "status": "complete",
+            "status": "raw_relative_orbit_track",
             "dark_matter_model": "cdm",
-            "stage": stage,
             "physics_id": "zoomphys-cdm-test",
-            "rate_points": [
+            "samples": [
                 {
-                    "separation_pc": start_pc,
-                    "dln_separation_dt_per_myr": rate,
-                },
-                {
-                    "separation_pc": (start_pc * end_pc) ** 0.5,
-                    "dln_separation_dt_per_myr": rate,
-                },
-                {
-                    "separation_pc": end_pc,
-                    "dln_separation_dt_per_myr": rate,
-                },
+                    "time_myr": index * step,
+                    "separation_pc": start_pc
+                    * math.exp(rate * (index * step - 2.0 * step)),
+                }
+                for index in range(15)
             ],
         },
+    )
+    return _write_json(
+        tmp_path / f"{stage}_rate_track.json",
+        derive_cdm_secular_rate_track(raw, stage=stage, samples_per_block=5),
     )
 
 
@@ -166,10 +166,8 @@ def test_stage_builder_integrates_only_the_measured_rate_track_support(
     record = build_cdm_delay_stage_record(track, phase)
     assert record["schema_version"] == 2
     assert record["delay_myr"] == pytest.approx(20.0)
-    assert record["interval_pc"] == {
-        "start_separation_pc": 1000.0,
-        "end_separation_pc": 1.0,
-    }
+    assert record["interval_pc"]["start_separation_pc"] == pytest.approx(1000.0)
+    assert record["interval_pc"]["end_separation_pc"] == pytest.approx(1.0)
     summary = _write_json(tmp_path / "built_stage.json", record)
     parsed = read_cdm_delay_stage_summary(summary, expected_stage="capture_to_hard_binary")
     assert parsed.rate_track_sha256 == _sha256(track)
@@ -178,6 +176,16 @@ def test_stage_builder_integrates_only_the_measured_rate_track_support(
     tampered = _write_json(tmp_path / "tampered_stage.json", record)
     with pytest.raises(ValueError, match="differs from its resolved rate-track integral"):
         read_cdm_delay_stage_summary(tampered, expected_stage="capture_to_hard_binary")
+
+    rate_record = json.loads(track.read_text(encoding="utf-8"))
+    rate_record["rate_points"][0]["dln_separation_dt_per_myr"] *= 1.1
+    forged_rate = _write_json(tmp_path / "forged_rate_track.json", rate_record)
+    with pytest.raises(ValueError, match="differs from its raw orbit regression"):
+        read_cdm_resolved_rate_track(
+            forged_rate,
+            expected_stage="capture_to_hard_binary",
+            expected_physics_id="zoomphys-cdm-test",
+        )
 
 
 def test_fixed_population_delay_and_non_cdm_phase_evidence_are_rejected(tmp_path: Path) -> None:
