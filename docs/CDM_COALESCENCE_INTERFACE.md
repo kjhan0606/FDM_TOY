@@ -94,6 +94,17 @@ binding, snapshot hashes, periodic minimum-image separations, and instantaneous 
 a monotonic rate table: eccentric oscillations, stalled phases, and force
 source attribution must be assessed before building a CDM delay stage.
 
+The supplied `configs/cdm_noncompacting_zoom_grid.yaml` fixes the first
+resolution-paired, two-phase CDM pilot: both meshes retain four cells at
+1 pc, `rmerge=0`, output cadence resolves the target Kepler period by at
+least 16 samples, and 15 complete outputs are required before a three-block
+secular-rate candidate exists.  It is preflighted without submission:
+
+```bash
+python scripts/preflight_cdm_noncompacting_zoom_plan.py \
+  configs/cdm_noncompacting_zoom_grid.yaml cdm_zoom_preflight.json
+```
+
 For a strictly shrinking, sufficiently sampled candidate, form a fixed-block
 secular table with a documented regression rather than manually entering a
 rate.  The builder requires at least three complete blocks and five samples in
