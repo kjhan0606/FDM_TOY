@@ -128,6 +128,19 @@ Only `ready_for_operator_submission` authorizes the operator to submit this
 specific input.  A ready contract remains a configuration identity check, not
 a convergence result or a delay calibration.
 
+After completion, check every output before extracting a pair orbit.  This
+requires the `COMPLETE` marker, native no-finite-radius provenance, the same
+ledger setting, and a copied `namelist.txt` whose hash is exactly the one in
+the ready contract.  The result reports whether the plan's minimum count of
+complete outputs has been reached, but does not itself accept a rate.
+
+```bash
+python scripts/validate_cdm_noncompacting_zoom_runtime.py \
+  --output cdm_zoom_runtime_identity.json \
+  cdm_zoom_contract/cdm_noncompacting_zoom_run_contract.json \
+  output_00042 output_00043 output_00044
+```
+
 For a strictly shrinking, sufficiently sampled candidate, form a fixed-block
 secular table with a documented regression rather than manually entering a
 rate.  The builder requires at least three complete blocks and five samples in

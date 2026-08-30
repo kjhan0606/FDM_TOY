@@ -36,6 +36,10 @@ from .cdm_zoom_materialization import (
     assess_cdm_noncompacting_zoom_run_inputs,
     materialize_cdm_noncompacting_zoom_run_contract,
 )
+from .cdm_zoom_runtime_identity import (
+    CDMNonCompactingZoomRuntimeIdentity,
+    assess_cdm_noncompacting_zoom_runtime_identity,
+)
 from .dm_comparison import (
     DMComparisonCaptureEnsemble,
     DMComparisonCaptureRegistration,
@@ -149,6 +153,7 @@ __all__ = [
     "CaptureSolitonConfiguration",
     "CaptureDMRunBinding",
     "CDMNonCompactingZoomRunContract",
+    "CDMNonCompactingZoomRuntimeIdentity",
     "DMComparisonCaptureEnsemble",
     "DMComparisonCaptureRegistration",
     "DMComparisonFamilyManifest",
@@ -202,6 +207,7 @@ __all__ = [
     "TabulatedSphericalProfile",
     "assemble_capture_derived_pure_fdm_seed",
     "assess_cdm_noncompacting_zoom_run_inputs",
+    "assess_cdm_noncompacting_zoom_runtime_identity",
     "build_kpc_model_from_profile_bundle",
     "capture_derived_seed_mapping",
     "capture_soliton_configuration_from_mapping",

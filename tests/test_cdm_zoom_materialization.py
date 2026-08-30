@@ -11,6 +11,9 @@ from fdm_smbh_delay.cdm_zoom_materialization import (
     materialize_cdm_noncompacting_zoom_run_contract,
 )
 from fdm_smbh_delay.cdm_zoom_plan import load_cdm_noncompacting_zoom_plan
+from fdm_smbh_delay.cdm_zoom_runtime_identity import (
+    assess_cdm_noncompacting_zoom_runtime_identity,
+)
 
 
 def _capture_binding(root: Path) -> Path:
@@ -146,6 +149,41 @@ def _arguments(tmp_path: Path) -> dict[str, object]:
     }
 
 
+def _write_runtime_output(
+    root: Path,
+    *,
+    number: int,
+    namelist: str,
+    ledger_file: str = "zoom_capture.jsonl",
+) -> Path:
+    label = f"{number:05d}"
+    directory = root / f"output_{label}"
+    directory.mkdir()
+    (directory / "COMPLETE").write_text(label + "\n", encoding="utf-8")
+    (directory / f"dm_run_provenance_{label}.txt").write_text(
+        "# dm_run_provenance_v1\n"
+        "dark_matter_model = cdm\n"
+        "pic_enabled = .true.\n"
+        "sidm_enabled = .false.\n"
+        "fdm_enabled = .false.\n"
+        f"nstep_coarse = {number}\n"
+        "time_code = 1.0d0\n"
+        "aexp = 5.0d-1\n"
+        "build_git_hash = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+        "namelist_copy = namelist.txt\n"
+        "compilation_copy = compilation.txt\n"
+        "smbh_capture_ledger_enabled = .true.\n"
+        f"smbh_capture_ledger_file = {ledger_file}\n"
+        "smbh_merge_radius_cells = 0.0d0\n"
+        "smbh_compaction_mode = no_finite_radius_rmerge_zero\n"
+        "dm_transport = collisionless_nbody\n",
+        encoding="utf-8",
+    )
+    (directory / "namelist.txt").write_text(namelist, encoding="utf-8")
+    (directory / "compilation.txt").write_text("build provenance\n", encoding="utf-8")
+    return directory
+
+
 def test_materializes_exact_cdm_case_capture_and_noncompacting_namelist(
     tmp_path: Path,
 ) -> None:
@@ -210,3 +248,61 @@ def test_materializes_auditable_not_ready_contract_for_missing_namelist(tmp_path
     assert record["status"] == "not_ready_for_operator_submission"
     assert record["run_inputs"]["namelist"]["sha256"] is None
     assert any("cannot read lagRamses run namelist" in reason for reason in record["reasons"])
+
+
+def test_runtime_identity_requires_completed_output_namelist_copy_to_match_contract(
+    tmp_path: Path,
+) -> None:
+    arguments = _arguments(tmp_path)
+    contract_directory = tmp_path / "contract"
+    materialize_cdm_noncompacting_zoom_run_contract(
+        **arguments,
+        output_directory=contract_directory,
+    )
+    output = _write_runtime_output(
+        tmp_path,
+        number=1,
+        namelist=Path(arguments["run_namelist_path"]).read_text(encoding="utf-8"),
+    )
+    decision = assess_cdm_noncompacting_zoom_runtime_identity(
+        contract_directory / "cdm_noncompacting_zoom_run_contract.json", [output]
+    )
+    record = decision.as_dict()
+    assert decision.verified
+    assert record["complete_outputs"][0]["output_number"] == "00001"
+    assert record["secular_sampling"] == {
+        "complete_output_count": 1,
+        "minimum_complete_outputs": 15,
+        "status": "insufficient_complete_outputs",
+    }
+
+    mismatched = _write_runtime_output(
+        tmp_path,
+        number=2,
+        namelist=_namelist(ledger_file="wrong_zoom_capture.jsonl"),
+    )
+    rejected = assess_cdm_noncompacting_zoom_runtime_identity(
+        contract_directory / "cdm_noncompacting_zoom_run_contract.json", [mismatched]
+    )
+    assert not rejected.verified
+    assert any("namelist copy SHA-256 differs" in reason for reason in rejected.reasons)
+
+
+def test_runtime_identity_rejects_changed_output_ledger_setting(tmp_path: Path) -> None:
+    arguments = _arguments(tmp_path)
+    contract_directory = tmp_path / "contract"
+    materialize_cdm_noncompacting_zoom_run_contract(
+        **arguments,
+        output_directory=contract_directory,
+    )
+    output = _write_runtime_output(
+        tmp_path,
+        number=1,
+        namelist=Path(arguments["run_namelist_path"]).read_text(encoding="utf-8"),
+        ledger_file="other_zoom_capture.jsonl",
+    )
+    decision = assess_cdm_noncompacting_zoom_runtime_identity(
+        contract_directory / "cdm_noncompacting_zoom_run_contract.json", [output]
+    )
+    assert not decision.verified
+    assert any("capture-ledger setting differs" in reason for reason in decision.reasons)
