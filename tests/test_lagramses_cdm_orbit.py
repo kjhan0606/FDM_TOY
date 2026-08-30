@@ -72,6 +72,7 @@ def _runtime_identity(root: Path, binding: Path, outputs: list[Path]) -> Path:
     namelist = root / "zoom.nml"
     namelist.write_text(
         "&SINK_PARAMS\n"
+        "levelmax=21\n"
         "smbh=.true.\n"
         "rmerge=0.0d0\n"
         "smbh_capture_ledger=.true.\n"
@@ -79,6 +80,13 @@ def _runtime_identity(root: Path, binding: Path, outputs: list[Path]) -> Path:
         "/\n",
         encoding="utf-8",
     )
+    (root / "compilation_reference.txt").write_text("build provenance\n", encoding="utf-8")
+    for name in (
+        "host_orbit_initial_conditions",
+        "initial_conditions",
+        "sink_initial_conditions",
+    ):
+        (root / f"{name}.dat").write_text(name + "\n", encoding="utf-8")
     plan = load_cdm_noncompacting_zoom_plan("configs/cdm_noncompacting_zoom_grid.yaml")
     contract_directory = root / "contract"
     materialize_cdm_noncompacting_zoom_run_contract(
@@ -90,6 +98,16 @@ def _runtime_identity(root: Path, binding: Path, outputs: list[Path]) -> Path:
         secondary_sink_id=2,
         run_namelist_path=namelist,
         capture_ledger_file="zoom_capture.jsonl",
+        expected_build_git_hash="a" * 40,
+        expected_compilation_path=root / "compilation_reference.txt",
+        case_input_artifact_paths={
+            name: root / f"{name}.dat"
+            for name in (
+                "host_orbit_initial_conditions",
+                "initial_conditions",
+                "sink_initial_conditions",
+            )
+        },
         output_directory=contract_directory,
     )
     decision = assess_cdm_noncompacting_zoom_runtime_identity(
@@ -207,6 +225,7 @@ def test_extracts_periodic_comoving_relative_orbit_with_complete_provenance(
 ) -> None:
     namelist = (
         "&SINK_PARAMS\n"
+        "levelmax=21\n"
         "smbh=.true.\n"
         "rmerge=0.0d0\n"
         "smbh_capture_ledger=.true.\n"
@@ -245,6 +264,7 @@ def test_extracts_periodic_comoving_relative_orbit_with_complete_provenance(
 def test_refuses_compacting_or_incomplete_lagramses_outputs(tmp_path: Path) -> None:
     namelist = (
         "&SINK_PARAMS\n"
+        "levelmax=21\n"
         "smbh=.true.\n"
         "rmerge=0.0d0\n"
         "smbh_capture_ledger=.true.\n"
@@ -277,6 +297,7 @@ def test_refuses_compacting_or_incomplete_lagramses_outputs(tmp_path: Path) -> N
 def test_extractor_rereads_runtime_identity_outputs_before_using_them(tmp_path: Path) -> None:
     namelist = (
         "&SINK_PARAMS\n"
+        "levelmax=21\n"
         "smbh=.true.\n"
         "rmerge=0.0d0\n"
         "smbh_capture_ledger=.true.\n"

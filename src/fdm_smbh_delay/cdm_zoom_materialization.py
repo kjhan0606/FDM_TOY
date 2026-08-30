@@ -24,6 +24,12 @@ from .zoom_calibration import GalaxyMergerZoomCase
 
 
 CDM_NONCOMPACTING_ZOOM_RUN_CONTRACT_SCHEMA_VERSION = 1
+_BUILD_GIT_HASH = re.compile(r"[0-9a-f]{40}")
+_REQUIRED_CASE_INPUT_ARTIFACTS = (
+    "host_orbit_initial_conditions",
+    "initial_conditions",
+    "sink_initial_conditions",
+)
 _ASSIGNMENT = re.compile(
     r"^[ \t]*([A-Za-z][A-Za-z0-9_]*)[ \t]*=[ \t]*([^!,/\r\n]+)",
     re.MULTILINE,
@@ -131,6 +137,31 @@ def _source(path: Path) -> dict[str, str | None]:
     return {"path": str(path), "sha256": digest}
 
 
+def _artifact(path: str | Path, label: str) -> dict[str, str]:
+    source = Path(path).expanduser().resolve()
+    try:
+        digest = _sha256(source)
+    except OSError as error:
+        raise ValueError(f"cannot read {label}: {error}") from error
+    return {"path": str(source), "sha256": digest}
+
+
+def _case_input_artifacts(paths: Mapping[str, str | Path]) -> dict[str, dict[str, str]]:
+    if set(paths) != set(_REQUIRED_CASE_INPUT_ARTIFACTS):
+        raise ValueError(
+            "case input artifacts must name host_orbit_initial_conditions, "
+            "initial_conditions, and sink_initial_conditions"
+        )
+    return {name: _artifact(paths[name], f"case input artifact {name}") for name in sorted(paths)}
+
+
+def _expected_build_hash(value: str) -> str:
+    normalized = value.strip().lower()
+    if _BUILD_GIT_HASH.fullmatch(normalized) is None:
+        raise ValueError("expected_build_git_hash must be a 40-character Git SHA-1")
+    return normalized
+
+
 @dataclass(frozen=True)
 class CDMNonCompactingZoomRunContract:
     """Exact non-submitting input identity for one CDM zoom realization."""
@@ -141,6 +172,9 @@ class CDMNonCompactingZoomRunContract:
     case: GalaxyMergerZoomCase
     capture_binding: Mapping[str, Any]
     capture_ledger_file: str
+    expected_build_git_hash: str
+    expected_compilation: Mapping[str, str]
+    case_input_artifacts: Mapping[str, Mapping[str, str]]
     status: str
     reasons: tuple[str, ...]
 
@@ -165,6 +199,14 @@ class CDMNonCompactingZoomRunContract:
                 "manifest_sha256": self.plan.grid.manifest_sha256,
             },
             "capture_binding": dict(self.capture_binding),
+            "case_input_identity": {
+                "expected_build_git_hash": self.expected_build_git_hash,
+                "expected_compilation": dict(self.expected_compilation),
+                "input_artifacts": {
+                    name: dict(artifact)
+                    for name, artifact in self.case_input_artifacts.items()
+                },
+            },
             "run_inputs": {
                 "namelist": _source(self.run_namelist_path),
                 "required_smbh_controls_fragment": {
@@ -197,6 +239,9 @@ def assess_cdm_noncompacting_zoom_run_inputs(
     secondary_sink_id: int,
     run_namelist_path: str | Path,
     capture_ledger_file: str,
+    expected_build_git_hash: str,
+    expected_compilation_path: str | Path,
+    case_input_artifact_paths: Mapping[str, str | Path],
 ) -> tuple[CDMNonCompactingZoomRunContract, CDMNonCompactingZoomPlan]:
     """Check one complete lagRamses input without modifying it or submitting."""
 
@@ -211,6 +256,9 @@ def assess_cdm_noncompacting_zoom_run_inputs(
         secondary_sink_id=secondary_sink_id,
     )
     expected_ledger_file = _fortran_string(capture_ledger_file)
+    build_hash = _expected_build_hash(expected_build_git_hash)
+    compilation = _artifact(expected_compilation_path, "expected compilation manifest")
+    input_artifacts = _case_input_artifacts(case_input_artifact_paths)
     original_ledger = str(binding["capture_ledger_path"])
     if Path(expected_ledger_file).expanduser().is_absolute() and (
         str(Path(expected_ledger_file).expanduser().resolve()) == original_ledger
@@ -239,6 +287,11 @@ def assess_cdm_noncompacting_zoom_run_inputs(
     except ValueError as error:
         reasons.append(str(error))
     try:
+        if _number(_unique(assignments, "levelmax")) != selected_case.numerics.levelmax:
+            reasons.append("levelmax differs from the selected CDM zoom case")
+    except ValueError as error:
+        reasons.append(str(error))
+    try:
         actual_ledger_file = _fortran_string(_unique(assignments, "smbh_capture_ledger_file"))
         if actual_ledger_file != expected_ledger_file:
             reasons.append("smbh_capture_ledger_file differs from the materialized run contract")
@@ -253,6 +306,9 @@ def assess_cdm_noncompacting_zoom_run_inputs(
             case=selected_case,
             capture_binding=binding,
             capture_ledger_file=expected_ledger_file,
+            expected_build_git_hash=build_hash,
+            expected_compilation=compilation,
+            case_input_artifacts=input_artifacts,
             status=(
                 "ready_for_operator_submission"
                 if not reasons
@@ -274,6 +330,9 @@ def materialize_cdm_noncompacting_zoom_run_contract(
     secondary_sink_id: int,
     run_namelist_path: str | Path,
     capture_ledger_file: str,
+    expected_build_git_hash: str,
+    expected_compilation_path: str | Path,
+    case_input_artifact_paths: Mapping[str, str | Path],
     output_directory: str | Path,
 ) -> dict[str, Any]:
     """Write a new run-contract directory; never modify run inputs or submit."""
@@ -287,6 +346,9 @@ def materialize_cdm_noncompacting_zoom_run_contract(
         secondary_sink_id=secondary_sink_id,
         run_namelist_path=run_namelist_path,
         capture_ledger_file=capture_ledger_file,
+        expected_build_git_hash=expected_build_git_hash,
+        expected_compilation_path=expected_compilation_path,
+        case_input_artifact_paths=case_input_artifact_paths,
     )
     destination = Path(output_directory).expanduser().resolve()
     try:

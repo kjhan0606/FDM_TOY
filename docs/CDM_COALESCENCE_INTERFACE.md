@@ -106,12 +106,14 @@ python scripts/preflight_cdm_noncompacting_zoom_plan.py \
 ```
 
 Before a manual Slurm submission, materialize one immutable input contract.
-It selects one exact resolution/phase case, verifies the original ledger event
-and sink IDs again, checks the complete operator namelist for `smbh=.true.`,
-`rmerge=0`, and an enabled, separately named capture ledger, then writes a
-new directory containing the audit record and a reference-only `&SINK_PARAMS`
-fragment.  It never edits the supplied namelist, overwrites the original
-capture ledger, or submits a calculation.
+It records one selected resolution/phase case, verifies the original ledger
+event and sink IDs again, checks the complete operator namelist for the
+selected `levelmax`, `smbh=.true.`, `rmerge=0`, and an enabled, separately
+named capture ledger.  It also requires hashes for the expected build,
+compilation manifest, and the host/orbit, collisionless, and sink initial
+condition inputs.  It then writes a new directory containing the audit record
+and a reference-only `&SINK_PARAMS` fragment.  It never edits the supplied
+namelist, overwrites the original capture ledger, or submits a calculation.
 
 ```bash
 python scripts/materialize_cdm_noncompacting_zoom_run.py \
@@ -121,18 +123,28 @@ python scripts/materialize_cdm_noncompacting_zoom_run.py \
   --primary-sink-id 11799 --secondary-sink-id 11801 \
   --run-namelist cdm_zoom.nml \
   --capture-ledger-file zoom_capture_11799_11801.jsonl \
+  --expected-build-git-hash <40-character-lagRamses-revision> \
+  --expected-compilation compilation.txt \
+  --input-artifact host_orbit_initial_conditions=host_orbit_ic.dat \
+  --input-artifact initial_conditions=collisionless_ic.dat \
+  --input-artifact sink_initial_conditions=ic_sink \
   configs/cdm_noncompacting_zoom_grid.yaml cdm_zoom_contract
 ```
 
 Only `ready_for_operator_submission` authorizes the operator to submit this
-specific input.  A ready contract remains a configuration identity check, not
-a convergence result or a delay calibration.
+byte-identified input package.  The explicit hashes do not interpret an
+opaque IC binary format; the contract is configuration provenance, not an
+independent physical validation of the host, softening, particle loading,
+phase, convergence, or delay calibration.
 
 After completion, check every output before extracting a pair orbit.  This
 requires the `COMPLETE` marker, native no-finite-radius provenance, the same
-ledger setting, and a copied `namelist.txt` whose hash is exactly the one in
-the ready contract.  The result reports whether the plan's minimum count of
-complete outputs has been reached, but does not itself accept a rate.
+ledger setting, the contracted build revision, a matching `compilation.txt`,
+and a copied `namelist.txt` whose hash is exactly the one in the ready
+contract.  It rejects mixed run roots, build/compilation identities,
+non-monotone output time/step sequences, and cadence above the plan limit.
+The result reports only the listed output count relative to the plan; it does
+not itself accept a secular rate.
 
 ```bash
 python scripts/validate_cdm_noncompacting_zoom_runtime.py \

@@ -26,6 +26,11 @@ CDM_NONCOMPACTING_ZOOM_RUNTIME_IDENTITY_SCHEMA_VERSION = 1
 _OUTPUT_DIRECTORY = re.compile(r"output_(\d{5})$")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _MYR_SECONDS = 3.15576e13
+_CASE_INPUT_ARTIFACTS = {
+    "host_orbit_initial_conditions",
+    "initial_conditions",
+    "sink_initial_conditions",
+}
 
 
 def _sha256(path: Path) -> str:
@@ -111,6 +116,9 @@ class _VerifiedCDMZoomContract:
     namelist_sha256: str
     capture_ledger_file: str
     capture_binding: dict[str, Any]
+    expected_build_git_hash: str
+    expected_compilation_sha256: str
+    case_input_artifact_sha256s: dict[str, str]
 
 
 def _read_verified_contract(path: str | Path) -> _VerifiedCDMZoomContract:
@@ -127,6 +135,7 @@ def _read_verified_contract(path: str | Path) -> _VerifiedCDMZoomContract:
         "case",
         "plan",
         "capture_binding",
+        "case_input_identity",
         "run_inputs",
         "sampling_requirements",
         "execution",
@@ -181,6 +190,31 @@ def _read_verified_contract(path: str | Path) -> _VerifiedCDMZoomContract:
     ) != dict(binding):
         raise ValueError("CDM zoom capture binding no longer matches its ledger event")
 
+    case_identity = record.get("case_input_identity")
+    if not isinstance(case_identity, Mapping) or set(case_identity) != {
+        "expected_build_git_hash",
+        "expected_compilation",
+        "input_artifacts",
+    }:
+        raise ValueError("CDM zoom run contract case-input identity is invalid")
+    expected_build = case_identity.get("expected_build_git_hash")
+    if not isinstance(expected_build, str) or re.fullmatch(r"[0-9a-f]{40}", expected_build) is None:
+        raise ValueError("CDM zoom run contract expected build identity is invalid")
+    compilation_path, compilation_sha256 = _artifact(
+        case_identity, "expected_compilation", "CDM zoom run contract"
+    )
+    artifact_records = case_identity.get("input_artifacts")
+    if not isinstance(artifact_records, Mapping) or set(artifact_records) != _CASE_INPUT_ARTIFACTS:
+        raise ValueError("CDM zoom run contract input-artifact fields are invalid")
+    artifact_paths: dict[str, Path] = {}
+    artifact_sha256s: dict[str, str] = {}
+    for name in sorted(_CASE_INPUT_ARTIFACTS):
+        artifact_path, artifact_sha = _artifact(
+            artifact_records, name, "CDM zoom run contract input artifact"
+        )
+        artifact_paths[name] = artifact_path
+        artifact_sha256s[name] = artifact_sha
+
     run_inputs = record.get("run_inputs")
     if not isinstance(run_inputs, Mapping):
         raise ValueError("CDM zoom run contract run inputs are invalid")
@@ -202,6 +236,9 @@ def _read_verified_contract(path: str | Path) -> _VerifiedCDMZoomContract:
         secondary_sink_id=secondary_id,
         run_namelist_path=namelist_path,
         capture_ledger_file=ledger_file,
+        expected_build_git_hash=expected_build,
+        expected_compilation_path=compilation_path,
+        case_input_artifact_paths=artifact_paths,
     )
     if not decision.ready:
         raise ValueError("CDM zoom run input no longer passes non-compacting preflight")
@@ -213,6 +250,9 @@ def _read_verified_contract(path: str | Path) -> _VerifiedCDMZoomContract:
         namelist_sha256=namelist_sha256,
         capture_ledger_file=ledger_file,
         capture_binding=dict(binding),
+        expected_build_git_hash=expected_build,
+        expected_compilation_sha256=compilation_sha256,
+        case_input_artifact_sha256s=artifact_sha256s,
     )
 
 
@@ -382,12 +422,16 @@ def _verify_output(
         raise ValueError("output does not prove non-compacting CDM provenance")
     if provenance.smbh_capture_ledger_file != contract.capture_ledger_file:
         raise ValueError("output capture-ledger setting differs from its run contract")
+    if provenance.build_git_hash != contract.expected_build_git_hash:
+        raise ValueError("output build_git_hash differs from its run contract")
     namelist_copy = _output_file(directory, provenance.namelist_copy, "output namelist_copy")
     if _sha256(namelist_copy) != contract.namelist_sha256:
         raise ValueError("output namelist copy SHA-256 differs from its run contract")
     compilation_copy = _output_file(
         directory, provenance.compilation_copy, "output compilation_copy"
     )
+    if _sha256(compilation_copy) != contract.expected_compilation_sha256:
+        raise ValueError("output compilation copy SHA-256 differs from its run contract")
     info_path = directory / f"info_{output_number}.txt"
     info = _info_records(info_path)
     if not math.isclose(

@@ -122,6 +122,7 @@ def _namelist(*, rmerge: str = "0.0d0", ledger_file: str = "zoom_capture.jsonl")
     return "\n".join(
         (
             "&SINK_PARAMS",
+            "levelmax=21",
             "smbh=.true.",
             f"rmerge={rmerge}",
             "smbh_capture_ledger=.true.",
@@ -133,9 +134,21 @@ def _namelist(*, rmerge: str = "0.0d0", ledger_file: str = "zoom_capture.jsonl")
 
 
 def _arguments(tmp_path: Path) -> dict[str, object]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     binding = _capture_binding(tmp_path)
     namelist = tmp_path / "zoom.nml"
     namelist.write_text(_namelist(), encoding="utf-8")
+    compilation = tmp_path / "compilation.txt"
+    compilation.write_text("build provenance\n", encoding="utf-8")
+    artifacts = {}
+    for name in (
+        "host_orbit_initial_conditions",
+        "initial_conditions",
+        "sink_initial_conditions",
+    ):
+        artifact = tmp_path / f"{name}.dat"
+        artifact.write_text(name + "\n", encoding="utf-8")
+        artifacts[name] = artifact
     plan = load_cdm_noncompacting_zoom_plan("configs/cdm_noncompacting_zoom_grid.yaml")
     return {
         "specification_path": "configs/cdm_noncompacting_zoom_grid.yaml",
@@ -146,6 +159,9 @@ def _arguments(tmp_path: Path) -> dict[str, object]:
         "secondary_sink_id": 2,
         "run_namelist_path": namelist,
         "capture_ledger_file": "zoom_capture.jsonl",
+        "expected_build_git_hash": "a" * 40,
+        "expected_compilation_path": compilation,
+        "case_input_artifact_paths": artifacts,
     }
 
 
@@ -157,6 +173,7 @@ def _write_runtime_output(
     ledger_file: str = "zoom_capture.jsonl",
     time_code: float = 1.0,
     build_git_hash: str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    compilation_text: str = "build provenance\n",
 ) -> Path:
     label = f"{number:05d}"
     directory = root / f"output_{label}"
@@ -182,7 +199,7 @@ def _write_runtime_output(
         encoding="utf-8",
     )
     (directory / "namelist.txt").write_text(namelist, encoding="utf-8")
-    (directory / "compilation.txt").write_text("build provenance\n", encoding="utf-8")
+    (directory / "compilation.txt").write_text(compilation_text, encoding="utf-8")
     (directory / f"info_{label}.txt").write_text(
         f"time = {time_code:.7f}d0\n"
         "aexp = 5.0d-1\n"
@@ -234,6 +251,14 @@ def test_marks_mismatched_namelist_not_ready_but_preserves_auditable_contract(
         output_directory=tmp_path / "not-ready-contract",
     )
     assert record["status"] == "not_ready_for_operator_submission"
+
+    arguments = _arguments(tmp_path / "different-level")
+    Path(arguments["run_namelist_path"]).write_text(
+        _namelist().replace("levelmax=21", "levelmax=22"), encoding="utf-8"
+    )
+    decision, _ = assess_cdm_noncompacting_zoom_run_inputs(**arguments)
+    assert decision.status == "not_ready_for_operator_submission"
+    assert "levelmax differs from the selected CDM zoom case" in decision.reasons
 
 
 def test_rejects_reusing_original_capture_ledger_as_zoom_output(tmp_path: Path) -> None:
@@ -316,6 +341,28 @@ def test_runtime_identity_rejects_changed_output_ledger_setting(tmp_path: Path) 
     assert any("capture-ledger setting differs" in reason for reason in decision.reasons)
 
 
+def test_runtime_identity_refuses_a_contract_with_changed_case_input_artifact(
+    tmp_path: Path,
+) -> None:
+    arguments = _arguments(tmp_path)
+    contract_directory = tmp_path / "contract"
+    materialize_cdm_noncompacting_zoom_run_contract(
+        **arguments,
+        output_directory=contract_directory,
+    )
+    artifact = Path(arguments["case_input_artifact_paths"]["initial_conditions"])
+    artifact.write_text("changed collisionless initial conditions\n", encoding="utf-8")
+    output = _write_runtime_output(
+        tmp_path,
+        number=1,
+        namelist=Path(arguments["run_namelist_path"]).read_text(encoding="utf-8"),
+    )
+    with pytest.raises(ValueError, match="input artifact initial_conditions SHA-256 no longer matches"):
+        assess_cdm_noncompacting_zoom_runtime_identity(
+            contract_directory / "cdm_noncompacting_zoom_run_contract.json", [output]
+        )
+
+
 def test_runtime_identity_rejects_mixed_builds_and_cadence(tmp_path: Path) -> None:
     arguments = _arguments(tmp_path)
     contract_directory = tmp_path / "contract"
@@ -330,11 +377,26 @@ def test_runtime_identity_rejects_mixed_builds_and_cadence(tmp_path: Path) -> No
         number=2,
         namelist=namelist,
         time_code=1.0003,
+    )
+    changed_build = _write_runtime_output(
+        tmp_path,
+        number=3,
+        namelist=namelist,
+        time_code=1.0004,
         build_git_hash="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     )
+    changed_compilation = _write_runtime_output(
+        tmp_path,
+        number=4,
+        namelist=namelist,
+        time_code=1.0005,
+        compilation_text="different build provenance\n",
+    )
     decision = assess_cdm_noncompacting_zoom_runtime_identity(
-        contract_directory / "cdm_noncompacting_zoom_run_contract.json", [first, second]
+        contract_directory / "cdm_noncompacting_zoom_run_contract.json",
+        [first, second, changed_build, changed_compilation],
     )
     assert not decision.verified
-    assert any("do not share one build_git_hash" in reason for reason in decision.reasons)
+    assert any("build_git_hash differs" in reason for reason in decision.reasons)
+    assert any("compilation copy SHA-256 differs" in reason for reason in decision.reasons)
     assert any("cadence exceeds" in reason for reason in decision.reasons)
