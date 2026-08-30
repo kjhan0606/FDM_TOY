@@ -137,6 +137,17 @@ def _records(model: str, *, nstep: int = 12, ledger_name: str = "smbh_capture_le
     return records
 
 
+def _cdm_zoom_execution_identity() -> dict[str, str]:
+    return {
+        "cdm_zoom_execution_identity_status": "available",
+        "cdm_zoom_plan_manifest_sha256": "1" * 64,
+        "cdm_zoom_capture_event_sha256": "2" * 64,
+        "cdm_zoom_host_orbit_initial_conditions_sha256": "3" * 64,
+        "cdm_zoom_initial_conditions_sha256": "4" * 64,
+        "cdm_zoom_sink_initial_conditions_sha256": "5" * 64,
+    }
+
+
 def _write_provenance(path: Path, records: dict[str, str]) -> None:
     path.write_text(
         "# dm_run_provenance_v1\n" + "".join(f"{key} = {value}\n" for key, value in records.items()),
@@ -154,6 +165,34 @@ def test_reads_each_dark_matter_realization_without_mixing_models(tmp_path: Path
         assert provenance.parameter("fdm_force_accounting") == "resolved_wave_only"
     if model == "sidm":
         assert provenance.parameter("sidm_cross_section_cm2_g") == pytest.approx(1.0)
+
+
+def test_reads_complete_cdm_zoom_execution_identity_only_for_cdm(tmp_path: Path) -> None:
+    path = tmp_path / "cdm.txt"
+    _write_provenance(path, _records("cdm") | _cdm_zoom_execution_identity())
+    provenance = read_dark_matter_run_provenance(path)
+    assert provenance.parameter("cdm_zoom_execution_identity_status") == "available"
+    assert provenance.parameter("cdm_zoom_initial_conditions_sha256") == "4" * 64
+
+    missing = _records("cdm") | _cdm_zoom_execution_identity()
+    del missing["cdm_zoom_sink_initial_conditions_sha256"]
+    _write_provenance(path, missing)
+    with pytest.raises(ValueError, match="requires all digests"):
+        read_dark_matter_run_provenance(path)
+
+    non_cdm = _records("fdm") | _cdm_zoom_execution_identity()
+    _write_provenance(path, non_cdm)
+    with pytest.raises(ValueError, match="cannot appear in a non-CDM run"):
+        read_dark_matter_run_provenance(path)
+
+
+def test_rejects_cdm_zoom_execution_digest_without_status(tmp_path: Path) -> None:
+    records = _records("cdm") | _cdm_zoom_execution_identity()
+    del records["cdm_zoom_execution_identity_status"]
+    path = tmp_path / "cdm.txt"
+    _write_provenance(path, records)
+    with pytest.raises(ValueError, match="digests require a status"):
+        read_dark_matter_run_provenance(path)
 
 
 def test_capture_binds_only_to_a_later_output_with_the_same_ledger_name(tmp_path: Path) -> None:

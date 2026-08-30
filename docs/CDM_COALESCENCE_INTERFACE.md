@@ -58,7 +58,7 @@ python scripts/build_cdm_delay_stage.py \
 ```
 
 For a lagRamses CDM zoom, keep the selected SMBH pair from numerical
-compaction with the native `&SINK_PARAMS rmerge = 0`.  A later output must
+compaction with the native `&PHYSICS_PARAMS rmerge = 0`.  A later output must
 record both `smbh_merge_radius_cells = 0` and
 `smbh_compaction_mode = no_finite_radius_rmerge_zero` in its DM provenance sidecar;
 the preflight refuses a compacting or ambiguous output:
@@ -112,7 +112,7 @@ selected `levelmax`, `smbh=.true.`, `rmerge=0`, and an enabled, separately
 named capture ledger.  It also requires hashes for the expected build,
 compilation manifest, and the host/orbit, collisionless, and sink initial
 condition inputs.  It then writes a new directory containing the audit record
-and a reference-only `&SINK_PARAMS` fragment.  It never edits the supplied
+and a reference-only `&PHYSICS_PARAMS` fragment.  It never edits the supplied
 namelist, overwrites the original capture ledger, or submits a calculation.
 
 ```bash
@@ -132,16 +132,23 @@ python scripts/materialize_cdm_noncompacting_zoom_run.py \
 ```
 
 Only `ready_for_operator_submission` authorizes the operator to submit this
-byte-identified input package.  The explicit hashes do not interpret an
-opaque IC binary format; the contract is configuration provenance, not an
-independent physical validation of the host, softening, particle loading,
-phase, convergence, or delay calibration.
+byte-identified input package.  The operator must copy the five
+`cdm_zoom_*_sha256` assignments from the generated
+`required_smbh_controls.nml` into the one `&PHYSICS_PARAMS` group of the
+complete namelist; they attest the plan, capture event, and all three IC
+roles.  A lagRamses build containing this provenance extension records those
+values in every CDM output sidecar, and the runtime validator rejects an
+output without that attestation or with any different value.  The explicit
+hashes do not interpret an opaque IC binary format; the contract is
+configuration provenance, not an independent physical validation of the
+host, softening, particle loading, phase, convergence, or delay calibration.
 
 After completion, check every output before extracting a pair orbit.  This
 requires the `COMPLETE` marker, native no-finite-radius provenance, the same
-ledger setting, the contracted build revision, a matching `compilation.txt`,
-and a copied `namelist.txt` whose hash is exactly the one in the ready
-contract.  It rejects mixed run roots, build/compilation identities,
+ledger setting, the five attested execution-input digests, the contracted
+build revision, a matching `compilation.txt`, and a copied `namelist.txt`
+whose hash is exactly the one in the ready contract.  It rejects mixed run
+roots, build/compilation identities,
 non-monotone output time/step sequences, and cadence above the plan limit.
 The result reports only the listed output count relative to the plan; it does
 not itself accept a secular rate.

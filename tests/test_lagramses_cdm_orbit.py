@@ -7,6 +7,7 @@ import pytest
 
 from fdm_smbh_delay.capture_ledger import read_capture_ledger
 from fdm_smbh_delay.cdm_zoom_materialization import (
+    assess_cdm_noncompacting_zoom_run_inputs,
     materialize_cdm_noncompacting_zoom_run_contract,
 )
 from fdm_smbh_delay.cdm_zoom_plan import load_cdm_noncompacting_zoom_plan
@@ -70,16 +71,16 @@ def _write_output(
 
 def _runtime_identity(root: Path, binding: Path, outputs: list[Path]) -> Path:
     namelist = root / "zoom.nml"
-    namelist.write_text(
-        "&SINK_PARAMS\n"
+    base_namelist = (
+        "&PHYSICS_PARAMS\n"
         "levelmax=21\n"
         "smbh=.true.\n"
         "rmerge=0.0d0\n"
         "smbh_capture_ledger=.true.\n"
         "smbh_capture_ledger_file='zoom_capture.jsonl'\n"
-        "/\n",
-        encoding="utf-8",
+        "/\n"
     )
+    namelist.write_text(base_namelist, encoding="utf-8")
     (root / "compilation_reference.txt").write_text("build provenance\n", encoding="utf-8")
     for name in (
         "host_orbit_initial_conditions",
@@ -89,7 +90,7 @@ def _runtime_identity(root: Path, binding: Path, outputs: list[Path]) -> Path:
         (root / f"{name}.dat").write_text(name + "\n", encoding="utf-8")
     plan = load_cdm_noncompacting_zoom_plan("configs/cdm_noncompacting_zoom_grid.yaml")
     contract_directory = root / "contract"
-    materialize_cdm_noncompacting_zoom_run_contract(
+    arguments = dict(
         specification_path="configs/cdm_noncompacting_zoom_grid.yaml",
         case_id=plan.grid.cases[0].case_id,
         capture_binding_path=binding,
@@ -108,6 +109,32 @@ def _runtime_identity(root: Path, binding: Path, outputs: list[Path]) -> Path:
                 "sink_initial_conditions",
             )
         },
+    )
+    provisional, _ = assess_cdm_noncompacting_zoom_run_inputs(**arguments)
+    finalized_namelist = base_namelist.replace(
+        "/\n",
+        "".join(
+            f"{name}='{value}'\n"
+            for name, value in sorted(provisional.execution_identity.items())
+        )
+        + "/\n",
+    )
+    namelist.write_text(finalized_namelist, encoding="utf-8")
+    for output in outputs:
+        (output / "namelist.txt").write_text(finalized_namelist, encoding="utf-8")
+        label = output.name.removeprefix("output_")
+        provenance = output / f"dm_run_provenance_{label}.txt"
+        provenance.write_text(
+            provenance.read_text(encoding="utf-8")
+            + "cdm_zoom_execution_identity_status = available\n"
+            + "".join(
+                f"{name} = {value}\n"
+                for name, value in sorted(provisional.execution_identity.items())
+            ),
+            encoding="utf-8",
+        )
+    materialize_cdm_noncompacting_zoom_run_contract(
+        **arguments,
         output_directory=contract_directory,
     )
     decision = assess_cdm_noncompacting_zoom_runtime_identity(
@@ -224,7 +251,7 @@ def test_extracts_periodic_comoving_relative_orbit_with_complete_provenance(
     tmp_path: Path,
 ) -> None:
     namelist = (
-        "&SINK_PARAMS\n"
+        "&PHYSICS_PARAMS\n"
         "levelmax=21\n"
         "smbh=.true.\n"
         "rmerge=0.0d0\n"
@@ -263,7 +290,7 @@ def test_extracts_periodic_comoving_relative_orbit_with_complete_provenance(
 
 def test_refuses_compacting_or_incomplete_lagramses_outputs(tmp_path: Path) -> None:
     namelist = (
-        "&SINK_PARAMS\n"
+        "&PHYSICS_PARAMS\n"
         "levelmax=21\n"
         "smbh=.true.\n"
         "rmerge=0.0d0\n"
@@ -296,7 +323,7 @@ def test_refuses_compacting_or_incomplete_lagramses_outputs(tmp_path: Path) -> N
 
 def test_extractor_rereads_runtime_identity_outputs_before_using_them(tmp_path: Path) -> None:
     namelist = (
-        "&SINK_PARAMS\n"
+        "&PHYSICS_PARAMS\n"
         "levelmax=21\n"
         "smbh=.true.\n"
         "rmerge=0.0d0\n"

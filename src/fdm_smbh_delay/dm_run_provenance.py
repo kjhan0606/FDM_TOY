@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import hashlib
 import math
 from pathlib import Path
+import re
 from typing import Any
 
 from .capture_ledger import CaptureEvent
@@ -13,6 +14,7 @@ from .capture_ledger import CaptureEvent
 
 DM_RUN_PROVENANCE_MAGIC = "# dm_run_provenance_v1"
 _MODELS = {"cdm", "sidm", "fdm", "none"}
+_SHA256 = re.compile(r"[0-9a-fA-F]{64}")
 
 
 def _file_sha256(path: Path) -> str:
@@ -152,6 +154,36 @@ def read_dark_matter_run_provenance(path: str | Path) -> DarkMatterRunProvenance
             raise ValueError("smbh_compaction_mode disagrees with smbh_merge_radius_cells")
         parameters["smbh_merge_radius_cells"] = merge_radius
         parameters["smbh_compaction_mode"] = compaction_mode
+    execution_identity_status = "cdm_zoom_execution_identity_status"
+    execution_identity_digests = (
+        "cdm_zoom_plan_manifest_sha256",
+        "cdm_zoom_capture_event_sha256",
+        "cdm_zoom_host_orbit_initial_conditions_sha256",
+        "cdm_zoom_initial_conditions_sha256",
+        "cdm_zoom_sink_initial_conditions_sha256",
+    )
+    present_execution_identity = [key for key in execution_identity_digests if key in records]
+    if execution_identity_status in records:
+        if model != "cdm":
+            raise ValueError("CDM zoom execution identity cannot appear in a non-CDM run")
+        status = records[execution_identity_status]
+        if status == "unavailable":
+            if present_execution_identity:
+                raise ValueError("unavailable CDM zoom execution identity cannot carry digests")
+            parameters[execution_identity_status] = status
+        elif status != "available":
+            raise ValueError("CDM zoom execution identity status is unsupported")
+        else:
+            if len(present_execution_identity) != len(execution_identity_digests):
+                raise ValueError("available CDM zoom execution identity requires all digests")
+            for key in execution_identity_digests:
+                digest = records[key]
+                if _SHA256.fullmatch(digest) is None:
+                    raise ValueError(f"{key} must be a SHA-256 digest")
+                parameters[key] = digest.lower()
+            parameters[execution_identity_status] = status
+    elif present_execution_identity:
+        raise ValueError("CDM zoom execution-identity digests require a status")
     if model == "cdm":
         if not pic or sidm or fdm or records.get("dm_transport") != "collisionless_nbody":
             raise ValueError("CDM run-provenance flags are inconsistent")

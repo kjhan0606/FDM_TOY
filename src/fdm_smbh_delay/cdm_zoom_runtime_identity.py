@@ -31,6 +31,13 @@ _CASE_INPUT_ARTIFACTS = {
     "initial_conditions",
     "sink_initial_conditions",
 }
+_EXECUTION_IDENTITY_FIELDS = {
+    "cdm_zoom_plan_manifest_sha256",
+    "cdm_zoom_capture_event_sha256",
+    "cdm_zoom_host_orbit_initial_conditions_sha256",
+    "cdm_zoom_initial_conditions_sha256",
+    "cdm_zoom_sink_initial_conditions_sha256",
+}
 
 
 def _sha256(path: Path) -> str:
@@ -119,6 +126,7 @@ class _VerifiedCDMZoomContract:
     expected_build_git_hash: str
     expected_compilation_sha256: str
     case_input_artifact_sha256s: dict[str, str]
+    execution_identity: dict[str, str]
 
 
 def _read_verified_contract(path: str | Path) -> _VerifiedCDMZoomContract:
@@ -195,6 +203,7 @@ def _read_verified_contract(path: str | Path) -> _VerifiedCDMZoomContract:
         "expected_build_git_hash",
         "expected_compilation",
         "input_artifacts",
+        "execution_identity",
     }:
         raise ValueError("CDM zoom run contract case-input identity is invalid")
     expected_build = case_identity.get("expected_build_git_hash")
@@ -214,6 +223,27 @@ def _read_verified_contract(path: str | Path) -> _VerifiedCDMZoomContract:
         )
         artifact_paths[name] = artifact_path
         artifact_sha256s[name] = artifact_sha
+    execution_identity = case_identity.get("execution_identity")
+    expected_execution_identity = {
+        "cdm_zoom_plan_manifest_sha256": plan.grid.manifest_sha256,
+        "cdm_zoom_capture_event_sha256": binding["capture_event_sha256"],
+        "cdm_zoom_host_orbit_initial_conditions_sha256": artifact_sha256s[
+            "host_orbit_initial_conditions"
+        ],
+        "cdm_zoom_initial_conditions_sha256": artifact_sha256s["initial_conditions"],
+        "cdm_zoom_sink_initial_conditions_sha256": artifact_sha256s[
+            "sink_initial_conditions"
+        ],
+    }
+    if (
+        not isinstance(execution_identity, Mapping)
+        or set(execution_identity) != _EXECUTION_IDENTITY_FIELDS
+        or any(
+            _sha256_field(execution_identity.get(name), name) != expected
+            for name, expected in expected_execution_identity.items()
+        )
+    ):
+        raise ValueError("CDM zoom run contract execution identity is invalid")
 
     run_inputs = record.get("run_inputs")
     if not isinstance(run_inputs, Mapping):
@@ -253,6 +283,7 @@ def _read_verified_contract(path: str | Path) -> _VerifiedCDMZoomContract:
         expected_build_git_hash=expected_build,
         expected_compilation_sha256=compilation_sha256,
         case_input_artifact_sha256s=artifact_sha256s,
+        execution_identity=expected_execution_identity,
     )
 
 
@@ -424,6 +455,11 @@ def _verify_output(
         raise ValueError("output capture-ledger setting differs from its run contract")
     if provenance.build_git_hash != contract.expected_build_git_hash:
         raise ValueError("output build_git_hash differs from its run contract")
+    if provenance.parameter("cdm_zoom_execution_identity_status") != "available":
+        raise ValueError("output does not attest the contracted CDM zoom input identity")
+    for name, expected in contract.execution_identity.items():
+        if provenance.parameter(name) != expected:
+            raise ValueError(f"output {name} differs from its run contract")
     namelist_copy = _output_file(directory, provenance.namelist_copy, "output namelist_copy")
     if _sha256(namelist_copy) != contract.namelist_sha256:
         raise ValueError("output namelist copy SHA-256 differs from its run contract")

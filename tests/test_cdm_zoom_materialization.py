@@ -118,19 +118,23 @@ def _capture_binding(root: Path) -> Path:
     return binding
 
 
-def _namelist(*, rmerge: str = "0.0d0", ledger_file: str = "zoom_capture.jsonl") -> str:
-    return "\n".join(
-        (
-            "&SINK_PARAMS",
-            "levelmax=21",
-            "smbh=.true.",
-            f"rmerge={rmerge}",
-            "smbh_capture_ledger=.true.",
-            f"smbh_capture_ledger_file='{ledger_file}'",
-            "/",
-            "",
-        )
-    )
+def _namelist(
+    *,
+    rmerge: str = "0.0d0",
+    ledger_file: str = "zoom_capture.jsonl",
+    execution_identity: dict[str, str] | None = None,
+) -> str:
+    lines = [
+        "&PHYSICS_PARAMS",
+        "levelmax=21",
+        "smbh=.true.",
+        f"rmerge={rmerge}",
+        "smbh_capture_ledger=.true.",
+        f"smbh_capture_ledger_file='{ledger_file}'",
+    ]
+    if execution_identity is not None:
+        lines.extend(f"{name}='{value}'" for name, value in sorted(execution_identity.items()))
+    return "\n".join((*lines, "/", ""))
 
 
 def _arguments(tmp_path: Path) -> dict[str, object]:
@@ -150,7 +154,7 @@ def _arguments(tmp_path: Path) -> dict[str, object]:
         artifact.write_text(name + "\n", encoding="utf-8")
         artifacts[name] = artifact
     plan = load_cdm_noncompacting_zoom_plan("configs/cdm_noncompacting_zoom_grid.yaml")
-    return {
+    arguments: dict[str, object] = {
         "specification_path": "configs/cdm_noncompacting_zoom_grid.yaml",
         "case_id": plan.grid.cases[0].case_id,
         "capture_binding_path": binding,
@@ -163,6 +167,11 @@ def _arguments(tmp_path: Path) -> dict[str, object]:
         "expected_compilation_path": compilation,
         "case_input_artifact_paths": artifacts,
     }
+    provisional, _ = assess_cdm_noncompacting_zoom_run_inputs(**arguments)
+    namelist.write_text(
+        _namelist(execution_identity=dict(provisional.execution_identity)), encoding="utf-8"
+    )
+    return arguments
 
 
 def _write_runtime_output(
@@ -178,6 +187,13 @@ def _write_runtime_output(
     label = f"{number:05d}"
     directory = root / f"output_{label}"
     directory.mkdir()
+    identity_records = ""
+    for line in namelist.splitlines():
+        if "=" not in line:
+            continue
+        name, value = (item.strip() for item in line.split("=", 1))
+        if name.startswith("cdm_zoom_") and name.endswith("_sha256"):
+            identity_records += f"{name} = {value.strip(chr(39) + chr(34))}\n"
     (directory / "COMPLETE").write_text(label + "\n", encoding="utf-8")
     (directory / f"dm_run_provenance_{label}.txt").write_text(
         "# dm_run_provenance_v1\n"
@@ -198,6 +214,10 @@ def _write_runtime_output(
         "dm_transport = collisionless_nbody\n",
         encoding="utf-8",
     )
+    provenance = directory / f"dm_run_provenance_{label}.txt"
+    if identity_records:
+        identity_records = "cdm_zoom_execution_identity_status = available\n" + identity_records
+    provenance.write_text(provenance.read_text(encoding="utf-8") + identity_records, encoding="utf-8")
     (directory / "namelist.txt").write_text(namelist, encoding="utf-8")
     (directory / "compilation.txt").write_text(compilation_text, encoding="utf-8")
     (directory / f"info_{label}.txt").write_text(
@@ -235,14 +255,35 @@ def test_materializes_exact_cdm_case_capture_and_noncompacting_namelist(
     )
     assert "rmerge=0.0d0" in controls
     assert "smbh_capture_ledger_file='zoom_capture.jsonl'" in controls
+    assert "&PHYSICS_PARAMS" in controls
+    assert record["case_input_identity"]["execution_identity"]
     assert Path(arguments["run_namelist_path"]).read_text(encoding="utf-8") == original_namelist
+
+
+def test_requires_solver_consumed_physics_group_for_noncompacting_controls(
+    tmp_path: Path,
+) -> None:
+    arguments = _arguments(tmp_path)
+    namelist = Path(arguments["run_namelist_path"])
+    namelist.write_text(
+        namelist.read_text(encoding="utf-8").replace("&PHYSICS_PARAMS", "&SINK_PARAMS"),
+        encoding="utf-8",
+    )
+    decision, _ = assess_cdm_noncompacting_zoom_run_inputs(**arguments)
+    assert decision.status == "not_ready_for_operator_submission"
+    assert any("exactly one &PHYSICS_PARAMS group" in reason for reason in decision.reasons)
 
 
 def test_marks_mismatched_namelist_not_ready_but_preserves_auditable_contract(
     tmp_path: Path,
 ) -> None:
     arguments = _arguments(tmp_path)
-    Path(arguments["run_namelist_path"]).write_text(_namelist(rmerge="1.0d0"), encoding="utf-8")
+    Path(arguments["run_namelist_path"]).write_text(
+        Path(arguments["run_namelist_path"]).read_text(encoding="utf-8").replace(
+            "rmerge=0.0d0", "rmerge=1.0d0"
+        ),
+        encoding="utf-8",
+    )
     decision, _ = assess_cdm_noncompacting_zoom_run_inputs(**arguments)
     assert decision.status == "not_ready_for_operator_submission"
     assert any("rmerge must be exactly" in reason for reason in decision.reasons)
@@ -254,7 +295,10 @@ def test_marks_mismatched_namelist_not_ready_but_preserves_auditable_contract(
 
     arguments = _arguments(tmp_path / "different-level")
     Path(arguments["run_namelist_path"]).write_text(
-        _namelist().replace("levelmax=21", "levelmax=22"), encoding="utf-8"
+        Path(arguments["run_namelist_path"]).read_text(encoding="utf-8").replace(
+            "levelmax=21", "levelmax=22"
+        ),
+        encoding="utf-8",
     )
     decision, _ = assess_cdm_noncompacting_zoom_run_inputs(**arguments)
     assert decision.status == "not_ready_for_operator_submission"
@@ -312,7 +356,12 @@ def test_runtime_identity_requires_completed_output_namelist_copy_to_match_contr
     mismatched = _write_runtime_output(
         tmp_path,
         number=2,
-        namelist=_namelist(ledger_file="wrong_zoom_capture.jsonl"),
+        namelist=_namelist(
+            rmerge="1.0d0",
+            execution_identity=dict(
+                assess_cdm_noncompacting_zoom_run_inputs(**arguments)[0].execution_identity
+            ),
+        ),
     )
     rejected = assess_cdm_noncompacting_zoom_runtime_identity(
         contract_directory / "cdm_noncompacting_zoom_run_contract.json", [mismatched]
@@ -339,6 +388,38 @@ def test_runtime_identity_rejects_changed_output_ledger_setting(tmp_path: Path) 
     )
     assert not decision.verified
     assert any("capture-ledger setting differs" in reason for reason in decision.reasons)
+
+
+def test_runtime_identity_rejects_output_with_different_executed_ic_attestation(
+    tmp_path: Path,
+) -> None:
+    arguments = _arguments(tmp_path)
+    contract_directory = tmp_path / "contract"
+    materialize_cdm_noncompacting_zoom_run_contract(
+        **arguments,
+        output_directory=contract_directory,
+    )
+    output = _write_runtime_output(
+        tmp_path,
+        number=1,
+        namelist=Path(arguments["run_namelist_path"]).read_text(encoding="utf-8"),
+    )
+    provenance = output / "dm_run_provenance_00001.txt"
+    expected = assess_cdm_noncompacting_zoom_run_inputs(**arguments)[0].execution_identity[
+        "cdm_zoom_initial_conditions_sha256"
+    ]
+    provenance.write_text(
+        provenance.read_text(encoding="utf-8").replace(
+            f"cdm_zoom_initial_conditions_sha256 = {expected}\n",
+            "cdm_zoom_initial_conditions_sha256 = " + "f" * 64 + "\n",
+        ),
+        encoding="utf-8",
+    )
+    decision = assess_cdm_noncompacting_zoom_runtime_identity(
+        contract_directory / "cdm_noncompacting_zoom_run_contract.json", [output]
+    )
+    assert not decision.verified
+    assert any("cdm_zoom_initial_conditions_sha256 differs" in reason for reason in decision.reasons)
 
 
 def test_runtime_identity_refuses_a_contract_with_changed_case_input_artifact(
