@@ -55,6 +55,12 @@ class ZoomPhysicsPoint:
     fdm_particle_mass_ev: float | None = None
     fdm_core_radius_pc: float | None = None
     fdm_soliton_mass_msun: float | None = None
+    sidm_cross_section_cm2_g: float | None = None
+    sidm_v0_km_s: float | None = None
+    sidm_power: float | None = None
+    sidm_type: str | None = None
+    sidm_angular: str | None = None
+    sidm_inelastic: bool | None = None
 
     def __post_init__(self) -> None:
         stellar_mass = float(self.host_stellar_mass_msun)
@@ -95,13 +101,19 @@ class ZoomPhysicsPoint:
             raise ValueError("initial orbit eccentricity must lie in [0, 1)")
         if self.nuclear_envelope_to_secondary_bh_mass < 0.0:
             raise ValueError("nuclear envelope mass ratio cannot be negative")
-        if self.dark_matter_model not in {"cdm", "fdm"}:
-            raise ValueError("dark_matter_model must be cdm or fdm")
+        if self.dark_matter_model not in {"cdm", "sidm", "fdm"}:
+            raise ValueError("dark_matter_model must be cdm, sidm, or fdm")
         fdm_values = (
             self.fdm_particle_mass_ev,
             self.fdm_core_radius_pc,
             self.fdm_soliton_mass_msun,
         )
+        sidm_numeric_values = (
+            self.sidm_cross_section_cm2_g,
+            self.sidm_v0_km_s,
+            self.sidm_power,
+        )
+        sidm_text_values = (self.sidm_type, self.sidm_angular)
         if self.dark_matter_model == "fdm":
             if any(value is None for value in fdm_values) or any(
                 not np.isfinite(value) or value <= 0.0
@@ -109,8 +121,37 @@ class ZoomPhysicsPoint:
                 if value is not None
             ):
                 raise ValueError("FDM zooms require positive particle/core/soliton values")
-        elif any(value is not None for value in fdm_values):
-            raise ValueError("CDM zooms cannot carry FDM-only coordinates")
+            if (
+                any(value is not None for value in sidm_numeric_values)
+                or any(value is not None for value in sidm_text_values)
+                or self.sidm_inelastic is not None
+            ):
+                raise ValueError("FDM zooms cannot carry SIDM-only controls")
+        elif self.dark_matter_model == "sidm":
+            if any(value is not None for value in fdm_values):
+                raise ValueError("SIDM zooms cannot carry FDM-only coordinates")
+            if any(value is None for value in sidm_numeric_values) or any(
+                not np.isfinite(value)
+                for value in sidm_numeric_values
+                if value is not None
+            ):
+                raise ValueError("SIDM zooms require finite scattering controls")
+            if (
+                self.sidm_cross_section_cm2_g is None
+                or self.sidm_cross_section_cm2_g <= 0.0
+                or self.sidm_v0_km_s is None
+                or self.sidm_v0_km_s <= 0.0
+                or any(not isinstance(value, str) or not value.strip() for value in sidm_text_values)
+                or not isinstance(self.sidm_inelastic, bool)
+            ):
+                raise ValueError("SIDM zoom controls are invalid")
+        elif (
+            any(value is not None for value in fdm_values)
+            or any(value is not None for value in sidm_numeric_values)
+            or any(value is not None for value in sidm_text_values)
+            or self.sidm_inelastic is not None
+        ):
+            raise ValueError("CDM zooms cannot carry FDM- or SIDM-only controls")
 
     @property
     def physics_id(self) -> str:
@@ -195,6 +236,9 @@ def _physics_from_mapping(mapping: dict[str, Any]) -> ZoomPhysicsPoint:
         "fdm_particle_mass_ev",
         "fdm_core_radius_pc",
         "fdm_soliton_mass_msun",
+        "sidm_cross_section_cm2_g",
+        "sidm_v0_km_s",
+        "sidm_power",
     ):
         if converted.get(field) is not None:
             try:

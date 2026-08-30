@@ -39,6 +39,102 @@ physical coalescence.  Only the FDM branch proceeds to the all-wave seed and
 outer-wave workflow below; CDM and SIDM remain comparison baselines with their
 own resolved-environment analyses.
 
+### Comparison-family acceptance before model-specific analysis
+
+The CDM, SIDM, and FDM branches use one explicitly matched comparison family;
+they do not share particles, forces, or a mixed dark-matter realization.  The
+family manifest pins SHA-256 values for the common initial conditions, baryon
+configuration, and SMBH seed catalogue, plus one normal-output DM sidecar for
+each model.  It must not be used to substitute a CDM density for an FDM
+calculation.
+
+The first four comparison records are deliberately non-submitting and have a
+strict order:
+
+1. `preflight_dm_comparison_family.py` verifies the three common files, the
+   expected `cdm`/`sidm`/`fdm` labels, one concrete common build revision, and
+   FDM resolved-wave-only force accounting.
+2. `assess_dm_comparison_smoke.py` verifies that each selected normal output
+   has a matching `COMPLETE` marker.  The marker is an operator-written
+   completion record containing the five-digit output number, created only
+   after the normal output is durable.
+3. `register_dm_comparison_capture_ensemble.py` binds one complete numerical
+   capture event from each model to that model's later sidecar.  It records
+   provenance only; different event times, sink identifiers, and capture
+   classifications are not forced to match, and no event is labelled a
+   physical coalescence.
+4. `assess_dm_comparison_physics_inputs.py` verifies the hashes of the
+   model-specific resolved-environment evidence: profile, force, and
+   conservation ledgers for all models; SIDM scattering ledger; FDM wave
+   ledger and field-snapshot index.  A verified record means only that the
+   inputs are ready for their separate analyses.
+
+For example, with operator-prepared records:
+
+```bash
+python scripts/preflight_dm_comparison_family.py family.json results/family_preflight.json
+python scripts/assess_dm_comparison_smoke.py family.json results/family_smoke.json
+python scripts/register_dm_comparison_capture_ensemble.py \
+  capture_registration.json results/capture_ensemble.json
+python scripts/assess_dm_comparison_physics_inputs.py \
+  physics_inputs.json results/physics_input_assessment.json
+```
+
+Any missing file, hash mismatch, incomplete output, unsupported sidecar, or
+unbound capture yields a non-ready record.  These checks launch no simulation,
+do not estimate a delay, and do not alter the FDM-only outer-to-inner gates.
+
+### Resolved model-specific analysis contract
+
+After the four comparison records pass, each completed run may be registered
+as a resolved model-physics result.  Its zoom point now supports exactly one
+of `cdm`, `sidm`, or `fdm`: SIDM points require cross section, velocity scale,
+power law, interaction type/angular law, and inelastic flag; FDM points require
+the particle mass, core radius, and soliton mass.  A CDM point cannot silently
+carry either SIDM or FDM controls.
+
+Every result preserves three environment channels: `stars`, `gas`, and
+`dark_matter`.  A channel is explicitly `available`, with profile and force
+ledger hashes, or `absent`, with no invented zero-valued ledger.  Positive
+stellar mass or gas fraction requires the respective channel to be available.
+The model evidence is then distinct:
+
+- CDM uses only the accepted profile/force/conservation evidence;
+- SIDM additionally preserves the accepted scattering ledger and measured
+  maximum scatter probability;
+- FDM additionally preserves the wave ledger and field-snapshot index, the
+  de Broglie and wake cell counts, and either `live_wave_only` or
+  `resolved_wake_plus_measured_residual` force accounting.  An analytic FDM
+  drag label is rejected.
+
+The result supplies at least three measured, separation-ordered orbital-power,
+torque, and eccentricity points.  A finer/coarser pair is accepted only if it
+has common support over a factor of two in separation, three matched points,
+conservation error below `1e-3`, four cells per orbital scale (and, for FDM,
+per de Broglie and wake scale), no rate sign reversal, rate disagreement at
+most 20 percent, and eccentricity disagreement at most 0.02.  A zero measured
+power or torque is unresolved rather than treated as agreement.  Two or more
+independent phase replicas are required before a model is ready for its own
+physical interpretation.
+
+These commands only inspect registered JSON evidence and never submit work:
+
+```bash
+python scripts/validate_resolved_model_physics_run.py \
+  comparison_zoom_grid.yaml fdm_fine_result.json results/fdm_fine_checked.json
+python scripts/compare_model_specific_resolution.py \
+  comparison_zoom_grid.yaml fdm_fine_result.json fdm_coarse_result.json \
+  results/fdm_resolution.json
+python scripts/assess_model_specific_phase_ensemble.py comparison_zoom_grid.yaml \
+  --pair fdm_fine_phase0.json fdm_coarse_phase0.json \
+  --pair fdm_fine_phase1.json fdm_coarse_phase1.json \
+  results/fdm_phase_ensemble.json
+```
+
+The CDM/SIDM counterparts use the same command sequence but remain separate
+model analyses.  None of these records substitute a CDM/SIDM force for FDM,
+combine overlapping intervals, or create a coalescence time.
+
 ## Staged work
 
 ### 0. Contract and scope freeze — complete
