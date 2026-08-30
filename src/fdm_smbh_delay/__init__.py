@@ -25,6 +25,12 @@ from .capture_seed_assembly import (
     capture_derived_seed_mapping,
     capture_soliton_configuration_from_mapping,
 )
+from .dm_run_provenance import (
+    CaptureDMRunBinding,
+    DarkMatterRunProvenance,
+    bind_capture_event_to_dark_matter_run,
+    read_dark_matter_run_provenance,
+)
 from .config import CaseConfig, load_config
 from .fdm_outer_halo import FDMOuterHaloClosure
 from .fdm_outer_wave_ledger import FDMOuterWaveLedger
@@ -108,7 +114,9 @@ __all__ = [
     "CaptureSMBHMassProjection",
     "CaptureSeedMaterializationBinding",
     "CaptureSolitonConfiguration",
+    "CaptureDMRunBinding",
     "EnvironmentProfileBundle",
+    "DarkMatterRunProvenance",
     "FDMOuterHaloClosure",
     "FDMOuterWaveLedger",
     "LagRamsesFDMOuterWaveProvenance",
@@ -150,6 +158,7 @@ __all__ = [
     "capture_soliton_configuration_from_mapping",
     "derive_dual_smbh_sink_pair_from_capture",
     "bind_nested_zoom_checkpoint",
+    "bind_capture_event_to_dark_matter_run",
     "initial_kpc_to_hard_state_from_bridge",
     "integrate_case",
     "load_config",
@@ -161,6 +170,7 @@ __all__ = [
     "assess_dual_soliton_relaxation",
     "assess_capture_seed_materialization_binding",
     "read_lagramses_fdm_outer_wave_provenance",
+    "read_dark_matter_run_provenance",
     "compare_pure_fdm_outer_resolution_pair",
     "assess_pure_fdm_outer_phase_ensemble",
     "evaluate_pure_fdm_outer_result_index",

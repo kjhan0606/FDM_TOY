@@ -18,6 +18,27 @@ common core forms.  The existing fixed-primary spherical solver is retained
 only as an analytic baseline.  A physical value requires a pure-FDM merger
 zoom or a closure calibrated against one.
 
+The common numerical-capture inventory spans separate CDM, SIDM, and FDM run
+families with matched macroscopic initial conditions; they are not mixed in a
+single realization.  Each normal lagRamses output carries a model-specific
+`dm_run_provenance_<output>.txt` sidecar.  Bind a complete capture event to a
+later sidecar before placing it in any comparative ensemble:
+
+```bash
+python scripts/bind_capture_dm_run.py \
+  smbh_capture_ledger_v1.jsonl capture-event-uid \
+  output_00042/dm_run_provenance_00042.txt \
+  results/capture_dm_run_binding.json
+```
+
+This check requires the sidecar ledger path to resolve to the exact event
+ledger and a non-earlier output step.
+It preserves the active model and SIDM/FDM controls, but does not assert that
+different model runs reach capture simultaneously or that any capture is a
+physical coalescence.  Only the FDM branch proceeds to the all-wave seed and
+outer-wave workflow below; CDM and SIDM remain comparison baselines with their
+own resolved-environment analyses.
+
 ## Staged work
 
 ### 0. Contract and scope freeze — complete
