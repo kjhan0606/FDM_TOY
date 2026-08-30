@@ -24,6 +24,11 @@ from .dual_soliton_seed import (
     PureFDMDualSolitonSeed,
     read_materialized_pure_fdm_dual_soliton_seed,
 )
+from .dual_soliton_preflight import (
+    DualSolitonRunPreflight,
+    read_lagramses_namelist_assignment,
+    read_verified_pure_fdm_dual_soliton_run_preflight,
+)
 from .model_zoom_materialization import (
     VerifiedModelZoomExecutionContract,
     read_verified_model_zoom_execution_contract,
@@ -295,6 +300,212 @@ def materialize_fdm_capture_seed_zoom_binding(
     record = decision.as_dict()
     _write_atomic(
         destination / "fdm_capture_seed_zoom_binding.json",
+        json.dumps(record, indent=2, sort_keys=True) + "\n",
+    )
+    return record
+
+
+@dataclass(frozen=True)
+class FDMDeclaredRunInputBinding:
+    """Join an FDM seed/zoom declaration to its checked run input files."""
+
+    fdm_capture_seed_zoom_binding_path: Path
+    dual_soliton_preflight_path: Path
+    zoom_case_id: str | None
+    seed_case_id: str | None
+    status: str
+    reasons: tuple[str, ...]
+
+    @property
+    def verified(self) -> bool:
+        return self.status == "fdm_declared_run_input_identity_verified"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "status": self.status,
+            "interpretation": (
+                "declared run-input identity only; this does not attest that lagRamses "
+                "consumed the files, completed a run, relaxed the seed, resolved a "
+                "wave wake, or estimated a physical delay"
+            ),
+            "sources": {
+                "fdm_capture_seed_zoom_binding": _artifact(
+                    self.fdm_capture_seed_zoom_binding_path
+                ),
+                "dual_soliton_run_preflight": _artifact(self.dual_soliton_preflight_path),
+            },
+            "zoom_case_id": self.zoom_case_id,
+            "seed_case_id": self.seed_case_id,
+            "reasons": list(self.reasons),
+        }
+
+
+def assess_fdm_declared_run_input_binding(
+    *,
+    fdm_capture_seed_zoom_binding_path: str | Path,
+    dual_soliton_preflight_path: str | Path,
+) -> FDMDeclaredRunInputBinding:
+    """Require one checked all-wave run namelist for one FDM zoom declaration."""
+
+    fdm_binding_path = Path(fdm_capture_seed_zoom_binding_path).expanduser().resolve()
+    preflight_path = Path(dual_soliton_preflight_path).expanduser().resolve()
+    zoom_case_id: str | None = None
+    seed_case_id: str | None = None
+    reasons: list[str] = []
+    fdm_binding: FDMCaptureSeedZoomBinding | None = None
+    preflight: DualSolitonRunPreflight | None = None
+    contract: VerifiedModelZoomExecutionContract | None = None
+    try:
+        fdm_binding = read_verified_fdm_capture_seed_zoom_binding(fdm_binding_path)
+        zoom_case_id = fdm_binding.zoom_case_id
+        seed_case_id = fdm_binding.seed_case_id
+        contract = read_verified_model_zoom_execution_contract(
+            fdm_binding.model_zoom_contract_path
+        )
+    except (OSError, ValueError) as error:
+        reasons.append(str(error))
+    try:
+        preflight = read_verified_pure_fdm_dual_soliton_run_preflight(preflight_path)
+        if seed_case_id is None:
+            seed_case_id = preflight.seed_case_id
+    except (OSError, ValueError) as error:
+        reasons.append(str(error))
+    if fdm_binding is not None and preflight is not None and contract is not None:
+        if preflight.seed_case_id != fdm_binding.seed_case_id:
+            reasons.append("dual-soliton preflight seed case differs from the FDM zoom binding")
+        try:
+            if (
+                preflight.seed_manifest_path != fdm_binding.seed_manifest_path
+                or _sha256(preflight.seed_manifest_path)
+                != _sha256(fdm_binding.seed_manifest_path)
+            ):
+                reasons.append("dual-soliton preflight seed manifest differs from the FDM zoom binding")
+        except OSError as error:
+            reasons.append(f"cannot re-read FDM seed manifest: {error}")
+        expected_namelist = contract.run_namelist
+        try:
+            if (
+                str(preflight.run_namelist_path) != expected_namelist["path"]
+                or _sha256(preflight.run_namelist_path) != expected_namelist["sha256"]
+            ):
+                reasons.append("dual-soliton preflight run namelist differs from the FDM zoom contract")
+        except OSError as error:
+            reasons.append(f"cannot re-read FDM run namelist: {error}")
+        expected_wave_level = contract.case.numerics.fdm_first_wave_level
+        try:
+            actual_wave_level = float(
+                read_lagramses_namelist_assignment(
+                    preflight.run_namelist_path,
+                    group="fdm_params",
+                    name="fdm_first_wave_level",
+                ).replace("D", "E").replace("d", "e")
+            )
+            if (
+                expected_wave_level is None
+                or not math.isfinite(actual_wave_level)
+                or not actual_wave_level.is_integer()
+                or int(actual_wave_level) != expected_wave_level
+            ):
+                reasons.append(
+                    "fdm_first_wave_level in &FDM_PARAMS differs from the FDM zoom case"
+                )
+        except ValueError as error:
+            reasons.append(str(error))
+    status = (
+        "fdm_declared_run_input_identity_verified"
+        if not reasons
+        else "fdm_declared_run_input_identity_not_verified"
+    )
+    return FDMDeclaredRunInputBinding(
+        fdm_capture_seed_zoom_binding_path=fdm_binding_path,
+        dual_soliton_preflight_path=preflight_path,
+        zoom_case_id=zoom_case_id,
+        seed_case_id=seed_case_id,
+        status=status,
+        reasons=tuple(reasons),
+    )
+
+
+def read_verified_fdm_declared_run_input_binding(
+    path: str | Path,
+) -> FDMDeclaredRunInputBinding:
+    """Rebuild a saved declared-run decision from its two source decisions."""
+
+    source = Path(path).expanduser().resolve()
+    try:
+        record = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"cannot read FDM declared-run binding: {error}") from error
+    expected_fields = {
+        "schema_version",
+        "status",
+        "interpretation",
+        "sources",
+        "zoom_case_id",
+        "seed_case_id",
+        "reasons",
+    }
+    if (
+        not isinstance(record, Mapping)
+        or set(record) != expected_fields
+        or record.get("schema_version") != 1
+        or record.get("status") != "fdm_declared_run_input_identity_verified"
+        or record.get("reasons") != []
+    ):
+        raise ValueError("FDM declared-run binding is not a verified decision")
+    sources = record.get("sources")
+    if not isinstance(sources, Mapping) or set(sources) != {
+        "fdm_capture_seed_zoom_binding",
+        "dual_soliton_run_preflight",
+    }:
+        raise ValueError("FDM declared-run binding sources are invalid")
+    paths: dict[str, Path] = {}
+    for name in ("fdm_capture_seed_zoom_binding", "dual_soliton_run_preflight"):
+        artifact = sources[name]
+        if (
+            not isinstance(artifact, Mapping)
+            or set(artifact) != {"path", "sha256"}
+            or not isinstance(artifact.get("path"), str)
+            or not isinstance(artifact.get("sha256"), str)
+        ):
+            raise ValueError(f"FDM declared-run {name} source is invalid")
+        candidate = Path(artifact["path"]).expanduser().resolve()
+        try:
+            if _sha256(candidate) != artifact["sha256"]:
+                raise ValueError(f"FDM declared-run {name} SHA-256 no longer matches")
+        except OSError as error:
+            raise ValueError(f"cannot re-read FDM declared-run {name}: {error}") from error
+        paths[name] = candidate
+    decision = assess_fdm_declared_run_input_binding(
+        fdm_capture_seed_zoom_binding_path=paths["fdm_capture_seed_zoom_binding"],
+        dual_soliton_preflight_path=paths["dual_soliton_run_preflight"],
+    )
+    if not decision.verified or decision.as_dict() != record:
+        raise ValueError("FDM declared-run binding no longer matches its source decisions")
+    return decision
+
+
+def materialize_fdm_declared_run_input_binding(
+    *,
+    fdm_capture_seed_zoom_binding_path: str | Path,
+    dual_soliton_preflight_path: str | Path,
+    output_directory: str | Path,
+) -> dict[str, Any]:
+    """Write one non-submitting declaration that joins FDM run-input gates."""
+
+    decision = assess_fdm_declared_run_input_binding(
+        fdm_capture_seed_zoom_binding_path=fdm_capture_seed_zoom_binding_path,
+        dual_soliton_preflight_path=dual_soliton_preflight_path,
+    )
+    destination = Path(output_directory).expanduser().resolve()
+    try:
+        destination.mkdir(parents=True, exist_ok=False)
+    except FileExistsError as error:
+        raise ValueError("FDM declared-run output directory must not already exist") from error
+    record = decision.as_dict()
+    _write_atomic(
+        destination / "fdm_declared_run_input_binding.json",
         json.dumps(record, indent=2, sort_keys=True) + "\n",
     )
     return record

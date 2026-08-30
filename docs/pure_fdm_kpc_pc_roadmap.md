@@ -447,6 +447,23 @@ conservation, paired-resolution, phase-replica, boundary, or calibration
 gates.  A mismatch is `not_ready_for_operator_submission`, not a physical
 delay or a scientific censoring result.
 
+For a declared FDM zoom case, retain one saved join between that ready
+all-wave preflight and the earlier capture-to-seed-to-zoom declaration:
+
+```bash
+python scripts/materialize_fdm_declared_run_input_binding.py \
+  results/fdm_capture_seed_zoom_binding/fdm_capture_seed_zoom_binding.json \
+  results/pure_fdm_dual_soliton_preflight.json \
+  results/fdm_declared_run_input_binding
+```
+
+This re-reads both decisions, requires their seed manifest to be identical,
+and requires the checked run namelist to be byte-identical to the one in the
+common zoom contract.  Its verified status proves only that the declared
+`&PHYSICS_PARAMS` identity and the all-wave `&FDM_PARAMS`/`ic_sink` input are
+one configuration.  It still does not prove solver consumption; that claim
+starts only with a separately validated runtime provenance record.
+
 After the first normal FDM output, verify the runtime V2 provenance against
 the same materialized seed before treating the output as a member of that
 controlled case:

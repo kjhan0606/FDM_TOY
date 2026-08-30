@@ -23,9 +23,13 @@ from .capture_seed_binding import (
 )
 from .fdm_zoom_seed_binding import (
     FDMCaptureSeedZoomBinding,
+    FDMDeclaredRunInputBinding,
     assess_fdm_capture_seed_zoom_binding,
+    assess_fdm_declared_run_input_binding,
     materialize_fdm_capture_seed_zoom_binding,
+    materialize_fdm_declared_run_input_binding,
     read_verified_fdm_capture_seed_zoom_binding,
+    read_verified_fdm_declared_run_input_binding,
 )
 from .capture_seed_assembly import (
     CaptureSolitonConfiguration,
@@ -103,6 +107,8 @@ from .dual_soliton_preflight import (
     DualSolitonRunPreflight,
     DualSolitonRuntimeIdentity,
     preflight_pure_fdm_dual_soliton_run,
+    read_lagramses_namelist_assignment,
+    read_verified_pure_fdm_dual_soliton_run_preflight,
     validate_pure_fdm_dual_soliton_runtime_identity,
 )
 from .dual_soliton_relaxation import (
@@ -167,6 +173,7 @@ __all__ = [
     "CaptureSMBHMassProjection",
     "CaptureSeedMaterializationBinding",
     "FDMCaptureSeedZoomBinding",
+    "FDMDeclaredRunInputBinding",
     "CaptureSolitonConfiguration",
     "CaptureDMRunBinding",
     "CDMNonCompactingZoomRunContract",
@@ -245,6 +252,7 @@ __all__ = [
     "assess_dual_soliton_relaxation",
     "assess_capture_seed_materialization_binding",
     "assess_fdm_capture_seed_zoom_binding",
+    "assess_fdm_declared_run_input_binding",
     "assess_dm_comparison_physics_inputs",
     "assess_dm_comparison_smoke_outputs",
     "assess_model_specific_phase_ensemble",
@@ -266,10 +274,14 @@ __all__ = [
     "read_pure_fdm_outer_result",
     "read_verified_capture_seed_materialization_binding",
     "read_verified_fdm_capture_seed_zoom_binding",
+    "read_verified_fdm_declared_run_input_binding",
+    "read_verified_pure_fdm_dual_soliton_run_preflight",
+    "read_lagramses_namelist_assignment",
     "validate_outer_inner_handoff",
     "verify_mass_projection_source",
     "verify_pure_fdm_seed_matches_capture_sink_pair",
     "register_dm_comparison_capture_ensemble",
     "materialize_fdm_capture_seed_zoom_binding",
+    "materialize_fdm_declared_run_input_binding",
 ]
 __version__ = "0.1.0"

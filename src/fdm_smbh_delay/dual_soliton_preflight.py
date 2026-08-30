@@ -28,9 +28,15 @@ from .lagramses_fdm_provenance import (
 
 
 _ASSIGNMENT = re.compile(
-    r"^[ \t]*([A-Za-z][A-Za-z0-9_]*(?:\([0-9 \t,]+\))?)[ \t]*="
-    r"[ \t]*([^!,/\r\n]+)",
+    r"(?:^[ \t]*|,[ \t]*)([A-Za-z][A-Za-z0-9_]*(?:\([^!\r\n=]*\))?)[ \t]*="
+    r"[ \t]*(.*?)(?=,[ \t]*[A-Za-z][A-Za-z0-9_]*(?:\([^!\r\n=]*\))?"
+    r"[ \t]*=|![^\r\n]*$|/[ \t]*(?:!.*)?$|\r?$)",
     re.MULTILINE,
+)
+_NAMELIST_GROUP = re.compile(
+    r"^[ \t]*&[ \t]*(?P<name>[A-Za-z][A-Za-z0-9_]*)\b(?P<body>.*?)"
+    r"(?:^[ \t]*/[ \t]*(?:!.*)?$|^[ \t]*&end\b.*$)",
+    re.IGNORECASE | re.MULTILINE | re.DOTALL,
 )
 
 
@@ -67,25 +73,66 @@ def _number(value: str) -> float:
     return result
 
 
-def _assignment_values(path: Path) -> dict[str, list[str]]:
+def _assignment_values(path: Path) -> dict[str, list[dict[str, list[str]]]]:
     try:
         text = path.read_text(encoding="utf-8", errors="strict")
     except OSError as error:
         raise ValueError(f"cannot read run namelist: {error}") from error
-    result: dict[str, list[str]] = {}
-    for name, value in _ASSIGNMENT.findall(text):
-        key = re.sub(r"\s+", "", name).lower()
-        result.setdefault(key, []).append(value.strip())
+    result: dict[str, list[dict[str, list[str]]]] = {}
+    for group in _NAMELIST_GROUP.finditer(text):
+        assignments: dict[str, list[str]] = {}
+        for name, value in _ASSIGNMENT.findall(group.group("body")):
+            key = re.sub(r"\s+", "", name).lower()
+            assignments.setdefault(key, []).append(value.strip())
+        result.setdefault(group.group("name").lower(), []).append(assignments)
     return result
 
 
-def _unique_value(values: Mapping[str, list[str]], name: str) -> str:
-    matches = values.get(name.lower(), [])
+def _unique_value(
+    values: Mapping[str, list[Mapping[str, list[str]]]], group: str, name: str
+) -> str:
+    group_records = values.get(group.lower(), [])
+    if not group_records:
+        raise ValueError(f"missing &{group.upper()} group")
+    if len(group_records) != 1:
+        raise ValueError(f"&{group.upper()} group occurs more than once")
+    matches = group_records[0].get(name.lower(), [])
     if not matches:
-        raise ValueError(f"missing {name}")
+        raise ValueError(f"missing {name} in &{group.upper()}")
     if len(matches) != 1:
-        raise ValueError(f"{name} is assigned more than once")
+        raise ValueError(f"{name} is assigned more than once in &{group.upper()}")
     return matches[0]
+
+
+def read_lagramses_namelist_assignment(
+    path: str | Path, *, group: str, name: str
+) -> str:
+    """Read one exact assignment from the solver-consumed namelist group."""
+
+    return _unique_value(
+        _assignment_values(Path(path).expanduser().resolve()), group, name
+    )
+
+
+def _array_override_reasons(
+    values: Mapping[str, list[Mapping[str, list[str]]]],
+    *,
+    group: str,
+    expected_names: set[str],
+) -> list[str]:
+    """Reject whole-array/section aliases of elementwise checked FDM inputs."""
+
+    group_records = values.get(group.lower(), [])
+    if len(group_records) != 1:
+        return []
+    roots = {name.split("(", 1)[0] for name in expected_names}
+    reasons: list[str] = []
+    for name in group_records[0]:
+        if name.split("(", 1)[0] in roots and name not in expected_names:
+            reasons.append(
+                f"{name} in &{group.upper()} aliases an elementwise checked FDM array"
+            )
+    return reasons
 
 
 def _sink_rows(path: Path) -> np.ndarray:
@@ -238,6 +285,67 @@ class DualSolitonRuntimeIdentity:
         }
 
 
+def read_verified_pure_fdm_dual_soliton_run_preflight(
+    path: str | Path,
+) -> DualSolitonRunPreflight:
+    """Re-run a saved ready preflight from the exact current input files."""
+
+    source = Path(path).expanduser().resolve()
+    try:
+        record = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"cannot read dual-soliton run preflight: {error}") from error
+    expected_fields = {
+        "schema_version",
+        "status",
+        "interpretation",
+        "seed_case_id",
+        "sources",
+        "reasons",
+    }
+    if (
+        not isinstance(record, Mapping)
+        or set(record) != expected_fields
+        or record.get("schema_version") != 1
+        or record.get("status") != "ready_for_operator_submission"
+        or record.get("reasons") != []
+    ):
+        raise ValueError("dual-soliton run preflight is not ready")
+    sources = record.get("sources")
+    if not isinstance(sources, Mapping) or set(sources) != {
+        "seed_manifest",
+        "run_namelist",
+        "run_ic_sink",
+    }:
+        raise ValueError("dual-soliton run preflight sources are invalid")
+    paths: dict[str, Path] = {}
+    for name in ("seed_manifest", "run_namelist", "run_ic_sink"):
+        artifact = sources[name]
+        if (
+            not isinstance(artifact, Mapping)
+            or set(artifact) != {"path", "sha256"}
+            or not isinstance(artifact.get("path"), str)
+            or not isinstance(artifact.get("sha256"), str)
+        ):
+            raise ValueError(f"dual-soliton run preflight {name} source is invalid")
+        candidate = Path(artifact["path"]).expanduser().resolve()
+        try:
+            actual = _sha256(candidate)
+        except OSError as error:
+            raise ValueError(f"cannot re-read dual-soliton preflight {name}: {error}") from error
+        if actual != artifact["sha256"]:
+            raise ValueError(f"dual-soliton preflight {name} SHA-256 no longer matches")
+        paths[name] = candidate
+    decision = preflight_pure_fdm_dual_soliton_run(
+        seed_manifest_path=paths["seed_manifest"],
+        run_namelist_path=paths["run_namelist"],
+        run_ic_sink_path=paths["run_ic_sink"],
+    )
+    if not decision.ready or decision.as_dict() != record:
+        raise ValueError("dual-soliton run preflight no longer matches its source inputs")
+    return decision
+
+
 def preflight_pure_fdm_dual_soliton_run(
     *,
     seed_manifest_path: str | Path,
@@ -253,52 +361,67 @@ def preflight_pure_fdm_dual_soliton_run(
     manifest = Path(seed_manifest_path).expanduser().resolve()
     namelist = Path(run_namelist_path).expanduser().resolve()
     sink_path = Path(run_ic_sink_path).expanduser().resolve()
-    seed, _ = _manifest_seed(manifest)
+    seed, manifest_record = _manifest_seed(manifest)
     values = _assignment_values(namelist)
     reasons: list[str] = []
 
     expected_logicals = {
-        "use_fdm": True,
-        "poisson": True,
-        "sink": True,
-        "fdm_dual_soliton_ic": True,
-        "fdm_use_hjm": False,
-        "fdm_outer_ledger": True,
+        ("run_params", "use_fdm"): True,
+        ("run_params", "poisson"): True,
+        ("run_params", "sink"): True,
+        ("run_params", "hydro"): seed.gas_status == "available",
+        ("fdm_params", "fdm_dual_soliton_ic"): True,
+        ("fdm_params", "fdm_use_hjm"): False,
+        ("fdm_params", "fdm_outer_ledger"): True,
     }
-    if seed.gas_status == "absent":
-        expected_logicals["hydro"] = False
-    for name, expected in expected_logicals.items():
+    for (group, name), expected in expected_logicals.items():
         try:
-            actual = _logical(_unique_value(values, name))
+            actual = _logical(_unique_value(values, group, name))
             if actual != expected:
-                reasons.append(f"{name} must be {str(expected).lower()}")
+                reasons.append(
+                    f"{name} in &{group.upper()} must be {str(expected).lower()}"
+                )
         except ValueError as error:
             reasons.append(str(error))
 
-    expected_numbers: dict[str, float] = {
-        "boxlen": seed.box_length_code,
-        "m_axion": seed.m_axion_ev,
-        "fdm_dual_soliton_profile_c": seed.profile_c,
+    expected_numbers: dict[tuple[str, str], float] = {
+        ("amr_params", "boxlen"): seed.box_length_code,
+        ("fdm_params", "m_axion"): seed.m_axion_ev,
+        ("fdm_params", "fdm_dual_soliton_profile_c"): seed.profile_c,
     }
     for index, soliton in enumerate(seed.solitons, start=1):
-        expected_numbers[f"fdm_dual_soliton_rho0({index})"] = soliton.rho0_code
-        expected_numbers[f"fdm_dual_soliton_rc_box({index})"] = soliton.core_radius_box
-        expected_numbers[f"fdm_dual_soliton_phase({index})"] = soliton.phase_radians
+        expected_numbers[("fdm_params", f"fdm_dual_soliton_rho0({index})")] = soliton.rho0_code
+        expected_numbers[("fdm_params", f"fdm_dual_soliton_rc_box({index})")] = soliton.core_radius_box
+        expected_numbers[("fdm_params", f"fdm_dual_soliton_phase({index})")] = soliton.phase_radians
         for dimension in range(1, 4):
-            expected_numbers[f"fdm_dual_soliton_center_box({index},{dimension})"] = soliton.center_box[dimension - 1]
-            expected_numbers[f"fdm_dual_soliton_velocity({index},{dimension})"] = soliton.velocity_code[dimension - 1]
-    for name, expected in expected_numbers.items():
+            expected_numbers[("fdm_params", f"fdm_dual_soliton_center_box({index},{dimension})")] = soliton.center_box[dimension - 1]
+            expected_numbers[("fdm_params", f"fdm_dual_soliton_velocity({index},{dimension})")] = soliton.velocity_code[dimension - 1]
+    for (group, name), expected in expected_numbers.items():
         try:
-            actual = _number(_unique_value(values, name))
+            actual = _number(_unique_value(values, group, name))
             if not math.isclose(actual, expected, rel_tol=1.0e-12, abs_tol=1.0e-14):
-                reasons.append(f"{name} does not match the materialized seed")
+                reasons.append(
+                    f"{name} in &{group.upper()} does not match the materialized seed"
+                )
         except ValueError as error:
             reasons.append(str(error))
+    reasons.extend(
+        _array_override_reasons(
+            values,
+            group="fdm_params",
+            expected_names={
+                name for group, name in expected_numbers if group == "fdm_params" and "(" in name
+            },
+        )
+    )
 
     try:
         actual_rows = _sink_rows(sink_path)
         if not np.allclose(actual_rows, _expected_sink_rows(seed), rtol=1.0e-12, atol=1.0e-14):
             reasons.append("run ic_sink does not exactly match the materialized two-SMBH seed")
+        manifest_sink = manifest_record["files"]["ic_sink"]
+        if _sha256(sink_path) != manifest_sink["sha256"]:
+            reasons.append("run ic_sink SHA-256 does not match the materialized seed")
     except ValueError as error:
         reasons.append(str(error))
 

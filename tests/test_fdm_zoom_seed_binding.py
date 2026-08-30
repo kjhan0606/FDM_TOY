@@ -24,9 +24,14 @@ from fdm_smbh_delay.dual_soliton_seed import (
     PureFDMDualSolitonSeed,
     materialize_pure_fdm_dual_soliton_seed,
 )
+from fdm_smbh_delay.dual_soliton_preflight import (
+    preflight_pure_fdm_dual_soliton_run,
+)
 from fdm_smbh_delay.fdm_zoom_seed_binding import (
     materialize_fdm_capture_seed_zoom_binding,
+    materialize_fdm_declared_run_input_binding,
     read_verified_fdm_capture_seed_zoom_binding,
+    read_verified_fdm_declared_run_input_binding,
 )
 from fdm_smbh_delay.model_zoom_materialization import (
     materialize_model_zoom_execution_contract,
@@ -157,7 +162,12 @@ def _specification() -> dict[str, object]:
     }
 
 
-def _prepare(tmp_path: Path, *, seed_axion_mass_ev: float = 1.0e-21) -> tuple[Path, Path]:
+def _prepare(
+    tmp_path: Path,
+    *,
+    seed_axion_mass_ev: float = 1.0e-21,
+    include_first_wave_level: bool = True,
+) -> tuple[Path, Path]:
     event, ledger = _capture_event(tmp_path)
     catalog = tmp_path / "smbh_catalog.json"
     catalog.write_text('{"masses":[90000000.0,80000000.0]}\n', encoding="utf-8")
@@ -241,7 +251,48 @@ def _prepare(tmp_path: Path, *, seed_axion_mass_ev: float = 1.0e-21) -> tuple[Pa
     namelist = tmp_path / "run.nml"
     namelist.write_text(
         "\n".join(
-            ("&PHYSICS_PARAMS", *(f"{key}='{value}'" for key, value in sorted(identity.items())), "/", "")
+            (
+                "&PHYSICS_PARAMS",
+                *(f"{key}='{value}'" for key, value in sorted(identity.items())),
+                "/",
+                "&RUN_PARAMS",
+                "use_fdm=.true.",
+                "poisson=.true.",
+                "sink=.true.",
+                "hydro=.false.",
+                "/",
+                "&AMR_PARAMS",
+                f"boxlen={seed.box_length_code:.16e}",
+                "/",
+                "&FDM_PARAMS",
+                "fdm_dual_soliton_ic=.true.",
+                "fdm_use_hjm=.false.",
+                "fdm_outer_ledger=.true.",
+                *(("fdm_first_wave_level=1",) if include_first_wave_level else ()),
+                f"m_axion={seed.m_axion_ev:.16e}",
+                f"fdm_dual_soliton_profile_c={seed.profile_c:.16e}",
+                *(
+                    assignment
+                    for index, soliton in enumerate(seed.solitons, start=1)
+                    for assignment in (
+                        f"fdm_dual_soliton_rho0({index})={soliton.rho0_code:.16e}",
+                        f"fdm_dual_soliton_rc_box({index})={soliton.core_radius_box:.16e}",
+                        f"fdm_dual_soliton_phase({index})={soliton.phase_radians:.16e}",
+                        *(
+                            f"fdm_dual_soliton_center_box({index},{dimension})="
+                            f"{soliton.center_box[dimension - 1]:.16e}"
+                            for dimension in range(1, 4)
+                        ),
+                        *(
+                            f"fdm_dual_soliton_velocity({index},{dimension})="
+                            f"{soliton.velocity_code[dimension - 1]:.16e}"
+                            for dimension in range(1, 4)
+                        ),
+                    )
+                ),
+                "/",
+                "",
+            )
         ),
         encoding="utf-8",
     )
@@ -274,6 +325,24 @@ def test_materializes_and_rechecks_fdm_capture_seed_zoom_identity(tmp_path: Path
     assert verified.verified
     assert verified.seed_case_id == "capture-seed"
 
+    preflight = preflight_pure_fdm_dual_soliton_run(
+        seed_manifest_path=tmp_path / "seed" / "dual_soliton_seed_manifest.json",
+        run_namelist_path=tmp_path / "run.nml",
+        run_ic_sink_path=tmp_path / "seed" / "ic_sink",
+    )
+    assert preflight.ready
+    preflight_path = tmp_path / "dual_soliton_preflight.json"
+    preflight_path.write_text(json.dumps(preflight.as_dict()), encoding="utf-8")
+    declared = materialize_fdm_declared_run_input_binding(
+        fdm_capture_seed_zoom_binding_path=tmp_path / "binding" / "fdm_capture_seed_zoom_binding.json",
+        dual_soliton_preflight_path=preflight_path,
+        output_directory=tmp_path / "declared-run",
+    )
+    assert declared["status"] == "fdm_declared_run_input_identity_verified"
+    assert read_verified_fdm_declared_run_input_binding(
+        tmp_path / "declared-run" / "fdm_declared_run_input_binding.json"
+    ).verified
+
     record["seed_case_id"] = "tampered"
     (tmp_path / "binding" / "fdm_capture_seed_zoom_binding.json").write_text(
         json.dumps(record), encoding="utf-8"
@@ -293,6 +362,30 @@ def test_censors_a_seed_with_the_wrong_axion_mass(tmp_path: Path) -> None:
     )
     assert record["status"] == "fdm_capture_seed_zoom_identity_not_verified"
     assert any("axion mass" in reason for reason in record["reasons"])
+
+
+def test_declared_run_binding_requires_case_wave_level_in_fdm_params(tmp_path: Path) -> None:
+    contract, capture_binding = _prepare(tmp_path, include_first_wave_level=False)
+    materialize_fdm_capture_seed_zoom_binding(
+        model_zoom_contract_path=contract,
+        capture_seed_binding_path=capture_binding,
+        output_directory=tmp_path / "binding",
+    )
+    preflight = preflight_pure_fdm_dual_soliton_run(
+        seed_manifest_path=tmp_path / "seed" / "dual_soliton_seed_manifest.json",
+        run_namelist_path=tmp_path / "run.nml",
+        run_ic_sink_path=tmp_path / "seed" / "ic_sink",
+    )
+    assert preflight.ready
+    preflight_path = tmp_path / "preflight.json"
+    preflight_path.write_text(json.dumps(preflight.as_dict()), encoding="utf-8")
+    record = materialize_fdm_declared_run_input_binding(
+        fdm_capture_seed_zoom_binding_path=tmp_path / "binding" / "fdm_capture_seed_zoom_binding.json",
+        dual_soliton_preflight_path=preflight_path,
+        output_directory=tmp_path / "declared-run",
+    )
+    assert record["status"] == "fdm_declared_run_input_identity_not_verified"
+    assert any("fdm_first_wave_level" in reason for reason in record["reasons"])
 
 
 def test_materializes_a_missing_source_as_a_nonverified_record(tmp_path: Path) -> None:

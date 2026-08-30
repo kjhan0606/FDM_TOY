@@ -257,6 +257,103 @@ def test_run_preflight_blocks_mismatch_without_censoring_a_physical_result(tmp_p
     assert any("run ic_sink" in reason for reason in decision.reasons)
 
 
+def test_run_preflight_requires_solver_groups_and_byte_identical_sink_input(
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "seed.yaml"
+    _write_seed(seed_path)
+    seed = load_pure_fdm_dual_soliton_seed(seed_path)
+    materialized = tmp_path / "materialized"
+    materialize_pure_fdm_dual_soliton_seed(seed, materialized)
+    namelist = tmp_path / "wrong-group.nml"
+    namelist.write_text(
+        _run_namelist(materialized)
+        .replace("  use_fdm=.true.\n", "")
+        .replace("&FDM_PARAMS\n", "&FDM_PARAMS\n  use_fdm=.true.\n"),
+        encoding="utf-8",
+    )
+    nearly_identical_sink = tmp_path / "nearly-identical-ic_sink"
+    nearly_identical_sink.write_text(
+        (materialized / "ic_sink")
+        .read_text(encoding="utf-8")
+        .replace("1.0000000000000000d-04", "1.0000000000001000d-04"),
+        encoding="utf-8",
+    )
+    decision = preflight_pure_fdm_dual_soliton_run(
+        seed_manifest_path=materialized / "dual_soliton_seed_manifest.json",
+        run_namelist_path=namelist,
+        run_ic_sink_path=nearly_identical_sink,
+    )
+    assert not decision.ready
+    assert any("use_fdm in &RUN_PARAMS" in reason for reason in decision.reasons)
+    assert any("SHA-256" in reason for reason in decision.reasons)
+
+
+def test_run_preflight_requires_hydro_for_a_gas_available_seed(tmp_path: Path) -> None:
+    record = _record()
+    record["gas_status"] = "available"
+    seed_path = tmp_path / "gas-seed.yaml"
+    _write_seed(seed_path, record)
+    seed = load_pure_fdm_dual_soliton_seed(seed_path)
+    materialized = tmp_path / "materialized"
+    materialize_pure_fdm_dual_soliton_seed(seed, materialized)
+    namelist = tmp_path / "run.nml"
+    namelist.write_text(_run_namelist(materialized), encoding="utf-8")
+    decision = preflight_pure_fdm_dual_soliton_run(
+        seed_manifest_path=materialized / "dual_soliton_seed_manifest.json",
+        run_namelist_path=namelist,
+        run_ic_sink_path=materialized / "ic_sink",
+    )
+    assert not decision.ready
+    assert any("hydro in &RUN_PARAMS must be true" in reason for reason in decision.reasons)
+
+
+def test_run_preflight_rejects_scalar_and_array_overrides_on_one_line(tmp_path: Path) -> None:
+    seed_path = tmp_path / "seed.yaml"
+    _write_seed(seed_path)
+    seed = load_pure_fdm_dual_soliton_seed(seed_path)
+    materialized = tmp_path / "materialized"
+    materialize_pure_fdm_dual_soliton_seed(seed, materialized)
+    namelist = tmp_path / "run.nml"
+    namelist.write_text(
+        _run_namelist(materialized)
+        .replace("fdm_use_hjm=.false.", "fdm_use_hjm=.false., fdm_use_hjm=.true.")
+        .replace(
+            "fdm_outer_ledger=.true.\n",
+            "fdm_outer_ledger=.true.\n  fdm_dual_soliton_rho0=4.0d0,3.0d0\n",
+        ),
+        encoding="utf-8",
+    )
+    decision = preflight_pure_fdm_dual_soliton_run(
+        seed_manifest_path=materialized / "dual_soliton_seed_manifest.json",
+        run_namelist_path=namelist,
+        run_ic_sink_path=materialized / "ic_sink",
+    )
+    assert not decision.ready
+    assert any("fdm_use_hjm is assigned more than once" in reason for reason in decision.reasons)
+    assert any("aliases an elementwise checked FDM array" in reason for reason in decision.reasons)
+
+
+def test_run_preflight_accepts_ordinary_inline_namelist_comments(tmp_path: Path) -> None:
+    seed_path = tmp_path / "seed.yaml"
+    _write_seed(seed_path)
+    seed = load_pure_fdm_dual_soliton_seed(seed_path)
+    materialized = tmp_path / "materialized"
+    materialize_pure_fdm_dual_soliton_seed(seed, materialized)
+    namelist = tmp_path / "run.nml"
+    namelist.write_text(
+        _run_namelist(materialized).replace(
+            "fdm_use_hjm=.false.", "fdm_use_hjm=.false. ! all-wave seed"
+        ),
+        encoding="utf-8",
+    )
+    assert preflight_pure_fdm_dual_soliton_run(
+        seed_manifest_path=materialized / "dual_soliton_seed_manifest.json",
+        run_namelist_path=namelist,
+        run_ic_sink_path=materialized / "ic_sink",
+    ).ready
+
+
 def test_preflight_cli_writes_atomic_configuration_decision(tmp_path: Path) -> None:
     seed_path = tmp_path / "seed.yaml"
     _write_seed(seed_path)
