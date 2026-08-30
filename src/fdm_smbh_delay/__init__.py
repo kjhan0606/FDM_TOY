@@ -31,6 +31,11 @@ from .dm_run_provenance import (
     bind_capture_event_to_dark_matter_run,
     read_dark_matter_run_provenance,
 )
+from .cdm_zoom_materialization import (
+    CDMNonCompactingZoomRunContract,
+    assess_cdm_noncompacting_zoom_run_inputs,
+    materialize_cdm_noncompacting_zoom_run_contract,
+)
 from .dm_comparison import (
     DMComparisonCaptureEnsemble,
     DMComparisonCaptureRegistration,
@@ -143,6 +148,7 @@ __all__ = [
     "CaptureSeedMaterializationBinding",
     "CaptureSolitonConfiguration",
     "CaptureDMRunBinding",
+    "CDMNonCompactingZoomRunContract",
     "DMComparisonCaptureEnsemble",
     "DMComparisonCaptureRegistration",
     "DMComparisonFamilyManifest",
@@ -195,6 +201,7 @@ __all__ = [
     "ResolvedModelPhysicsResult",
     "TabulatedSphericalProfile",
     "assemble_capture_derived_pure_fdm_seed",
+    "assess_cdm_noncompacting_zoom_run_inputs",
     "build_kpc_model_from_profile_bundle",
     "capture_derived_seed_mapping",
     "capture_soliton_configuration_from_mapping",
@@ -206,6 +213,7 @@ __all__ = [
     "load_config",
     "load_pure_fdm_dual_soliton_seed",
     "materialize_pure_fdm_dual_soliton_seed",
+    "materialize_cdm_noncompacting_zoom_run_contract",
     "pure_fdm_dual_soliton_seed_from_mapping",
     "preflight_pure_fdm_dual_soliton_run",
     "validate_pure_fdm_dual_soliton_runtime_identity",

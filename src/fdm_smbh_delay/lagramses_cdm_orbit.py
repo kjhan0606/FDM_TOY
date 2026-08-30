@@ -118,14 +118,20 @@ def _resolve(reference: str, base: Path) -> Path:
     return (path if path.is_absolute() else base / path).resolve()
 
 
-def _capture_binding(
+def read_bound_cdm_capture(
     path: str | Path,
     *,
     capture_event_uid: str,
     primary_sink_id: int,
     secondary_sink_id: int,
 ) -> dict[str, Any]:
-    """Bind the retained zoom pair to one validated original CDM capture."""
+    """Read one validated original CDM capture bound to a retained zoom pair.
+
+    This is deliberately shared by the input materializer and the later raw
+    orbit extractor.  Both stages therefore prove the same original binary
+    identity against the immutable capture-ledger event instead of trusting a
+    caller-supplied event label.
+    """
 
     source = Path(path).expanduser().resolve()
     try:
@@ -176,9 +182,12 @@ def _capture_binding(
     return {
         "path": str(source),
         "sha256": _file_sha256(source),
+        "capture_event_uid": capture_event_uid,
         "capture_event_sha256": event.event_sha256,
         "capture_ledger_path": str(ledger_path),
         "capture_ledger_sha256": _file_sha256(ledger_path),
+        "primary_sink_id": primary_sink_id,
+        "secondary_sink_id": secondary_sink_id,
     }
 
 
@@ -237,7 +246,7 @@ def extract_lagramses_cdm_pair_orbit_track(
         raise ValueError("primary and secondary sink IDs must be distinct positive integers")
     physics_id = _nonempty(physics_id, "physics_id")
     capture_event_uid = _nonempty(capture_event_uid, "capture_event_uid")
-    capture_binding = _capture_binding(
+    capture_binding = read_bound_cdm_capture(
         capture_binding_path,
         capture_event_uid=capture_event_uid,
         primary_sink_id=primary_sink_id,

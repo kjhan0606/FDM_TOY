@@ -58,7 +58,7 @@ python scripts/build_cdm_delay_stage.py \
 ```
 
 For a lagRamses CDM zoom, keep the selected SMBH pair from numerical
-compaction with the native `&PHYSICS_PARAMS rmerge = 0`.  A later output must
+compaction with the native `&SINK_PARAMS rmerge = 0`.  A later output must
 record both `smbh_merge_radius_cells = 0` and
 `smbh_compaction_mode = no_finite_radius_rmerge_zero` in its DM provenance sidecar;
 the preflight refuses a compacting or ambiguous output:
@@ -104,6 +104,29 @@ secular-rate candidate exists.  It is preflighted without submission:
 python scripts/preflight_cdm_noncompacting_zoom_plan.py \
   configs/cdm_noncompacting_zoom_grid.yaml cdm_zoom_preflight.json
 ```
+
+Before a manual Slurm submission, materialize one immutable input contract.
+It selects one exact resolution/phase case, verifies the original ledger event
+and sink IDs again, checks the complete operator namelist for `smbh=.true.`,
+`rmerge=0`, and an enabled, separately named capture ledger, then writes a
+new directory containing the audit record and a reference-only `&SINK_PARAMS`
+fragment.  It never edits the supplied namelist, overwrites the original
+capture ledger, or submits a calculation.
+
+```bash
+python scripts/materialize_cdm_noncompacting_zoom_run.py \
+  --case-id zoomphys-...-l21-r00 \
+  --capture-binding capture_dm_run_binding.json \
+  --capture-event-uid capture-11799-11801 \
+  --primary-sink-id 11799 --secondary-sink-id 11801 \
+  --run-namelist cdm_zoom.nml \
+  --capture-ledger-file zoom_capture_11799_11801.jsonl \
+  configs/cdm_noncompacting_zoom_grid.yaml cdm_zoom_contract
+```
+
+Only `ready_for_operator_submission` authorizes the operator to submit this
+specific input.  A ready contract remains a configuration identity check, not
+a convergence result or a delay calibration.
 
 For a strictly shrinking, sufficiently sampled candidate, form a fixed-block
 secular table with a documented regression rather than manually entering a
