@@ -533,10 +533,19 @@ def _require_model_zoom_execution_identity(
         if any(run.parameter(name) != value for name, value in expected_sidm.items()):
             raise ValueError("normal-output SIDM controls differ from the zoom case")
     elif run.dark_matter_model == "fdm":
+        if (
+            case.numerics.fdm_use_hjm is None
+            or case.numerics.fdm_first_wave_level is None
+        ):
+            raise ValueError("FDM zoom case does not declare HJM and first-wave-level controls")
         if not _same_float(
             float(run.parameter("m_axion_ev")), float(case.physics.fdm_particle_mass_ev)
         ):
             raise ValueError("normal-output FDM particle mass differs from the zoom case")
+        if run.parameter("fdm_use_hjm") != case.numerics.fdm_use_hjm:
+            raise ValueError("normal-output FDM HJM control differs from the zoom case")
+        if run.parameter("fdm_first_wave_level") != case.numerics.fdm_first_wave_level:
+            raise ValueError("normal-output FDM first wave level differs from the zoom case")
 
 
 def _read_rate_ledger(

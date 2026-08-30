@@ -140,6 +140,12 @@ identity is censored. The sidecar does not by itself recompute a rate from raw
 time series, so a production estimator must still bind its source series and
 settings before its diagnosed rates become a scientific acceptance.
 
+For an FDM result, the selected manifest case must also declare
+`fdm_use_hjm` and `fdm_first_wave_level`; the sidecar values emitted by the
+solver are compared with those declarations. A grid without them remains
+outside the resolved model-specific acceptance path rather than acquiring an
+implicit wave prescription.
+
 `materialize_model_zoom_execution_contract.py` verifies these assignments in
 the one solver-consumed `&PHYSICS_PARAMS` group and writes a merge-only
 assignment fragment for one CDM, SIDM, or FDM case after it re-reads one

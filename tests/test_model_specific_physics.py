@@ -173,6 +173,8 @@ def _case(model: str, *, finest_cell_size_pc: float, replicate: int = 0) -> Gala
             finest_cell_size_pc=finest_cell_size_pc,
             collisionless_particle_mass_msun=1.0e3,
             minimum_softening_pc=finest_cell_size_pc / 2.0,
+            fdm_use_hjm=False if model == "fdm" else None,
+            fdm_first_wave_level=12 if model == "fdm" else None,
         ),
         replicate=replicate,
     )
@@ -937,6 +939,49 @@ def test_result_rejects_a_normal_output_with_another_resolution_level(tmp_path: 
         read_resolved_model_physics_result(path, case=case, zoom_manifest_sha256="a" * 64)
 
 
+def test_fdm_result_requires_declared_and_matching_wave_controls(tmp_path: Path) -> None:
+    declared = _case("fdm", finest_cell_size_pc=0.5)
+    undeclared = replace(
+        declared,
+        numerics=replace(
+            declared.numerics,
+            fdm_use_hjm=None,
+            fdm_first_wave_level=None,
+        ),
+    )
+    physics_input, hashes = _physics_input(
+        tmp_path / "undeclared", case=undeclared, manifest_sha256="a" * 64
+    )
+    record = _result_record(
+        case=undeclared,
+        manifest_sha256="a" * 64,
+        physics_input=physics_input,
+        artifacts=hashes["fdm"],
+    )
+    path = tmp_path / "undeclared-wave-controls.json"
+    _write_json(path, record)
+    with pytest.raises(ValueError, match="does not declare HJM"):
+        read_resolved_model_physics_result(path, case=undeclared, zoom_manifest_sha256="a" * 64)
+
+    mismatched = replace(
+        declared,
+        numerics=replace(declared.numerics, fdm_use_hjm=True),
+    )
+    physics_input, hashes = _physics_input(
+        tmp_path / "mismatched", case=mismatched, manifest_sha256="a" * 64
+    )
+    record = _result_record(
+        case=mismatched,
+        manifest_sha256="a" * 64,
+        physics_input=physics_input,
+        artifacts=hashes["fdm"],
+    )
+    path = tmp_path / "mismatched-hjm.json"
+    _write_json(path, record)
+    with pytest.raises(ValueError, match="HJM control differs"):
+        read_resolved_model_physics_result(path, case=mismatched, zoom_manifest_sha256="a" * 64)
+
+
 def test_fdm_full_wave_ledger_is_distinct_from_raw_provenance(tmp_path: Path) -> None:
     case = _case("fdm", finest_cell_size_pc=0.5)
     physics_input, _ = _physics_input(tmp_path, case=case, manifest_sha256="a" * 64)
@@ -990,12 +1035,16 @@ def test_non_submitting_cli_validates_resolution_and_phase_records(tmp_path: Pat
                 "finest_cell_size_pc": 1.0,
                 "collisionless_particle_mass_msun": 1.0e3,
                 "minimum_softening_pc": 0.5,
+                "fdm_use_hjm": False,
+                "fdm_first_wave_level": 12,
             },
             {
                 "levelmax": 20,
                 "finest_cell_size_pc": 0.5,
                 "collisionless_particle_mass_msun": 1.0e3,
                 "minimum_softening_pc": 0.25,
+                "fdm_use_hjm": False,
+                "fdm_first_wave_level": 12,
             },
         ],
     }

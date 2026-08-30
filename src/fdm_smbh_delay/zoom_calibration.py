@@ -164,6 +164,8 @@ class ZoomNumerics:
     finest_cell_size_pc: float
     collisionless_particle_mass_msun: float
     minimum_softening_pc: float
+    fdm_use_hjm: bool | None = None
+    fdm_first_wave_level: int | None = None
 
     def __post_init__(self) -> None:
         values = np.asarray(
@@ -176,6 +178,17 @@ class ZoomNumerics:
         )
         if self.levelmax < 1 or np.any(~np.isfinite(values)) or np.any(values <= 0.0):
             raise ValueError("zoom numerical resolution is invalid")
+        if (self.fdm_use_hjm is None) != (self.fdm_first_wave_level is None):
+            raise ValueError("FDM HJM controls must be declared together or both omitted")
+        if self.fdm_use_hjm is not None:
+            if not isinstance(self.fdm_use_hjm, bool):
+                raise ValueError("fdm_use_hjm must be a boolean")
+            if (
+                isinstance(self.fdm_first_wave_level, bool)
+                or not isinstance(self.fdm_first_wave_level, int)
+                or not 1 <= self.fdm_first_wave_level <= self.levelmax
+            ):
+                raise ValueError("fdm_first_wave_level must lie between 1 and levelmax")
 
 
 @dataclass(frozen=True)
@@ -190,19 +203,29 @@ class GalaxyMergerZoomCase:
 
     @property
     def case_id(self) -> str:
-        return (
+        identity = (
             f"{self.physics.physics_id}-l{self.numerics.levelmax}"
             f"-r{self.replicate:02d}"
         )
+        if self.numerics.fdm_use_hjm is not None:
+            identity += (
+                f"-hjm{int(self.numerics.fdm_use_hjm)}"
+                f"-wave{self.numerics.fdm_first_wave_level}"
+            )
+        return identity
 
     def as_dict(self) -> dict[str, Any]:
+        numerics = asdict(self.numerics)
+        if numerics["fdm_use_hjm"] is None:
+            del numerics["fdm_use_hjm"]
+            del numerics["fdm_first_wave_level"]
         return {
             "schema_version": ZOOM_SCHEMA_VERSION,
             "case_id": self.case_id,
             "physics_id": self.physics.physics_id,
             "replicate": self.replicate,
             "physics": asdict(self.physics),
-            "numerics": asdict(self.numerics),
+            "numerics": numerics,
         }
 
 
@@ -257,6 +280,12 @@ def _numerics_from_mapping(mapping: dict[str, Any]) -> ZoomNumerics:
                 mapping["collisionless_particle_mass_msun"]
             ),
             minimum_softening_pc=float(mapping["minimum_softening_pc"]),
+            fdm_use_hjm=mapping.get("fdm_use_hjm"),
+            fdm_first_wave_level=(
+                None
+                if mapping.get("fdm_first_wave_level") is None
+                else int(mapping["fdm_first_wave_level"])
+            ),
         )
     except (KeyError, TypeError, ValueError) as error:
         raise ValueError("zoom numerical record is incomplete or non-numeric") from error
