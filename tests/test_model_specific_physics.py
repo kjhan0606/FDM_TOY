@@ -15,6 +15,15 @@ from fdm_smbh_delay.model_specific_physics import (
     compare_model_specific_resolution_pair,
     read_resolved_model_physics_result,
 )
+from fdm_smbh_delay.dm_comparison import (
+    assess_dm_comparison_physics_inputs,
+    read_dm_comparison_physics_input,
+)
+from fdm_smbh_delay.fdm_outer_wave_ledger import FDMOuterWaveLedger
+from fdm_smbh_delay.resolved_physics_inventory import (
+    assess_lagramses_resolved_physics_inventory,
+    read_lagramses_resolved_physics_inventory,
+)
 from fdm_smbh_delay.zoom_calibration import (
     GalaxyMergerZoomCase,
     ZoomNumerics,
@@ -77,15 +86,130 @@ def _case(model: str, *, finest_cell_size_pc: float, replicate: int = 0) -> Gala
     )
 
 
+def _write_ready_inventory_assessment(
+    root: Path, model: str
+) -> tuple[Path, dict[str, Path]]:
+    """Create a v2 inventory fixture with real, hash-bound ledger files."""
+
+    label = "00042"
+    output = root / "normal_outputs" / model / f"output_{label}"
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "COMPLETE").write_text(label + "\n", encoding="utf-8")
+    (output / "POISSON_PHI_VALID").write_text(
+        "LAGRAMSES_POISSON_PHI_VALID_V1\n42 21 1.25 0.5\n", encoding="utf-8"
+    )
+    for name in ("stars_00042.out", "hydro_00042.out", "grav_00042.out", "sink_00042.info"):
+        (output / name).touch()
+    if model in {"cdm", "sidm"}:
+        (output / "part_00042.out").touch()
+    if model == "fdm":
+        (output / "fdm_00042.out").touch()
+
+    def artifact(name: str) -> tuple[Path, str]:
+        path = output / name
+        path.write_text(name + "\n", encoding="utf-8")
+        return path, _sha256(path)
+
+    force, force_sha = artifact("force_source_ledger_00042.json")
+    conservation, conservation_sha = artifact("conservation_ledger_00042.json")
+    ledgers = {"force_ledger": force, "conservation_ledger": conservation}
+    values = {
+        "output_number": label,
+        "nstep_coarse": "42",
+        "time_code": "1.25d0",
+        "aexp": "5.0d-1",
+        "dark_matter_model": model,
+        "raw_snapshot_directory": f"output_{label}/",
+        "completion_marker": "COMPLETE",
+        "star_formation_enabled": ".true.",
+        "stars_channel_status": "available",
+        "stars_particle_snapshot_prefix": "stars_00042.out",
+        "gas_channel_status": "available",
+        "gas_snapshot_prefix": "hydro_00042.out",
+        "dark_matter_channel_status": "available",
+        "particle_snapshot_prefix": "part_00042.out" if model in {"cdm", "sidm"} else "none",
+        "potential_snapshot_prefix": "grav_00042.out",
+        "potential_checkpoint_status": "validated",
+        "sink_info_file": "sink_00042.info",
+        "force_source_ledger_status": "available",
+        "force_source_ledger_reason": "measured_source_work",
+        "force_source_ledger_path": force.name,
+        "force_source_ledger_sha256": force_sha,
+        "conservation_ledger_status": "available",
+        "conservation_ledger_reason": "measured_time_series",
+        "conservation_ledger_path": conservation.name,
+        "conservation_ledger_sha256": conservation_sha,
+    }
+    if model == "sidm":
+        scattering, scattering_sha = artifact("sidm_scattering_ledger_00042.json")
+        ledgers["scattering_ledger"] = scattering
+        values.update(
+            {
+                "sidm_scattering_ledger_status": "available",
+                "sidm_scattering_ledger_reason": "measured_scatter_history",
+                "sidm_scattering_ledger_path": scattering.name,
+                "sidm_scattering_ledger_sha256": scattering_sha,
+            }
+        )
+    if model == "fdm":
+        wave = output / f"fdm_outer_wave_provenance_{label}.txt"
+        wave.write_text(
+            "# fdm_outer_wave_provenance_v2\n"
+            "time_code = 1.25d0\n"
+            "aexp = 5.0d-1\n"
+            "nstep_coarse = 42\n"
+            "m_axion_ev = 1.0d-22\n"
+            "hbar_code = 2.0d-3\n"
+            "fdm_use_hjm = F\n"
+            "fdm_first_wave_level = 12\n"
+            "analytic_fdm_drag_enabled = .false.\n"
+            "force_accounting = resolved_wave_only\n"
+            "leaf_mass_code = 3.0d0\n"
+            "integrated_current_code = 1.0d-2 -2.0d-2 3.0d-2\n"
+            "leaf_cell_count = 100.0\n"
+            "complete_current_stencil_cell_count = 98.0\n"
+            "complete_current_stencil_fraction = 0.98\n"
+            "psi_snapshot_prefix = fdm_00042.out\n"
+            "fdm_dual_soliton_ic = F\n"
+            "fdm_dual_soliton_profile_c = 0.0\n"
+            "fdm_dual_soliton_rho0 = 0.0 0.0\n"
+            "fdm_dual_soliton_rc_box = 0.0 0.0\n"
+            "fdm_dual_soliton_center_box_1 = 0.0 0.0 0.0\n"
+            "fdm_dual_soliton_center_box_2 = 0.0 0.0 0.0\n"
+            "fdm_dual_soliton_velocity_1 = 0.0 0.0 0.0\n"
+            "fdm_dual_soliton_velocity_2 = 0.0 0.0 0.0\n"
+            "fdm_dual_soliton_phase = 0.0 0.0\n",
+            encoding="utf-8",
+        )
+        ledgers["wave_provenance"] = wave
+        values.update(
+            {
+                "fdm_field_snapshot_status": "available",
+                "fdm_field_snapshot_prefix": "fdm_00042.out",
+                "fdm_wave_provenance_status": "available",
+                "fdm_wave_provenance_path": f"output_{label}/" + wave.name,
+                "fdm_force_accounting": "resolved_wave_only",
+            }
+        )
+    inventory_path = output / f"resolved_physics_inventory_{label}.txt"
+    inventory_path.write_text(
+        "# lagramses_resolved_physics_inventory_v2\n"
+        + "".join(f"{key} = {value}\n" for key, value in values.items()),
+        encoding="utf-8",
+    )
+    assessment = assess_lagramses_resolved_physics_inventory(
+        read_lagramses_resolved_physics_inventory(inventory_path),
+        stars_required=True,
+        gas_required=True,
+    )
+    assert assessment.ready_for_registered_analysis
+    assessment_path = output / "resolved_physics_inventory_assessment.json"
+    _write_json(assessment_path, assessment.as_dict())
+    return assessment_path, ledgers
+
+
 def _physics_input(tmp_path: Path) -> tuple[Path, dict[str, dict[str, str]]]:
     ensemble = tmp_path / "capture_ensemble.json"
-    _write_json(
-        ensemble,
-        {
-            "schema_version": 1,
-            "status": "dm_comparison_capture_ensemble_registered",
-        },
-    )
     artifact_names = {
         "cdm": ("environment_profile", "force_ledger", "conservation_ledger"),
         "sidm": (
@@ -99,32 +223,98 @@ def _physics_input(tmp_path: Path) -> tuple[Path, dict[str, dict[str, str]]]:
             "force_ledger",
             "conservation_ledger",
             "wave_ledger",
+            "wave_provenance",
             "field_snapshot_index",
         ),
     }
     artifacts: dict[str, dict[str, dict[str, str]]] = {}
     hashes: dict[str, dict[str, str]] = {}
+    inventory_assessments: dict[str, dict[str, str]] = {}
+    provenance_paths: dict[str, Path] = {}
     for model, names in artifact_names.items():
         artifacts[model] = {}
         hashes[model] = {}
+        assessment_path, inventory_ledgers = _write_ready_inventory_assessment(tmp_path, model)
+        inventory_assessments[model] = {
+            "path": str(assessment_path.relative_to(tmp_path)),
+            "sha256": _sha256(assessment_path),
+        }
+        provenance = assessment_path.parent / "dm_run_provenance_00042.txt"
+        provenance.write_text("fixture normal-output identity\n", encoding="utf-8")
+        provenance_paths[model] = provenance
         for name in names:
-            path = tmp_path / "artifacts" / model / f"{name}.json"
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(f"{model} {name}\n", encoding="utf-8")
+            if name == "wave_ledger":
+                continue
+            path = inventory_ledgers.get(name)
+            if path is None:
+                path = tmp_path / "artifacts" / model / f"{name}.json"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(f"{model} {name}\n", encoding="utf-8")
             digest = _sha256(path)
             hashes[model][name] = digest
             artifacts[model][name] = {
                 "path": str(path.relative_to(tmp_path)),
                 "sha256": digest,
             }
+        if model == "fdm":
+            wave_source = tmp_path / "artifacts" / model / "wave_source_index.json"
+            wave_source.write_text("resolved FDM wave source index\n", encoding="utf-8")
+            ledger_path = tmp_path / "artifacts" / model / "outer_wave_ledger.json"
+            ledger = FDMOuterWaveLedger(
+                source_path=wave_source.name,
+                source_sha256=_sha256(wave_source),
+                force_ledger_sha256=hashes[model]["force_ledger"],
+                field_snapshot_index_sha256=hashes[model]["field_snapshot_index"],
+                profile_snapshot_index_sha256=hashes[model]["environment_profile"],
+                sample_times_myr=[0.0, 0.1],
+                core_centres_pc=[[0.0, 0.0, 0.0], [0.1, 0.0, 0.0]],
+                fdm_current_msun_pc2_myr=[[1.0, 0.0, 0.0], [1.1, 0.0, 0.0]],
+                coherence_time_myr=[0.05, 0.05],
+                de_broglie_wavelength_pc=[10.0, 10.0],
+                granule_power=[0.1, 0.1],
+                dipole_l1_real_imag=[[0.1, 0.0], [0.1, 0.0]],
+                quadrupole_l2_real_imag=[[0.1, 0.0], [0.1, 0.0]],
+                wake_extent_pc=[20.0, 20.0],
+                hjm_wave_seam_clearance_pc=[30.0, 30.0],
+                boundary_clearance_pc=[30.0, 30.0],
+                maximum_relative_hamiltonian_error=1.0e-5,
+                maximum_relative_mass_error=1.0e-5,
+                maximum_relative_angular_momentum_error=1.0e-5,
+                force_accounting="live_wave_only",
+            )
+            _write_json(ledger_path, ledger.as_dict())
+            hashes[model]["wave_ledger"] = _sha256(ledger_path)
+            artifacts[model]["wave_ledger"] = {
+                "path": str(ledger_path.relative_to(tmp_path)),
+                "sha256": hashes[model]["wave_ledger"],
+            }
+    _write_json(
+        ensemble,
+        {
+            "schema_version": 1,
+            "status": "dm_comparison_capture_ensemble_registered",
+            "capture_bindings": {
+                model: {
+                    "capture_event": {"event_uid": "capture-7-9"},
+                    "run_provenance": {
+                        "source": {
+                            "path": str(provenance.relative_to(tmp_path)),
+                        }
+                    }
+                }
+                for model, provenance in provenance_paths.items()
+            },
+        },
+    )
     physics_input = tmp_path / "physics_input.json"
     _write_json(
         physics_input,
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "capture_ensemble_path": "capture_ensemble.json",
             "capture_ensemble_sha256": _sha256(ensemble),
             "artifacts": artifacts,
+            "normal_output_inventory_assessments": inventory_assessments,
         },
     )
     return physics_input, hashes
@@ -285,6 +475,45 @@ def test_rejects_fdm_analytic_force_or_input_hash_mismatch(tmp_path: Path) -> No
     _write_json(path, record)
     with pytest.raises(ValueError, match="differs from accepted physics input"):
         read_resolved_model_physics_result(path, case=case, zoom_manifest_sha256="a" * 64)
+
+
+def test_result_must_reuse_its_registered_capture_event(tmp_path: Path) -> None:
+    physics_input, hashes = _physics_input(tmp_path)
+    case = _case("cdm", finest_cell_size_pc=0.5)
+    record = _result_record(
+        case=case,
+        manifest_sha256="a" * 64,
+        physics_input=physics_input,
+        artifacts=hashes["cdm"],
+    )
+    record["capture_event_uid"] = "another-capture"
+    path = tmp_path / "wrong-capture.json"
+    _write_json(path, record)
+    with pytest.raises(ValueError, match="differs from its registered capture ensemble"):
+        read_resolved_model_physics_result(path, case=case, zoom_manifest_sha256="a" * 64)
+
+
+def test_fdm_full_wave_ledger_is_distinct_from_raw_provenance(tmp_path: Path) -> None:
+    physics_input, _ = _physics_input(tmp_path)
+    record = json.loads(physics_input.read_text(encoding="utf-8"))
+    ledger_path = tmp_path / record["artifacts"]["fdm"]["wave_ledger"]["path"]
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    ledger["force_accounting"] = "resolved_wake_plus_measured_residual"
+    _write_json(ledger_path, ledger)
+    record["artifacts"]["fdm"]["wave_ledger"]["sha256"] = _sha256(ledger_path)
+    _write_json(physics_input, record)
+    assessment = assess_dm_comparison_physics_inputs(
+        read_dm_comparison_physics_input(physics_input)
+    )
+    assert not assessment.ready_for_model_specific_analysis
+    assert any("live_wave_only until a residual ledger is attested" in reason for reason in assessment.reasons)
+
+    record["artifacts"]["fdm"]["wave_provenance"]["sha256"] = "0" * 64
+    _write_json(physics_input, record)
+    assessment = assess_dm_comparison_physics_inputs(
+        read_dm_comparison_physics_input(physics_input)
+    )
+    assert any("fdm wave_provenance" in reason for reason in assessment.reasons)
 
 
 def test_sidm_controls_are_required_and_cdm_rejects_them() -> None:

@@ -16,6 +16,10 @@ from .dm_run_provenance import (
     bind_capture_event_to_dark_matter_run,
     read_dark_matter_run_provenance,
 )
+from .fdm_outer_wave_ledger import FDMOuterWaveLedger
+from .resolved_physics_inventory import (
+    read_lagramses_resolved_physics_inventory_assessment,
+)
 
 
 _MODELS = ("cdm", "sidm", "fdm")
@@ -56,6 +60,17 @@ def _nonempty(value: Any, label: str) -> str:
 def _resolve(reference: str, base: Path) -> Path:
     path = Path(reference).expanduser()
     return (path if path.is_absolute() else base / path).resolve()
+
+
+def _normal_output_directory(path: Path, label: str) -> Path:
+    """Return the enclosing output directory for grouped or ungrouped evidence."""
+
+    directory = path.parent
+    if directory.name.startswith("group_"):
+        directory = directory.parent
+    if directory.name != label:
+        raise ValueError("evidence does not sit inside its declared normal output directory")
+    return directory
 
 
 @dataclass(frozen=True)
@@ -434,37 +449,67 @@ _PHYSICS_ARTIFACTS = {
         "force_ledger",
         "conservation_ledger",
         "wave_ledger",
+        "wave_provenance",
         "field_snapshot_index",
     },
+}
+_V1_PHYSICS_ARTIFACTS = {
+    model: set(names) - ({"wave_provenance"} if model == "fdm" else set())
+    for model, names in _PHYSICS_ARTIFACTS.items()
 }
 
 
 @dataclass(frozen=True)
 class DMComparisonPhysicsInput:
     source_path: Path
+    source_schema_version: int
     capture_ensemble_path: str
     capture_ensemble_sha256: str
     artifacts: tuple[tuple[str, tuple[tuple[str, HashedArtifact], ...]], ...]
+    normal_output_inventory_assessments: tuple[tuple[str, HashedArtifact], ...]
+
+    def inventory_assessment_for(self, model: str) -> HashedArtifact | None:
+        return dict(self.normal_output_inventory_assessments).get(model)
 
 
 def read_dm_comparison_physics_input(path: str | Path) -> DMComparisonPhysicsInput:
     source = Path(path).expanduser().resolve()
     record = _json_object(source, "DM comparison physics-input record")
-    if record.get("schema_version") != 1 or set(record) != {
-        "schema_version", "capture_ensemble_path", "capture_ensemble_sha256", "artifacts"
-    }:
+    source_schema_version = record.get("schema_version")
+    expected = {"schema_version", "capture_ensemble_path", "capture_ensemble_sha256", "artifacts"}
+    if source_schema_version == 2:
+        expected.add("normal_output_inventory_assessments")
+    elif source_schema_version != 1:
+        raise ValueError("unsupported DM comparison physics-input schema")
+    if set(record) != expected:
         raise ValueError("DM comparison physics-input fields are invalid")
     artifacts = record.get("artifacts")
     if not isinstance(artifacts, Mapping) or set(artifacts) != set(_MODELS):
         raise ValueError("DM comparison physics input must name exactly cdm, sidm, and fdm")
+    inventory_assessments: tuple[tuple[str, HashedArtifact], ...] = ()
+    if source_schema_version == 2:
+        inventory_assessments = _artifact_mapping(
+            record.get("normal_output_inventory_assessments"),
+            set(_MODELS),
+            "normal_output_inventory_assessments",
+        )
     return DMComparisonPhysicsInput(
         source_path=source,
+        source_schema_version=source_schema_version,
         capture_ensemble_path=_nonempty(record.get("capture_ensemble_path"), "capture_ensemble_path"),
         capture_ensemble_sha256=_sha256(record.get("capture_ensemble_sha256"), "capture_ensemble_sha256"),
         artifacts=tuple(
-            (model, _artifact_mapping(artifacts[model], _PHYSICS_ARTIFACTS[model], f"{model} artifacts"))
+            (
+                model,
+                _artifact_mapping(
+                    artifacts[model],
+                    (_PHYSICS_ARTIFACTS if source_schema_version == 2 else _V1_PHYSICS_ARTIFACTS)[model],
+                    f"{model} artifacts",
+                ),
+            )
             for model in _MODELS
         ),
+        normal_output_inventory_assessments=inventory_assessments,
     )
 
 
@@ -501,6 +546,7 @@ def assess_dm_comparison_physics_inputs(
 
     reasons: list[str] = []
     ensemble_path = _resolve(physics_input.capture_ensemble_path, physics_input.source_path.parent)
+    ensemble: dict[str, Any] | None = None
     try:
         if _file_sha256(ensemble_path) != physics_input.capture_ensemble_sha256:
             reasons.append("capture ensemble SHA-256 differs")
@@ -511,12 +557,106 @@ def assess_dm_comparison_physics_inputs(
             reasons.append("capture ensemble is not registered")
     except (OSError, ValueError) as error:
         reasons.append(f"capture ensemble: {error}")
+    verified_artifacts: dict[str, dict[str, Path]] = {}
     for model, artifacts in physics_input.artifacts:
+        verified_artifacts[model] = {}
         for name, artifact in artifacts:
             try:
-                artifact.verify(physics_input.source_path.parent)
+                verified_artifacts[model][name] = artifact.verify(
+                    physics_input.source_path.parent
+                )
             except ValueError as error:
                 reasons.append(f"{model} {name}: {error}")
+    if physics_input.source_schema_version < 2:
+        reasons.append("physics input schema lacks normal-output inventory assessments")
+    else:
+        for model, inventory_artifact in physics_input.normal_output_inventory_assessments:
+            try:
+                assessment_path = inventory_artifact.verify(physics_input.source_path.parent)
+                assessment = read_lagramses_resolved_physics_inventory_assessment(
+                    assessment_path
+                )
+                if assessment.inventory.dark_matter_model != model:
+                    reasons.append(f"{model} inventory assessment declares {assessment.inventory.dark_matter_model}")
+                if not assessment.ready_for_registered_analysis:
+                    reasons.append(f"{model} normal-output inventory assessment is not ready")
+                if ensemble is None:
+                    reasons.append(f"{model} capture ensemble is unavailable for output binding")
+                else:
+                    bindings = ensemble.get("capture_bindings")
+                    binding = bindings.get(model) if isinstance(bindings, Mapping) else None
+                    run = binding.get("run_provenance") if isinstance(binding, Mapping) else None
+                    run_source = run.get("source") if isinstance(run, Mapping) else None
+                    reference = run_source.get("path") if isinstance(run_source, Mapping) else None
+                    if not isinstance(reference, str) or not reference.strip():
+                        reasons.append(f"{model} capture ensemble lacks a run-provenance source path")
+                    else:
+                        try:
+                            inventory_output = _normal_output_directory(
+                                assessment.inventory.source_path,
+                                f"output_{assessment.inventory.output_number}",
+                            )
+                            capture_output = _normal_output_directory(
+                                _resolve(reference, ensemble_path.parent),
+                                f"output_{assessment.inventory.output_number}",
+                            )
+                            if capture_output != inventory_output:
+                                reasons.append(
+                                    f"{model} normal-output inventory differs from its capture ensemble output"
+                                )
+                        except ValueError as error:
+                            reasons.append(f"{model} normal-output inventory output binding: {error}")
+                artifact_map = dict(dict(physics_input.artifacts)[model])
+                expected_ledgers = {
+                    "force_ledger": assessment.inventory.force_source_ledger_sha256,
+                    "conservation_ledger": assessment.inventory.conservation_ledger_sha256,
+                }
+                if model == "sidm":
+                    expected_ledgers["scattering_ledger"] = (
+                        assessment.inventory.sidm_scattering_ledger_sha256
+                    )
+                elif model == "fdm":
+                    expected_ledgers["wave_provenance"] = (
+                        assessment.inventory.fdm_wave_provenance_sha256
+                    )
+                for name, expected_sha256 in expected_ledgers.items():
+                    if expected_sha256 is None:
+                        reasons.append(f"{model} inventory does not attest {name}")
+                    elif artifact_map[name].sha256 != expected_sha256:
+                        reasons.append(f"{model} {name} SHA-256 differs from its normal-output inventory")
+                if model == "fdm":
+                    try:
+                        ledger_path = verified_artifacts[model]["wave_ledger"]
+                        ledger = FDMOuterWaveLedger.from_dict(
+                            _json_object(ledger_path, "FDM outer-wave ledger")
+                        )
+                        source_path = _resolve(ledger.source_path, ledger_path.parent)
+                        if _file_sha256(source_path) != ledger.source_sha256:
+                            reasons.append("fdm wave ledger source SHA-256 differs")
+                        if ledger.force_ledger_sha256 != artifact_map["force_ledger"].sha256:
+                            reasons.append("fdm wave ledger force ledger differs from registered evidence")
+                        if (
+                            ledger.field_snapshot_index_sha256
+                            != artifact_map["field_snapshot_index"].sha256
+                        ):
+                            reasons.append(
+                                "fdm wave ledger field-snapshot index differs from registered evidence"
+                            )
+                        if (
+                            ledger.profile_snapshot_index_sha256
+                            != artifact_map["environment_profile"].sha256
+                        ):
+                            reasons.append(
+                                "fdm wave ledger profile-snapshot index differs from registered evidence"
+                            )
+                        if ledger.force_accounting != "live_wave_only":
+                            reasons.append(
+                                "fdm wave ledger must use live_wave_only until a residual ledger is attested"
+                            )
+                    except (KeyError, ValueError) as error:
+                        reasons.append(f"fdm wave ledger: {error}")
+            except ValueError as error:
+                reasons.append(f"{model} normal-output inventory assessment: {error}")
     return DMComparisonPhysicsAssessment(
         physics_input=physics_input,
         status="dm_comparison_physics_inputs_verified" if not reasons else "dm_comparison_physics_inputs_not_verified",

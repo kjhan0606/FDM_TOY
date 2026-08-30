@@ -102,10 +102,13 @@ The model evidence is then distinct:
 - CDM uses only the accepted profile/force/conservation evidence;
 - SIDM additionally preserves the accepted scattering ledger and measured
   maximum scatter probability;
-- FDM additionally preserves the wave ledger and field-snapshot index, the
-  de Broglie and wake cell counts, and either `live_wave_only` or
-  `resolved_wake_plus_measured_residual` force accounting.  An analytic FDM
-  drag label is rejected.
+- FDM additionally preserves a full, time-resolved wave ledger, its separate
+  one-output raw wave-provenance record, and the field-snapshot index.  The
+  full ledger is cross-checked against the registered force, profile, and
+  field-index hashes; the compact raw provenance is not promoted into the
+  full ledger.  Until a separately hash-bound residual-force decomposition is
+  implemented, only `live_wave_only` force accounting is accepted.  An
+  analytic FDM drag label is rejected.
 
 The result supplies at least three measured, separation-ordered orbital-power,
 torque, and eccentricity points.  A finer/coarser pair is accepted only if it
@@ -272,10 +275,13 @@ remains censored until its wave provenance is available.  A particle dump
 whose stars have not been classified is censored even when a stellar channel
 is not requested, because the baryonic composition has not been stated.
 Subsequent force-work, conservation, mode, profile, and resolution records
-must still be measured and registered separately.  The current downstream
-registration readers do not yet require this diagnostic's hash; that binding
-is a separate implementation step, so its result must not be represented as
-an accepted model-physics record.
+must still be measured and registered separately.  A schema-v2
+model-physics input now carries one hash-bound inventory-assessment record for
+each of CDM, SIDM, and FDM.  The downstream reader re-parses each assessment
+and its raw output before accepting a model-specific result; its force,
+conservation, SIDM-scattering, and FDM-wave ledger digests must match the
+corresponding registered artifacts.  Legacy schema-v1 physics-input records
+are deliberately not ready for model-specific registration.
 
 For a controlled two-core experiment, define a YAML seed with exactly two
 FDM solitons and two SMBH sinks in code units, then materialize the matching

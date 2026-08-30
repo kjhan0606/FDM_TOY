@@ -23,6 +23,10 @@ from .dm_comparison import (
     read_dm_comparison_physics_input,
 )
 from .outer_inner_handoff import HandoffRatePoint
+from .resolved_physics_inventory import (
+    ResolvedPhysicsInventoryAssessment,
+    read_lagramses_resolved_physics_inventory_assessment,
+)
 from .zoom_calibration import GalaxyMergerZoomCase
 
 
@@ -30,10 +34,7 @@ MODEL_SPECIFIC_PHYSICS_RESULT_SCHEMA_VERSION = 1
 _MODELS = ("cdm", "sidm", "fdm")
 _CHANNELS = ("stars", "gas", "dark_matter")
 _SHA256_RE = re.compile(r"[0-9a-fA-F]{64}")
-_FDM_FORCE_ACCOUNTING = {
-    "live_wave_only",
-    "resolved_wake_plus_measured_residual",
-}
+_FDM_FORCE_ACCOUNTING = {"live_wave_only"}
 
 
 def _file_sha256(path: Path) -> str:
@@ -359,6 +360,50 @@ def _accepted_artifacts(physics_input: DMComparisonPhysicsInput, model: str) -> 
     raise ValueError(f"accepted physics input lacks {model} artifacts")
 
 
+def _accepted_inventory_assessment(
+    physics_input: DMComparisonPhysicsInput,
+    model: str,
+) -> ResolvedPhysicsInventoryAssessment:
+    artifact = physics_input.inventory_assessment_for(model)
+    if artifact is None:
+        raise ValueError(f"accepted physics input lacks {model} normal-output inventory assessment")
+    try:
+        path = artifact.verify(physics_input.source_path.parent)
+    except ValueError as error:
+        raise ValueError(f"{model} normal-output inventory assessment: {error}") from error
+    try:
+        assessment = read_lagramses_resolved_physics_inventory_assessment(path)
+    except ValueError as error:
+        raise ValueError(f"{model} normal-output inventory assessment: {error}") from error
+    if assessment.inventory.dark_matter_model != model:
+        raise ValueError(f"{model} normal-output inventory assessment declares another model")
+    if not assessment.ready_for_registered_analysis:
+        raise ValueError(f"{model} normal-output inventory assessment is not ready")
+    return assessment
+
+
+def _registered_capture_event_uid(
+    physics_input: DMComparisonPhysicsInput,
+    model: str,
+) -> str:
+    """Re-read the accepted ensemble and return its one registered event UID."""
+
+    ensemble_path = _resolve(physics_input.capture_ensemble_path, physics_input.source_path.parent)
+    try:
+        if _file_sha256(ensemble_path) != physics_input.capture_ensemble_sha256:
+            raise ValueError("capture ensemble SHA-256 differs")
+        ensemble = _read_object(ensemble_path, "capture ensemble")
+    except (OSError, ValueError) as error:
+        raise ValueError(f"accepted capture ensemble is invalid: {error}") from error
+    if ensemble.get("status") != "dm_comparison_capture_ensemble_registered":
+        raise ValueError("accepted capture ensemble is not registered")
+    bindings = ensemble.get("capture_bindings")
+    binding = bindings.get(model) if isinstance(bindings, Mapping) else None
+    capture = binding.get("capture_event") if isinstance(binding, Mapping) else None
+    event_uid = capture.get("event_uid") if isinstance(capture, Mapping) else None
+    return _nonempty(event_uid, f"accepted {model} capture_event_uid")
+
+
 def read_resolved_model_physics_result(
     path: str | Path,
     *,
@@ -409,6 +454,18 @@ def read_resolved_model_physics_result(
     physics_input = read_dm_comparison_physics_input(physics_input_path)
     if not assess_dm_comparison_physics_inputs(physics_input).ready_for_model_specific_analysis:
         raise ValueError("referenced physics input is not accepted")
+    inventory_assessment = _accepted_inventory_assessment(
+        physics_input, case.physics.dark_matter_model
+    )
+    if inventory_assessment.stars_required != (case.physics.host_stellar_mass_msun > 0.0):
+        raise ValueError("normal-output inventory stars requirement differs from the zoom case")
+    if inventory_assessment.gas_required != (case.physics.gas_fraction > 0.0):
+        raise ValueError("normal-output inventory gas requirement differs from the zoom case")
+    capture_event_uid = _nonempty(record.get("capture_event_uid"), "capture_event_uid")
+    if capture_event_uid != _registered_capture_event_uid(
+        physics_input, case.physics.dark_matter_model
+    ):
+        raise ValueError("result capture_event_uid differs from its registered capture ensemble")
     channels = record.get("environment_channels")
     if not isinstance(channels, Mapping) or set(channels) != set(_CHANNELS):
         raise ValueError("resolved environment channels are invalid")
@@ -450,7 +507,7 @@ def read_resolved_model_physics_result(
             zoom_manifest_sha256=_sha256(zoom_manifest_sha256, "zoom_manifest_sha256"),
             source_path=source,
             source_sha256=_file_sha256(source),
-            capture_event_uid=_nonempty(record.get("capture_event_uid"), "capture_event_uid"),
+            capture_event_uid=capture_event_uid,
             physics_input_path=physics_input_path,
             physics_input_sha256=expected_input_sha,
             channels=parsed_channels,

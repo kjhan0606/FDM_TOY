@@ -263,7 +263,9 @@ def _write_physics_input(tmp_path: Path, ensemble: Path) -> Path:
     return physics
 
 
-def test_four_stage_comparison_contract_is_ready_for_model_specific_analysis(tmp_path: Path) -> None:
+def test_v1_physics_input_is_not_ready_without_normal_output_inventory_attestations(
+    tmp_path: Path,
+) -> None:
     paths = _fixture(tmp_path)
     preflight = preflight_dm_comparison_family(read_dm_comparison_family_manifest(paths["manifest"]))
     assert preflight.ready
@@ -278,7 +280,8 @@ def test_four_stage_comparison_contract_is_ready_for_model_specific_analysis(tmp
     assessment = assess_dm_comparison_physics_inputs(
         read_dm_comparison_physics_input(_write_physics_input(tmp_path, ensemble_path))
     )
-    assert assessment.ready_for_model_specific_analysis
+    assert not assessment.ready_for_model_specific_analysis
+    assert assessment.reasons == ("physics input schema lacks normal-output inventory assessments",)
 
 
 def test_preflight_and_smoke_fail_closed_on_changed_input_or_incomplete_output(tmp_path: Path) -> None:
@@ -334,15 +337,18 @@ def test_cli_writes_one_atomic_record_for_each_contract_stage(tmp_path: Path) ->
         assert json.loads(output.read_text(encoding="utf-8"))["status"].endswith(("ready", "verified", "registered"))
     physics_path = _write_physics_input(tmp_path, ensemble_path)
     output = tmp_path / "results" / "physics.json"
-    subprocess.run(
+    completed = subprocess.run(
         [
             sys.executable,
             "scripts/assess_dm_comparison_physics_inputs.py",
             str(physics_path),
             str(output),
         ],
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
     )
-    assert json.loads(output.read_text(encoding="utf-8"))["status"] == "dm_comparison_physics_inputs_verified"
+    assert completed.returncode == 2
+    record = json.loads(output.read_text(encoding="utf-8"))
+    assert record["status"] == "dm_comparison_physics_inputs_not_verified"
+    assert "lacks normal-output inventory" in record["reasons"][0]

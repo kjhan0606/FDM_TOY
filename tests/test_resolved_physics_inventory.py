@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -10,6 +11,7 @@ import pytest
 from fdm_smbh_delay.resolved_physics_inventory import (
     assess_lagramses_resolved_physics_inventory,
     read_lagramses_resolved_physics_inventory,
+    read_lagramses_resolved_physics_inventory_assessment,
 )
 
 
@@ -152,6 +154,51 @@ def test_v1_rejects_unattested_available_force_or_conservation_ledgers(tmp_path:
         read_lagramses_resolved_physics_inventory(source)
 
 
+def test_v2_binds_available_ledgers_to_real_files_and_hashes(tmp_path: Path) -> None:
+    source = _write_inventory(tmp_path)
+    force = source.parent / "force_source_ledger_00042.json"
+    conservation = source.parent / "conservation_ledger_00042.json"
+    force.write_text("measured source work\n", encoding="utf-8")
+    conservation.write_text("measured conservation series\n", encoding="utf-8")
+    force_sha = hashlib.sha256(force.read_bytes()).hexdigest()
+    conservation_sha = hashlib.sha256(conservation.read_bytes()).hexdigest()
+    source.write_text(
+        source.read_text(encoding="utf-8")
+        .replace(
+            "# lagramses_resolved_physics_inventory_v1",
+            "# lagramses_resolved_physics_inventory_v2",
+        )
+        .replace(
+            "force_source_ledger_status = unavailable\n"
+            "force_source_ledger_reason = no_source_decomposition_in_normal_output\n",
+            "force_source_ledger_status = available\n"
+            "force_source_ledger_reason = measured_source_work\n"
+            "force_source_ledger_path = force_source_ledger_00042.json\n"
+            f"force_source_ledger_sha256 = {force_sha}\n",
+        )
+        .replace(
+            "conservation_ledger_status = unavailable\n"
+            "conservation_ledger_reason = no_time_series_in_normal_output\n",
+            "conservation_ledger_status = available\n"
+            "conservation_ledger_reason = measured_time_series\n"
+            "conservation_ledger_path = conservation_ledger_00042.json\n"
+            f"conservation_ledger_sha256 = {conservation_sha}\n",
+        ),
+        encoding="utf-8",
+    )
+    inventory = read_lagramses_resolved_physics_inventory(source)
+    assert inventory.source_schema_version == 2
+    assert inventory.force_source_ledger_sha256 == force_sha
+    assert inventory.conservation_ledger_path == "conservation_ledger_00042.json"
+
+    source.write_text(
+        source.read_text(encoding="utf-8").replace(force_sha, "0" * 64),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="force-source ledger SHA-256 differs"):
+        read_lagramses_resolved_physics_inventory(source)
+
+
 def test_rejects_missing_complete_marker_and_cross_output_wave_path(tmp_path: Path) -> None:
     source = _write_inventory(tmp_path)
     (source.parent / "COMPLETE").write_text("00041\n", encoding="utf-8")
@@ -178,6 +225,11 @@ def test_accepts_grouped_normal_output_and_rejects_missing_snapshot_or_wave_file
     assert assess_lagramses_resolved_physics_inventory(
         inventory, stars_required=False, gas_required=False
     ).status == "censored"
+
+    second_group = grouped.parent.parent / "group_00002"
+    second_group.mkdir()
+    with pytest.raises(ValueError, match="every declared output group: group_00002"):
+        read_lagramses_resolved_physics_inventory(grouped)
 
     missing_snapshot = _write_inventory(tmp_path / "missing-snapshot")
     (missing_snapshot.parent / "fdm_00042.out").unlink()
@@ -230,4 +282,12 @@ def test_cli_writes_atomic_censored_record_without_submitting_work(tmp_path: Pat
         text=True,
     )
     assert completed.returncode == 2
-    assert json.loads(output.read_text(encoding="utf-8"))["status"] == "censored"
+    record = json.loads(output.read_text(encoding="utf-8"))
+    assert record["status"] == "censored"
+    restored = read_lagramses_resolved_physics_inventory_assessment(output)
+    assert restored.status == "censored"
+
+    record["status"] = "resolved_physics_inventory_ready"
+    output.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="differs from current evidence"):
+        read_lagramses_resolved_physics_inventory_assessment(output)
