@@ -7,9 +7,12 @@ from pathlib import Path
 import subprocess
 import sys
 
+from astropy import units as u
+import numpy as np
 import pytest
 import yaml
 
+from fdm_smbh_delay.constants import G_INTERNAL
 from fdm_smbh_delay.model_specific_physics import (
     assess_model_specific_phase_ensemble,
     compare_model_specific_resolution_pair,
@@ -17,7 +20,13 @@ from fdm_smbh_delay.model_specific_physics import (
 )
 from fdm_smbh_delay.dm_comparison import (
     assess_dm_comparison_physics_inputs,
+    assess_dm_comparison_smoke_outputs,
+    preflight_dm_comparison_family,
+    read_dm_comparison_capture_registration,
+    read_dm_comparison_family_manifest,
     read_dm_comparison_physics_input,
+    read_verified_dm_comparison_capture_ensemble,
+    register_dm_comparison_capture_ensemble,
 )
 from fdm_smbh_delay.fdm_outer_wave_ledger import FDMOuterWaveLedger
 from fdm_smbh_delay.resolved_physics_inventory import (
@@ -39,6 +48,88 @@ def _sha256(path: Path) -> str:
 def _write_json(path: Path, record: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _capture_rows() -> list[dict[str, object]]:
+    """One valid numerical-capture transaction for binding tests."""
+
+    unit_length = (1.0 * u.pc).to_value(u.cm)
+    unit_velocity = (1.0 * u.pc / u.Myr).to_value(u.cm / u.s)
+    unit_mass = (1.0 * u.Msun).to_value(u.g)
+    speed = np.sqrt(G_INTERNAL * 2.0e8)
+    uid = "capture-7-9"
+    begin: dict[str, object] = {
+        "schema_version": 1,
+        "record_type": "event_begin",
+        "event_uid": uid,
+        "classification": "BINARY",
+        "nstep_coarse": 10,
+        "ilevel": 1,
+        "nmember": 2,
+        "expected_pairs": 1,
+        "aexp": 0.5,
+        "redshift": 1.0,
+        "t_code": 0.2,
+        "texp": 0.4,
+        "merge_radius_code": 2.0,
+        "unit_length_cgs": unit_length,
+        "unit_velocity_cgs": unit_velocity,
+        "unit_mass_cgs": unit_mass,
+        "boxlen": 100.0,
+        "complete": False,
+    }
+    rows: list[dict[str, object]] = [begin]
+    for index, (sink_id, x, vy) in enumerate(
+        ((7, 0.5, 0.5 * speed), (9, -0.5, -0.5 * speed)), start=1
+    ):
+        rows.append(
+            {
+                "schema_version": 1,
+                "record_type": "member",
+                "event_uid": uid,
+                "member_index": index,
+                "sink_id": sink_id,
+                "mass_code": 1.0e8,
+                "position_code": [x, 0.0, 0.0],
+                "velocity_code": [0.0, vy, 0.0],
+                "formation_time_code": 0.0,
+                "accreted_mass_code": 0.0,
+                "spin_magnitude": 0.5,
+                "spin_direction": [0.0, 0.0, 1.0],
+                "gas_angular_momentum_code": [0.0, 0.0, 0.0],
+            }
+        )
+    rows.extend(
+        (
+            {
+                "schema_version": 1,
+                "record_type": "pair",
+                "event_uid": uid,
+                "pair_index": 1,
+                "sink_id_1": 7,
+                "sink_id_2": 9,
+                "within_rmerge": True,
+                "two_body_bound": True,
+                "legacy_pair_bound": True,
+            },
+            {
+                "schema_version": 1,
+                "record_type": "event_end",
+                "event_uid": uid,
+                "nmember": 2,
+                "npair": 1,
+                "complete": True,
+            },
+        )
+    )
+    return rows
+
+
+def _write_capture_ledger(path: Path) -> None:
+    path.write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in _capture_rows()),
+        encoding="utf-8",
+    )
 
 
 def _physics(model: str) -> ZoomPhysicsPoint:
@@ -95,6 +186,7 @@ def _write_ready_inventory_assessment(
     output = root / "normal_outputs" / model / f"output_{label}"
     output.mkdir(parents=True, exist_ok=True)
     (output / "COMPLETE").write_text(label + "\n", encoding="utf-8")
+    _write_capture_ledger(output / "smbh_capture_ledger_v1.jsonl")
     (output / "POISSON_PHI_VALID").write_text(
         "LAGRAMSES_POISSON_PHI_VALID_V1\n42 21 1.25 0.5\n", encoding="utf-8"
     )
@@ -205,6 +297,45 @@ def _write_ready_inventory_assessment(
     assert assessment.ready_for_registered_analysis
     assessment_path = output / "resolved_physics_inventory_assessment.json"
     _write_json(assessment_path, assessment.as_dict())
+    provenance = output / f"dm_run_provenance_{label}.txt"
+    common = (
+        "# dm_run_provenance_v1\n"
+        f"dark_matter_model = {model}\n"
+        f"pic_enabled = {'.true.' if model in {'cdm', 'sidm'} else '.false.'}\n"
+        f"sidm_enabled = {'.true.' if model == 'sidm' else '.false.'}\n"
+        f"fdm_enabled = {'.true.' if model == 'fdm' else '.false.'}\n"
+        "nstep_coarse = 42\n"
+        "time_code = 1.25d0\n"
+        "aexp = 5.0d-1\n"
+        "build_git_hash = 1111111111111111111111111111111111111111\n"
+        "namelist_copy = namelist.txt\n"
+        "compilation_copy = compilation.txt\n"
+        "smbh_capture_ledger_enabled = .true.\n"
+        "smbh_capture_ledger_file = smbh_capture_ledger_v1.jsonl\n"
+    )
+    if model == "cdm":
+        common += "dm_transport = collisionless_nbody\n"
+    elif model == "sidm":
+        common += (
+            "sidm_cross_section_cm2_g = 1.0d0\n"
+            "sidm_type = constant\n"
+            "sidm_v0_km_s = 100.0d0\n"
+            "sidm_power = -4.0d0\n"
+            "sidm_angular = isotropic\n"
+            "sidm_inelastic = .false.\n"
+            "sidm_max_scatter_probability = 1.0d-2\n"
+        )
+    else:
+        common += (
+            "m_axion_ev = 1.0d-22\n"
+            "fdm_use_hjm = .false.\n"
+            "fdm_first_wave_level = 12\n"
+            "fdm_outer_ledger_enabled = .true.\n"
+            "fdm_force_accounting = resolved_wave_only\n"
+        )
+    provenance.write_text(common, encoding="utf-8")
+    ledgers["run_provenance"] = provenance
+    ledgers["raw_inventory"] = inventory_path
     return assessment_path, ledgers
 
 
@@ -239,9 +370,7 @@ def _physics_input(tmp_path: Path) -> tuple[Path, dict[str, dict[str, str]]]:
             "path": str(assessment_path.relative_to(tmp_path)),
             "sha256": _sha256(assessment_path),
         }
-        provenance = assessment_path.parent / "dm_run_provenance_00042.txt"
-        provenance.write_text("fixture normal-output identity\n", encoding="utf-8")
-        provenance_paths[model] = provenance
+        provenance_paths[model] = inventory_ledgers["run_provenance"]
         for name in names:
             if name == "wave_ledger":
                 continue
@@ -288,24 +417,56 @@ def _physics_input(tmp_path: Path) -> tuple[Path, dict[str, dict[str, str]]]:
                 "path": str(ledger_path.relative_to(tmp_path)),
                 "sha256": hashes[model]["wave_ledger"],
             }
+    shared_inputs: dict[str, dict[str, str]] = {}
+    for name in ("initial_conditions", "baryon_configuration", "smbh_seed_catalog"):
+        path = tmp_path / "shared" / f"{name}.dat"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(name + "\n", encoding="utf-8")
+        shared_inputs[name] = {
+            "path": str(path.relative_to(tmp_path)),
+            "sha256": _sha256(path),
+        }
+    manifest_path = tmp_path / "comparison_family.json"
     _write_json(
-        ensemble,
+        manifest_path,
         {
             "schema_version": 1,
-            "status": "dm_comparison_capture_ensemble_registered",
-            "capture_bindings": {
-                model: {
-                    "capture_event": {"event_uid": "capture-7-9"},
-                    "run_provenance": {
-                        "source": {
-                            "path": str(provenance.relative_to(tmp_path)),
-                        }
-                    }
-                }
-                for model, provenance in provenance_paths.items()
+            "family_id": "model-specific-fixture",
+            "shared_inputs": shared_inputs,
+            "run_provenance": {
+                model: str(path.relative_to(tmp_path))
+                for model, path in provenance_paths.items()
             },
         },
     )
+    registration_path = tmp_path / "capture_registration.json"
+    _write_json(
+        registration_path,
+        {
+            "schema_version": 1,
+            "family_manifest_path": str(manifest_path.relative_to(tmp_path)),
+            "family_manifest_sha256": _sha256(manifest_path),
+            "captures": {
+                model: {
+                    "ledger_path": str(
+                        (path.parent / "smbh_capture_ledger_v1.jsonl").relative_to(tmp_path)
+                    ),
+                    "event_uid": "capture-7-9",
+                }
+                for model, path in provenance_paths.items()
+            },
+        },
+    )
+    family = read_dm_comparison_family_manifest(manifest_path)
+    assert preflight_dm_comparison_family(family).ready
+    assert assess_dm_comparison_smoke_outputs(
+        preflight_dm_comparison_family(family)
+    ).verified
+    capture_ensemble = register_dm_comparison_capture_ensemble(
+        read_dm_comparison_capture_registration(registration_path)
+    )
+    assert capture_ensemble.registered
+    _write_json(ensemble, capture_ensemble.as_dict())
     physics_input = tmp_path / "physics_input.json"
     _write_json(
         physics_input,
@@ -350,7 +511,7 @@ def _result_record(
             minimum_de_broglie_resolution_cells=8.0,
             minimum_wake_resolution_cells=8.0,
         )
-    return {
+    result: dict[str, object] = {
         "schema_version": 1,
         "status": "complete",
         "case_id": case.case_id,
@@ -377,6 +538,45 @@ def _result_record(
         },
         "model_evidence": evidence,
     }
+    physics_record = json.loads(physics_input.read_text(encoding="utf-8"))
+    assessment_artifact = physics_record["normal_output_inventory_assessments"][model]
+    assessment_path = physics_input.parent / assessment_artifact["path"]
+    assessment_record = json.loads(assessment_path.read_text(encoding="utf-8"))
+    inventory_artifact = assessment_record["inventory"]["source"]
+    ensemble_path = physics_input.parent / physics_record["capture_ensemble_path"]
+    ensemble_record = json.loads(ensemble_path.read_text(encoding="utf-8"))
+    run_artifact = ensemble_record["capture_bindings"][model]["run_provenance"]["source"]
+
+    def absolute_artifact(artifact: dict[str, str]) -> dict[str, str]:
+        path = Path(artifact["path"])
+        return {
+            "path": str((path if path.is_absolute() else physics_input.parent / path).resolve()),
+            "sha256": artifact["sha256"],
+        }
+
+    rate_ledger_path = physics_input.parent / "rate_ledgers" / (
+        f"{model}-r{case.replicate}-l{case.numerics.levelmax}.json"
+    )
+    rate_ledger = {
+        "schema_version": 1,
+        "status": "diagnosed",
+        "case_id": result["case_id"],
+        "case": result["case"],
+        "dark_matter_model": result["dark_matter_model"],
+        "zoom_manifest_sha256": result["zoom_manifest_sha256"],
+        "capture_event_uid": result["capture_event_uid"],
+        "normal_output_inventory": absolute_artifact(inventory_artifact),
+        "run_provenance": absolute_artifact(run_artifact),
+        "environment_channels": result["environment_channels"],
+        "rate_points": result["rate_points"],
+        "diagnostics": result["diagnostics"],
+        "model_evidence": result["model_evidence"],
+    }
+    _write_json(rate_ledger_path, rate_ledger)
+    result["schema_version"] = 2
+    result["rate_ledger_path"] = str(rate_ledger_path)
+    result["rate_ledger_sha256"] = _sha256(rate_ledger_path)
+    return result
 
 
 @pytest.mark.parametrize("model", ("cdm", "sidm", "fdm"))
@@ -490,6 +690,51 @@ def test_result_must_reuse_its_registered_capture_event(tmp_path: Path) -> None:
     path = tmp_path / "wrong-capture.json"
     _write_json(path, record)
     with pytest.raises(ValueError, match="differs from its registered capture ensemble"):
+        read_resolved_model_physics_result(path, case=case, zoom_manifest_sha256="a" * 64)
+
+
+def test_capture_ensemble_is_rebuilt_from_its_family_and_capture_event(tmp_path: Path) -> None:
+    physics_input, _ = _physics_input(tmp_path)
+    input_record = json.loads(physics_input.read_text(encoding="utf-8"))
+    ensemble_path = physics_input.parent / input_record["capture_ensemble_path"]
+    assert read_verified_dm_comparison_capture_ensemble(ensemble_path).registered
+    ensemble = json.loads(ensemble_path.read_text(encoding="utf-8"))
+    ensemble["capture_bindings"]["fdm"]["capture_event"]["event_sha256"] = "0" * 64
+    _write_json(ensemble_path, ensemble)
+    with pytest.raises(ValueError, match="capture event differs"):
+        read_verified_dm_comparison_capture_ensemble(ensemble_path)
+
+
+def test_result_rate_values_and_output_identity_must_match_the_rate_ledger(
+    tmp_path: Path,
+) -> None:
+    physics_input, hashes = _physics_input(tmp_path)
+    case = _case("cdm", finest_cell_size_pc=0.5)
+    record = _result_record(
+        case=case,
+        manifest_sha256="a" * 64,
+        physics_input=physics_input,
+        artifacts=hashes["cdm"],
+    )
+    path = tmp_path / "rate-tampered.json"
+    record["rate_points"][0]["eccentricity"] = 0.1
+    _write_json(path, record)
+    with pytest.raises(ValueError, match="rate ledger rate_points differs"):
+        read_resolved_model_physics_result(path, case=case, zoom_manifest_sha256="a" * 64)
+
+    record = _result_record(
+        case=case,
+        manifest_sha256="a" * 64,
+        physics_input=physics_input,
+        artifacts=hashes["cdm"],
+    )
+    ledger_path = Path(record["rate_ledger_path"])
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    ledger["capture_event_uid"] = "other-capture"
+    _write_json(ledger_path, ledger)
+    record["rate_ledger_sha256"] = _sha256(ledger_path)
+    _write_json(path, record)
+    with pytest.raises(ValueError, match="rate ledger provenance differs"):
         read_resolved_model_physics_result(path, case=case, zoom_manifest_sha256="a" * 64)
 
 

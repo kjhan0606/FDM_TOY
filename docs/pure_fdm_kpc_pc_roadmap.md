@@ -83,6 +83,9 @@ python scripts/assess_dm_comparison_physics_inputs.py \
 Any missing file, hash mismatch, incomplete output, unsupported sidecar, or
 unbound capture yields a non-ready record.  These checks launch no simulation,
 do not estimate a delay, and do not alter the FDM-only outer-to-inner gates.
+A saved registered capture ensemble is only a pointer: downstream readers
+rebuild its family smoke check and every capture-to-run binding from the
+source ledger event, event digest, and current output sidecar before using it.
 
 ### Resolved model-specific analysis contract
 
@@ -119,6 +122,18 @@ most 20 percent, and eccentricity disagreement at most 0.02.  A zero measured
 power or torque is unresolved rather than treated as agreement.  Two or more
 independent phase replicas are required before a model is ready for its own
 physical interpretation.
+
+Schema-v2 result records do not accept a free-standing array of rate points.
+They must name a separately hash-bound diagnosed rate ledger whose case,
+phase/replicate, model, capture UID, channels, diagnostics, and rate values
+match exactly. That ledger must in turn name the exact inventory and
+dm_run_provenance sidecar from the registered normal output; their model,
+output directory, step, time, and scale factor are rechecked. This prevents a
+result JSON from being relabelled with another output or edited rate values.
+It is analytical provenance, not yet an attestation that lagRamses executed
+the selected case/resolution/phase: the all-model execution-identity sidecar
+is the following implementation stage. No current production result has
+passed that later gate.
 
 These commands only inspect registered JSON evidence and never submit work:
 

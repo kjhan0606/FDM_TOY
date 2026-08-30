@@ -20,8 +20,10 @@ import numpy as np
 from .dm_comparison import (
     DMComparisonPhysicsInput,
     assess_dm_comparison_physics_inputs,
+    read_verified_dm_comparison_capture_ensemble,
     read_dm_comparison_physics_input,
 )
+from .dm_run_provenance import DarkMatterRunProvenance, read_dark_matter_run_provenance
 from .outer_inner_handoff import HandoffRatePoint
 from .resolved_physics_inventory import (
     ResolvedPhysicsInventoryAssessment,
@@ -30,7 +32,8 @@ from .resolved_physics_inventory import (
 from .zoom_calibration import GalaxyMergerZoomCase
 
 
-MODEL_SPECIFIC_PHYSICS_RESULT_SCHEMA_VERSION = 1
+MODEL_SPECIFIC_PHYSICS_RESULT_SCHEMA_VERSION = 2
+MODEL_SPECIFIC_RATE_LEDGER_SCHEMA_VERSION = 1
 _MODELS = ("cdm", "sidm", "fdm")
 _CHANNELS = ("stars", "gas", "dark_matter")
 _SHA256_RE = re.compile(r"[0-9a-fA-F]{64}")
@@ -257,6 +260,8 @@ class ResolvedModelPhysicsResult:
     capture_event_uid: str
     physics_input_path: Path
     physics_input_sha256: str
+    rate_ledger_path: Path
+    rate_ledger_sha256: str
     channels: tuple[tuple[str, ResolvedEnvironmentChannel], ...]
     rate_points: tuple[HandoffRatePoint, ...]
     maximum_relative_energy_error: float
@@ -268,6 +273,7 @@ class ResolvedModelPhysicsResult:
         _sha256(self.zoom_manifest_sha256, "zoom_manifest_sha256")
         _sha256(self.source_sha256, "source_sha256")
         _sha256(self.physics_input_sha256, "physics_input_sha256")
+        _sha256(self.rate_ledger_sha256, "rate_ledger_sha256")
         _nonempty(self.capture_event_uid, "capture_event_uid")
         if self.model_evidence.dark_matter_model != self.case.physics.dark_matter_model:
             raise ValueError("result model evidence does not match its zoom case")
@@ -321,6 +327,10 @@ class ResolvedModelPhysicsResult:
             "physics_input": {
                 "path": str(self.physics_input_path),
                 "sha256": self.physics_input_sha256,
+            },
+            "rate_ledger": {
+                "path": str(self.rate_ledger_path),
+                "sha256": self.rate_ledger_sha256,
             },
             "environment_channels": {
                 name: channel.as_dict() for name, channel in self.channels
@@ -382,26 +392,169 @@ def _accepted_inventory_assessment(
     return assessment
 
 
-def _registered_capture_event_uid(
+def _registered_capture_binding(
     physics_input: DMComparisonPhysicsInput,
     model: str,
-) -> str:
-    """Re-read the accepted ensemble and return its one registered event UID."""
+) -> Mapping[str, Any]:
+    """Re-read the accepted ensemble and return one model's bound capture record."""
 
     ensemble_path = _resolve(physics_input.capture_ensemble_path, physics_input.source_path.parent)
     try:
         if _file_sha256(ensemble_path) != physics_input.capture_ensemble_sha256:
             raise ValueError("capture ensemble SHA-256 differs")
-        ensemble = _read_object(ensemble_path, "capture ensemble")
+        ensemble = read_verified_dm_comparison_capture_ensemble(ensemble_path).as_dict()
     except (OSError, ValueError) as error:
         raise ValueError(f"accepted capture ensemble is invalid: {error}") from error
-    if ensemble.get("status") != "dm_comparison_capture_ensemble_registered":
-        raise ValueError("accepted capture ensemble is not registered")
     bindings = ensemble.get("capture_bindings")
     binding = bindings.get(model) if isinstance(bindings, Mapping) else None
+    if not isinstance(binding, Mapping):
+        raise ValueError(f"accepted capture ensemble lacks a {model} binding")
     capture = binding.get("capture_event") if isinstance(binding, Mapping) else None
     event_uid = capture.get("event_uid") if isinstance(capture, Mapping) else None
-    return _nonempty(event_uid, f"accepted {model} capture_event_uid")
+    _nonempty(event_uid, f"accepted {model} capture_event_uid")
+    run = binding.get("run_provenance")
+    source = run.get("source") if isinstance(run, Mapping) else None
+    if not isinstance(source, Mapping):
+        raise ValueError(f"accepted {model} capture binding lacks run provenance")
+    _nonempty(source.get("path"), f"accepted {model} run-provenance path")
+    _sha256(source.get("sha256"), f"accepted {model} run-provenance SHA-256")
+    return binding
+
+
+def _registered_capture_event_uid(
+    physics_input: DMComparisonPhysicsInput,
+    model: str,
+) -> str:
+    binding = _registered_capture_binding(physics_input, model)
+    capture = binding["capture_event"]
+    assert isinstance(capture, Mapping)
+    return _nonempty(capture.get("event_uid"), f"accepted {model} capture_event_uid")
+
+
+def _artifact_path_and_sha256(
+    record: Any,
+    *,
+    base: Path,
+    label: str,
+) -> tuple[Path, str]:
+    if not isinstance(record, Mapping) or set(record) != {"path", "sha256"}:
+        raise ValueError(f"{label} artifact is invalid")
+    path = _resolve(_nonempty(record.get("path"), f"{label} path"), base)
+    digest = _sha256(record.get("sha256"), f"{label} SHA-256")
+    try:
+        actual = _file_sha256(path)
+    except OSError as error:
+        raise ValueError(f"cannot read {label}: {error}") from error
+    if actual != digest:
+        raise ValueError(f"{label} SHA-256 differs")
+    return path, digest
+
+
+def _normal_output_directory(path: Path) -> Path:
+    directory = path.parent
+    if re.fullmatch(r"group_\d{5}", directory.name):
+        directory = directory.parent
+    if not re.fullmatch(r"output_\d{5}", directory.name):
+        raise ValueError("normal-output evidence is not inside output_00000")
+    return directory
+
+
+def _same_float(left: float, right: float) -> bool:
+    return math.isclose(left, right, rel_tol=1.0e-12, abs_tol=1.0e-14)
+
+
+def _read_rate_ledger(
+    record: Mapping[str, Any],
+    *,
+    result_path: Path,
+    case: GalaxyMergerZoomCase,
+    zoom_manifest_sha256: str,
+    physics_input: DMComparisonPhysicsInput,
+    inventory_assessment: ResolvedPhysicsInventoryAssessment,
+    capture_binding: Mapping[str, Any],
+) -> tuple[Path, str]:
+    """Require an independent, output-bound source for every accepted rate field."""
+
+    ledger_path = _resolve(
+        _nonempty(record.get("rate_ledger_path"), "rate_ledger_path"), result_path.parent
+    )
+    ledger_sha256 = _sha256(record.get("rate_ledger_sha256"), "rate_ledger_sha256")
+    try:
+        if _file_sha256(ledger_path) != ledger_sha256:
+            raise ValueError("rate ledger SHA-256 differs")
+        ledger = _read_object(ledger_path, "model-specific rate ledger")
+    except (OSError, ValueError) as error:
+        raise ValueError(f"model-specific rate ledger is invalid: {error}") from error
+    expected_fields = {
+        "schema_version",
+        "status",
+        "case_id",
+        "case",
+        "dark_matter_model",
+        "zoom_manifest_sha256",
+        "capture_event_uid",
+        "normal_output_inventory",
+        "run_provenance",
+        "environment_channels",
+        "rate_points",
+        "diagnostics",
+        "model_evidence",
+    }
+    if (
+        ledger.get("schema_version") != MODEL_SPECIFIC_RATE_LEDGER_SCHEMA_VERSION
+        or ledger.get("status") != "diagnosed"
+        or set(ledger) != expected_fields
+    ):
+        raise ValueError("model-specific rate ledger fields are invalid")
+    if (
+        ledger.get("case_id") != case.case_id
+        or ledger.get("case") != case.as_dict()
+        or ledger.get("dark_matter_model") != case.physics.dark_matter_model
+        or _sha256(ledger.get("zoom_manifest_sha256"), "rate ledger zoom_manifest_sha256")
+        != _sha256(zoom_manifest_sha256, "zoom_manifest_sha256")
+        or ledger.get("capture_event_uid") != record.get("capture_event_uid")
+    ):
+        raise ValueError("model-specific rate ledger provenance differs from its result")
+    inventory_path, inventory_sha256 = _artifact_path_and_sha256(
+        ledger.get("normal_output_inventory"),
+        base=ledger_path.parent,
+        label="rate ledger normal-output inventory",
+    )
+    inventory = inventory_assessment.inventory
+    if inventory_path != inventory.source_path or inventory_sha256 != inventory.source_sha256:
+        raise ValueError("rate ledger normal-output inventory differs from accepted evidence")
+    run_path, run_sha256 = _artifact_path_and_sha256(
+        ledger.get("run_provenance"),
+        base=ledger_path.parent,
+        label="rate ledger run provenance",
+    )
+    run = read_dark_matter_run_provenance(run_path)
+    if run.source_sha256 != run_sha256:
+        raise ValueError("rate ledger run-provenance parser SHA-256 differs")
+    if run_path.name != f"dm_run_provenance_{inventory.output_number}.txt":
+        raise ValueError("rate ledger run-provenance filename differs from its normal output")
+    run_record = capture_binding["run_provenance"]
+    run_source = run_record.get("source") if isinstance(run_record, Mapping) else None
+    bound_path, bound_sha256 = _artifact_path_and_sha256(
+        run_source,
+        base=_resolve(physics_input.capture_ensemble_path, physics_input.source_path.parent).parent,
+        label="registered capture run provenance",
+    )
+    if run_path != bound_path or run_sha256 != bound_sha256:
+        raise ValueError("rate ledger run provenance differs from its registered capture output")
+    if run.dark_matter_model != case.physics.dark_matter_model:
+        raise ValueError("rate ledger run provenance declares another dark-matter model")
+    if (
+        run.nstep_coarse != inventory.nstep_coarse
+        or not _same_float(run.time_code, inventory.time_code)
+        or not _same_float(run.scale_factor, inventory.aexp)
+        or _normal_output_directory(run_path) != _normal_output_directory(inventory_path)
+    ):
+        raise ValueError("rate ledger run provenance differs from its normal-output inventory")
+    for key in ("environment_channels", "rate_points", "diagnostics", "model_evidence"):
+        if ledger.get(key) != record.get(key):
+            raise ValueError(f"model-specific rate ledger {key} differs from its result")
+    return ledger_path, ledger_sha256
 
 
 def read_resolved_model_physics_result(
@@ -424,6 +577,8 @@ def read_resolved_model_physics_result(
         "capture_event_uid",
         "physics_input_path",
         "physics_input_sha256",
+        "rate_ledger_path",
+        "rate_ledger_sha256",
         "environment_channels",
         "rate_points",
         "diagnostics",
@@ -462,9 +617,8 @@ def read_resolved_model_physics_result(
     if inventory_assessment.gas_required != (case.physics.gas_fraction > 0.0):
         raise ValueError("normal-output inventory gas requirement differs from the zoom case")
     capture_event_uid = _nonempty(record.get("capture_event_uid"), "capture_event_uid")
-    if capture_event_uid != _registered_capture_event_uid(
-        physics_input, case.physics.dark_matter_model
-    ):
+    capture_binding = _registered_capture_binding(physics_input, case.physics.dark_matter_model)
+    if capture_event_uid != _registered_capture_event_uid(physics_input, case.physics.dark_matter_model):
         raise ValueError("result capture_event_uid differs from its registered capture ensemble")
     channels = record.get("environment_channels")
     if not isinstance(channels, Mapping) or set(channels) != set(_CHANNELS):
@@ -501,6 +655,15 @@ def read_resolved_model_physics_result(
         model=model,
         expected_artifacts=_accepted_artifacts(physics_input, model),
     )
+    rate_ledger_path, rate_ledger_sha256 = _read_rate_ledger(
+        record,
+        result_path=source,
+        case=case,
+        zoom_manifest_sha256=zoom_manifest_sha256,
+        physics_input=physics_input,
+        inventory_assessment=inventory_assessment,
+        capture_binding=capture_binding,
+    )
     try:
         return ResolvedModelPhysicsResult(
             case=case,
@@ -510,6 +673,8 @@ def read_resolved_model_physics_result(
             capture_event_uid=capture_event_uid,
             physics_input_path=physics_input_path,
             physics_input_sha256=expected_input_sha,
+            rate_ledger_path=rate_ledger_path,
+            rate_ledger_sha256=rate_ledger_sha256,
             channels=parsed_channels,
             rate_points=tuple(points),
             maximum_relative_energy_error=diagnostics.get("maximum_relative_energy_error"),

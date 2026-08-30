@@ -436,6 +436,92 @@ def register_dm_comparison_capture_ensemble(
     )
 
 
+def read_verified_dm_comparison_capture_ensemble(
+    path: str | Path,
+) -> DMComparisonCaptureEnsemble:
+    """Reconstruct a saved ensemble from its family, capture events, and outputs.
+
+    A saved registered label is only a pointer: every family smoke check,
+    capture transaction, event digest, and bound run sidecar is re-read here.
+    """
+
+    source = Path(path).expanduser().resolve()
+    record = _json_object(source, "DM comparison capture ensemble")
+    expected_fields = {
+        "schema_version",
+        "status",
+        "interpretation",
+        "smoke",
+        "capture_bindings",
+        "reasons",
+    }
+    if (
+        set(record) != expected_fields
+        or record.get("schema_version") != 1
+        or record.get("status") != "dm_comparison_capture_ensemble_registered"
+        or record.get("reasons") != []
+    ):
+        raise ValueError("DM comparison capture ensemble is not a registered record")
+    smoke_record = record.get("smoke")
+    preflight_record = smoke_record.get("preflight") if isinstance(smoke_record, Mapping) else None
+    family_record = preflight_record.get("family") if isinstance(preflight_record, Mapping) else None
+    if not isinstance(family_record, Mapping):
+        raise ValueError("DM comparison capture ensemble lacks family smoke provenance")
+    manifest_path = _resolve(
+        _nonempty(family_record.get("manifest_path"), "capture-ensemble manifest path"),
+        source.parent,
+    )
+    manifest_sha256 = _sha256(
+        family_record.get("manifest_sha256"), "capture-ensemble manifest SHA-256"
+    )
+    manifest = read_dm_comparison_family_manifest(manifest_path)
+    if manifest.source_sha256 != manifest_sha256:
+        raise ValueError("DM comparison capture ensemble manifest SHA-256 differs")
+    smoke = assess_dm_comparison_smoke_outputs(preflight_dm_comparison_family(manifest))
+    if not smoke.verified or smoke.as_dict() != smoke_record:
+        raise ValueError("DM comparison capture ensemble smoke evidence differs")
+    saved_bindings = record.get("capture_bindings")
+    if not isinstance(saved_bindings, Mapping) or set(saved_bindings) != set(_MODELS):
+        raise ValueError("DM comparison capture ensemble bindings are invalid")
+    bindings: list[tuple[str, CaptureDMRunBinding]] = []
+    for model in _MODELS:
+        saved = saved_bindings[model]
+        capture = saved.get("capture_event") if isinstance(saved, Mapping) else None
+        run = saved.get("run_provenance") if isinstance(saved, Mapping) else None
+        if not isinstance(capture, Mapping) or not isinstance(run, Mapping):
+            raise ValueError(f"{model} capture ensemble binding is invalid")
+        event_uid = _nonempty(capture.get("event_uid"), f"{model} capture event UID")
+        event_sha256 = _sha256(capture.get("event_sha256"), f"{model} capture event SHA-256")
+        ledger_path = _resolve(
+            _nonempty(capture.get("ledger_path"), f"{model} capture ledger path"), source.parent
+        )
+        events = [
+            event for event in read_capture_ledger(ledger_path).events if event.event_uid == event_uid
+        ]
+        if len(events) != 1 or events[0].event_sha256 != event_sha256:
+            raise ValueError(f"{model} capture event differs from its registered binding")
+        run_source = run.get("source")
+        if not isinstance(run_source, Mapping):
+            raise ValueError(f"{model} capture run-provenance source is invalid")
+        run_path = _resolve(
+            _nonempty(run_source.get("path"), f"{model} run-provenance path"), source.parent
+        )
+        run_sha256 = _sha256(run_source.get("sha256"), f"{model} run-provenance SHA-256")
+        provenance = read_dark_matter_run_provenance(run_path)
+        if provenance.source_sha256 != run_sha256:
+            raise ValueError(f"{model} run-provenance SHA-256 differs")
+        binding = bind_capture_event_to_dark_matter_run(events[0], provenance)
+        if not binding.bound or binding.as_dict() != saved:
+            raise ValueError(f"{model} capture ensemble binding differs from current evidence")
+        bindings.append((model, binding))
+    return DMComparisonCaptureEnsemble(
+        smoke=smoke,
+        bindings=tuple(bindings),
+        status="dm_comparison_capture_ensemble_registered",
+        reasons=(),
+    )
+
+
 _PHYSICS_ARTIFACTS = {
     "cdm": {"environment_profile", "force_ledger", "conservation_ledger"},
     "sidm": {
