@@ -57,6 +57,21 @@ python scripts/build_cdm_delay_stage.py \
   capture_to_hard.json
 ```
 
+For a lagRamses CDM zoom, keep the selected SMBH pair from numerical
+compaction with the native `&PHYSICS_PARAMS rmerge = 0`.  A later output must
+record both `smbh_merge_radius_cells = 0` and
+`smbh_compaction_mode = no_finite_radius_rmerge_zero` in its DM provenance sidecar;
+the preflight refuses a compacting or ambiguous output:
+
+```bash
+python scripts/preflight_noncompacting_cdm_zoom.py \
+  output_00042/dm_run_provenance_00042.txt cdm_noncompacting_preflight.json
+```
+
+This removes only finite-radius numerical compaction; exact coordinate
+coincidence still requires explicit inspection.  It does not establish that the chosen
+resolution, force sources, cadence, or hardening physics are adequate.
+
 An uncalibrated, unresolved, stalled, or over-cosmic-time interval instead has
 a non-complete status, no delay or interval, no `calibration`, and an explicit
 reason.  It remains censored in the composed result.

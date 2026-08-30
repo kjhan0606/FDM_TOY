@@ -137,6 +137,21 @@ def read_dark_matter_run_provenance(path: str | Path) -> DarkMatterRunProvenance
     sidm = _logical(records, "sidm_enabled")
     fdm = _logical(records, "fdm_enabled")
     parameters: dict[str, Any] = {}
+    has_merge_radius = "smbh_merge_radius_cells" in records
+    has_compaction_mode = "smbh_compaction_mode" in records
+    if has_merge_radius != has_compaction_mode:
+        raise ValueError(
+            "smbh_merge_radius_cells and smbh_compaction_mode must appear together"
+        )
+    if has_merge_radius:
+        merge_radius = _number(records, "smbh_merge_radius_cells", nonnegative=True)
+        compaction_mode = _required(records, "smbh_compaction_mode")
+        if compaction_mode not in {"enabled", "no_finite_radius_rmerge_zero"}:
+            raise ValueError("smbh_compaction_mode is unsupported")
+        if (compaction_mode == "no_finite_radius_rmerge_zero") != (merge_radius == 0.0):
+            raise ValueError("smbh_compaction_mode disagrees with smbh_merge_radius_cells")
+        parameters["smbh_merge_radius_cells"] = merge_radius
+        parameters["smbh_compaction_mode"] = compaction_mode
     if model == "cdm":
         if not pic or sidm or fdm or records.get("dm_transport") != "collisionless_nbody":
             raise ValueError("CDM run-provenance flags are inconsistent")
