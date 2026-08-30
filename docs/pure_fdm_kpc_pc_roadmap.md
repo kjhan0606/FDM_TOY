@@ -775,6 +775,15 @@ closure diagnostics, calibrated response-table boundary, overlap validator,
 and the typed dual-soliton/two-SMBH seed plus run-input identity preflight.
 The lagRamses patch implements the opt-in all-wave seed and raw outer-wave
 provenance writer; it does not alter ordinary dynamics when disabled.  The
-full toy-repository suite passes (`423 passed` at the latest check).  No
-pure-FDM outer zoom has been submitted and no end-to-end physical delay is yet
-accepted.
+relaxation stage now also has a bounded Lageunha execution wrapper: it binds a
+verified sample ledger, uses a shell-free one-thread child environment, writes
+the result through a private temporary path, and publishes a recheckable
+wrapper-declared attestation only after a successful source-bound result.
+The full toy-repository suite passes (`546 passed` at the latest check).
+
+No pure-FDM outer zoom has been submitted, and no actual Lageunha relaxation
+extractor command or end-to-end physical delay has been run or accepted.  The
+next operator input is the real extractor command together with a verified
+sample ledger and `fdm_runtime_output_identity_verified` output set; until
+those inputs exist, the relaxation result remains unmeasured rather than being
+filled with a proxy or a zero delay.
