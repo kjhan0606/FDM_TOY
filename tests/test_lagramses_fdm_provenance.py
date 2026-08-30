@@ -30,7 +30,7 @@ def _write_record(path: Path, *, source_schema_version: int = 2, **replacements:
         "complete_current_stencil_fraction": "9.8D-01",
         "psi_snapshot_prefix": "fdm_00042.out",
     }
-    if source_schema_version == 2:
+    if source_schema_version in {2, 3}:
         values.update(
             {
                 "fdm_dual_soliton_ic": "T",
@@ -45,7 +45,9 @@ def _write_record(path: Path, *, source_schema_version: int = 2, **replacements:
             }
         )
     elif source_schema_version != 1:
-        raise ValueError("test writer only supports raw provenance V1/V2")
+        raise ValueError("test writer only supports raw provenance V1/V2/V3")
+    if source_schema_version == 3:
+        values.update({"mpi_ncpu": "2", "restart_parent_output": "0"})
     values.update(replacements)
     lines = [f"# fdm_outer_wave_provenance_v{source_schema_version}"]
     lines.extend(f"{key} = {value}" for key, value in values.items())
@@ -64,6 +66,38 @@ def test_reader_accepts_lagramses_writer_format_and_keeps_it_raw(tmp_path: Path)
     assert record.fdm_dual_soliton_centres_box[1] == pytest.approx((0.65, 0.5, 0.5))
     assert record.decision()["status"] == "available_raw_provenance"
     assert "postprocessing remains required" in record.decision()["reason"]
+
+
+def test_reader_accepts_v3_expected_mpi_shard_count_without_claiming_lineage(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "provenance-v3.txt"
+    _write_record(path, source_schema_version=3, restart_parent_output="41")
+    record = read_lagramses_fdm_outer_wave_provenance(path)
+    assert record.source_schema_version == 3
+    assert record.mpi_ncpu == 2
+    assert record.restart_parent_output == 41
+    assert record.as_dict()["mpi_ncpu"] == 2
+    legacy_path = tmp_path / "provenance-v2.txt"
+    _write_record(legacy_path)
+    assert "mpi_ncpu" not in read_lagramses_fdm_outer_wave_provenance(legacy_path).as_dict()
+
+
+@pytest.mark.parametrize(
+    ("replacements", "message"),
+    [
+        ({"mpi_ncpu": "0"}, "mpi_ncpu must lie in"),
+        ({"mpi_ncpu": "100000"}, "mpi_ncpu must lie in"),
+        ({"restart_parent_output": "-1"}, "restart_parent_output must be non-negative"),
+    ],
+)
+def test_reader_rejects_invalid_v3_output_set_fields(
+    tmp_path: Path, replacements: dict[str, str], message: str
+) -> None:
+    path = tmp_path / "provenance-v3.txt"
+    _write_record(path, source_schema_version=3, **replacements)
+    with pytest.raises(ValueError, match=message):
+        read_lagramses_fdm_outer_wave_provenance(path)
 
 
 @pytest.mark.parametrize(

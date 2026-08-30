@@ -39,6 +39,11 @@ _V2_DUAL_SOLITON_KEYS = {
     "fdm_dual_soliton_phase",
 }
 _V2_REQUIRED_KEYS = _V1_REQUIRED_KEYS | _V2_DUAL_SOLITON_KEYS
+_V3_OUTPUT_SET_KEYS = {
+    "mpi_ncpu",
+    "restart_parent_output",
+}
+_V3_REQUIRED_KEYS = _V2_REQUIRED_KEYS | _V3_OUTPUT_SET_KEYS
 
 
 def _file_sha256(path: Path) -> str:
@@ -100,6 +105,8 @@ class LagRamsesFDMOuterWaveProvenance:
     time_code: float
     aexp: float
     nstep_coarse: int
+    mpi_ncpu: int | None
+    restart_parent_output: int | None
     m_axion_ev: float
     hbar_code: float
     fdm_use_hjm: bool
@@ -158,7 +165,7 @@ class LagRamsesFDMOuterWaveProvenance:
         }
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        record: dict[str, Any] = {
             "schema_version": 1,
             "status": "lagramses_fdm_outer_wave_provenance",
             "source": {"path": str(self.source_path), "sha256": self.source_sha256},
@@ -196,12 +203,16 @@ class LagRamsesFDMOuterWaveProvenance:
                 }
             ),
         }
+        if self.source_schema_version == 3:
+            record["mpi_ncpu"] = self.mpi_ncpu
+            record["restart_parent_output"] = self.restart_parent_output
+        return record
 
 
 def read_lagramses_fdm_outer_wave_provenance(
     path: str | Path,
 ) -> LagRamsesFDMOuterWaveProvenance:
-    """Parse one V1/V2 raw record and reject missing, duplicate, or altered keys."""
+    """Parse one V1/V2/V3 raw record and reject missing, duplicate, or altered keys."""
 
     resolved = Path(path).expanduser().resolve()
     try:
@@ -217,6 +228,9 @@ def read_lagramses_fdm_outer_wave_provenance(
     elif header == "# fdm_outer_wave_provenance_v2":
         source_schema_version = 2
         required_keys = _V2_REQUIRED_KEYS
+    elif header == "# fdm_outer_wave_provenance_v3":
+        source_schema_version = 3
+        required_keys = _V3_REQUIRED_KEYS
     else:
         raise ValueError("unsupported lagRamses FDM provenance schema")
     values: dict[str, str] = {}
@@ -271,7 +285,7 @@ def read_lagramses_fdm_outer_wave_provenance(
     dual_centres: tuple[tuple[float, float, float], ...] | None = None
     dual_velocities: tuple[tuple[float, float, float], ...] | None = None
     dual_phase: tuple[float, float] | None = None
-    if source_schema_version == 2:
+    if source_schema_version >= 2:
         dual_enabled = _logical(values["fdm_dual_soliton_ic"], "fdm_dual_soliton_ic")
         dual_profile_c = _float(
             values["fdm_dual_soliton_profile_c"],
@@ -321,6 +335,18 @@ def read_lagramses_fdm_outer_wave_provenance(
         ):
             raise ValueError("enabled dual-soliton provenance has invalid component parameters")
 
+    mpi_ncpu: int | None = None
+    restart_parent_output: int | None = None
+    if source_schema_version == 3:
+        mpi_ncpu = _integer(values["mpi_ncpu"], "mpi_ncpu", nonnegative=True)
+        if not 1 <= mpi_ncpu <= 99999:
+            raise ValueError("mpi_ncpu must lie in [1, 99999]")
+        restart_parent_output = _integer(
+            values["restart_parent_output"],
+            "restart_parent_output",
+            nonnegative=True,
+        )
+
     return LagRamsesFDMOuterWaveProvenance(
         source_path=resolved,
         source_sha256=_file_sha256(resolved),
@@ -328,6 +354,8 @@ def read_lagramses_fdm_outer_wave_provenance(
         time_code=_float(values["time_code"], "time_code"),
         aexp=_float(values["aexp"], "aexp", nonnegative=True),
         nstep_coarse=_integer(values["nstep_coarse"], "nstep_coarse", nonnegative=True),
+        mpi_ncpu=mpi_ncpu,
+        restart_parent_output=restart_parent_output,
         m_axion_ev=_float(values["m_axion_ev"], "m_axion_ev", nonnegative=True),
         hbar_code=_float(values["hbar_code"], "hbar_code", nonnegative=True),
         fdm_use_hjm=_logical(values["fdm_use_hjm"], "fdm_use_hjm"),

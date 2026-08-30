@@ -2,8 +2,8 @@
 
 This module consumes the immutable copies and sidecars written by lagRamses.
 It deliberately does not infer that every MPI shard exists, that a diagnostic
-extractor ran, or that the resulting solitons are relaxed.  Those claims need
-the later V3 wave provenance and a separately attested extractor.
+extractor ran, or that the resulting solitons are relaxed.  V3 wave provenance
+is required by the later shard-complete relaxation-source ledger.
 """
 
 from __future__ import annotations
@@ -259,8 +259,8 @@ def _verify_output(
         raise ValueError("output run-provenance scale factor differs from info aexp")
     raw_path = root / f"fdm_outer_wave_provenance_{output_number}.txt"
     raw = read_lagramses_fdm_outer_wave_provenance(raw_path)
-    if raw.source_schema_version != 2:
-        raise ValueError("FDM output requires dual-soliton raw provenance V2")
+    if raw.source_schema_version not in {2, 3}:
+        raise ValueError("FDM output requires dual-soliton raw provenance V2 or V3")
     if raw.psi_snapshot_prefix != f"fdm_{output_number}.out":
         raise ValueError("raw FDM psi snapshot prefix differs from its output number")
     seed_identity = validate_pure_fdm_dual_soliton_runtime_identity(

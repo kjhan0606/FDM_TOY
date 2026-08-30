@@ -31,7 +31,13 @@ from test_fdm_zoom_seed_binding import (
 )
 
 
-def _identity(path: Path, *, status: str = "runtime_seed_identity_verified") -> None:
+def _identity(
+    path: Path,
+    *,
+    status: str = "runtime_seed_identity_verified",
+    raw_provenance_version: int = 3,
+    grouped_output_number: int | None = None,
+) -> None:
     if status != "runtime_seed_identity_verified":
         path.write_text(
             json.dumps({"schema_version": 1, "status": status, "seed_case_id": "case-a"}),
@@ -45,6 +51,8 @@ def _identity(path: Path, *, status: str = "runtime_seed_identity_verified") -> 
             number=number,
             run_namelist=namelist,
             seed_manifest=seed_manifest,
+            grouped=number == grouped_output_number,
+            raw_provenance_version=raw_provenance_version,
         )
         for number in (1, 2, 3, 4)
     ]
@@ -271,6 +279,43 @@ def test_relaxation_rejects_a_changed_wave_snapshot_after_sample_binding(
     )
     with pytest.raises(ValueError, match="verified sample ledger"):
         assess_dual_soliton_relaxation(evidence)
+
+
+@pytest.mark.parametrize("prefix", ("fdm", "amr"))
+def test_relaxation_sample_ledger_rejects_a_missing_expected_mpi_shard(
+    tmp_path: Path, prefix: str
+) -> None:
+    identity = tmp_path / "runtime-identity.json"
+    _identity(identity)
+    (tmp_path / "output_00003" / f"{prefix}_00003.out00002").unlink()
+    with pytest.raises(ValueError, match="expected MPI shard set"):
+        _sample_ledger(identity)
+
+
+def test_relaxation_sample_ledger_accepts_grouped_v3_shards(tmp_path: Path) -> None:
+    identity = tmp_path / "runtime-identity.json"
+    _identity(identity, grouped_output_number=3)
+    ledger = _sample_ledger(identity)
+    record = json.loads(ledger.read_text(encoding="utf-8"))
+    grouped_sample = next(
+        sample
+        for sample in record["samples"]
+        if sample["nstep_coarse"] == 3
+    )
+    assert all(
+        "/group_00001/" in item["path"]
+        for item in grouped_sample["wave_snapshot_files"]
+        + grouped_sample["amr_topology_files"]
+    )
+
+
+def test_runtime_output_identity_accepts_v2_but_relaxation_ledger_requires_v3(
+    tmp_path: Path,
+) -> None:
+    identity = tmp_path / "runtime-identity.json"
+    _identity(identity, raw_provenance_version=2)
+    with pytest.raises(ValueError, match="requires V3 raw FDM provenance"):
+        _sample_ledger(identity)
 
 
 def test_relaxation_sample_ledger_requires_every_output_in_the_verified_set(

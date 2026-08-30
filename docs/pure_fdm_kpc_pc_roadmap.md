@@ -268,9 +268,11 @@ adds a compact `fdm_outer_wave_provenance_<output>.txt` record beside each
 normal `fdm_<output>.out*` wave snapshot.  It preserves the output epoch,
 code-unit leaf mass/current integral, HJM seam settings, current-stencil
 coverage, and the explicit resolved-wave/no-analytic-drag force accounting.
-The current V2 record also preserves the active dual-soliton switch and both
+The current V3 record also preserves the active dual-soliton switch and both
 runtime component parameter vectors, so a controlled two-core output can be
-bound back to its materialized seed.
+bound back to its materialized seed.  It records the expected MPI rank count
+for the per-rank FDM and AMR files, allowing a downstream source ledger to
+reject an incomplete shard set rather than infer completeness from a subset.
 It is raw provenance only: the full snapshots remain mandatory for local
 profiles, core motion/modes, granules, force work, and a complete outer wave
 ledger.  The lagRamses patch document is
@@ -467,7 +469,7 @@ verified status proves only that the declared
 one configuration.  It still does not prove solver consumption; that claim
 starts only with a separately validated runtime provenance record.
 
-After the first normal FDM output, verify the runtime V2 provenance against
+After the first normal FDM output, verify the runtime V2/V3 provenance against
 the same materialized seed:
 
 ```bash
@@ -477,7 +479,7 @@ python scripts/validate_dual_soliton_runtime_identity.py \
   results/pure_fdm_dual_soliton_runtime_identity.json
 ```
 
-`runtime_seed_identity_verified` establishes only that the raw V2 output
+`runtime_seed_identity_verified` establishes only that the raw V2/V3 output
 declares the same all-wave two-core configuration and passes the raw
 force/current coverage gate.  It does not relax, calibrate, or otherwise
 accept the physical merger calculation.
@@ -518,11 +520,12 @@ copied status field, a changed raw provenance file, or a stale seed manifest
 therefore cannot authorize the relaxation window.
 
 Before writing the relaxation evidence table, a manual Lageunha extractor
-must list the raw V2 provenance path for every selected output in a small
+must list the raw V3 provenance path for every selected output in a small
 JSON manifest (`raw_fdm_provenance_paths`).  The binding code reads each
 record itself, verifies its two-soliton configuration against the seed, and
-enumerates and hashes the currently present per-CPU `fdm_*.out*` set and the
-corresponding `amr_*.out*` topology shards.  The raw runtime
+requires and hashes every per-CPU `fdm_*.outNNNNN` and corresponding
+`amr_*.outNNNNN` topology shard from `00001` through the V3 `mpi_ncpu` value.
+The raw runtime
 provenance must appear exactly once in the temporal sequence.  Bind this
 source set without reading full fields or launching an FFT:
 
@@ -536,7 +539,7 @@ python scripts/materialize_dual_soliton_relaxation_sample_ledger.py \
 
 The resulting ledger is required by the relaxation evidence.  It requires the
 manifest's raw-provenance paths to be exactly the verified output-set paths;
-an omitted, added, or substituted V2 output is rejected.  It is still source
+an omitted, added, or substituted V3 output is rejected.  It is still source
 identity only: the core properties and the wave mass, Hamiltonian, and
 angular-momentum series must still be measured from those sources by a
 declared extractor.  Bind that diagnostic series to both the exact sample
@@ -558,15 +561,14 @@ The relaxation evidence schema requires both the source ledger and the
 diagnostic provenance.  Earlier evidence files without those records are not
 relaxation inputs and must be re-extracted rather than relabelled as verified.
 
-Raw V2 still does not record the expected MPI-rank count, so the verifier
-cannot prove that a discovered FDM/AMR shard list is complete.  The new
-output-set identity closes the separate declared-case/run-root/namelist/build
-join, but it deliberately does not promote a V2 field set into a complete MPI
-snapshot.  Similarly, extractor bytes and a declared version do not prove
-extractor execution.  The current assessment is only a conditional
-declared-series threshold result; it cannot be cited as a relaxation or
-conservation pass until V3 shard-completeness and extractor-execution
-attestations are implemented.
+V2 output identity remains useful for declared-case/run-root/namelist/build
+provenance, but it cannot enter the relaxation source ledger because it lacks
+the expected MPI-rank count.  V3 closes the declared shard-set completeness
+check, not solver execution or restart-branch lineage.  Similarly, extractor
+bytes and a declared version do not prove extractor execution.  The current
+assessment is only a conditional declared-series threshold result; it cannot
+be cited as a relaxation or conservation pass until extractor-execution and
+continuous-branch attestations are implemented.
 
 The bounded initial relaxation window is assessed separately from the full
 time-resolved snapshots.  Its evidence table must preserve both core masses,

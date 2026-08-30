@@ -13,6 +13,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import tempfile
 from typing import Any, Mapping
 
@@ -31,7 +32,7 @@ from .lagramses_fdm_provenance import read_lagramses_fdm_outer_wave_provenance
 
 
 DUAL_SOLITON_RELAXATION_SCHEMA_VERSION = 3
-DUAL_SOLITON_RELAXATION_SAMPLE_LEDGER_SCHEMA_VERSION = 2
+DUAL_SOLITON_RELAXATION_SAMPLE_LEDGER_SCHEMA_VERSION = 3
 DUAL_SOLITON_RELAXATION_ASSESSMENT_SCHEMA_VERSION = 2
 DUAL_SOLITON_RELAXATION_DIAGNOSTIC_PROVENANCE_SCHEMA_VERSION = 1
 
@@ -338,37 +339,69 @@ def _snapshot_file_sets_for_provenance(
     """Enumerate the complete per-CPU FDM and AMR file sets for one output."""
 
     provenance = read_lagramses_fdm_outer_wave_provenance(provenance_path)
+    if provenance.source_schema_version != 3 or provenance.mpi_ncpu is None:
+        raise ValueError(
+            "relaxation sample ledger requires V3 raw FDM provenance with mpi_ncpu"
+        )
     prefix = provenance.psi_snapshot_prefix
     if not prefix.startswith("fdm_"):
         raise ValueError("psi_snapshot_prefix must begin with fdm_ for AMR binding")
     amr_prefix = "amr_" + prefix.removeprefix("fdm_")
-    directory = provenance.source_path.parent
+    output_directory = provenance.source_path.parent
     try:
-        children = tuple(directory.iterdir())
+        children = tuple(output_directory.iterdir())
     except OSError as error:
         raise ValueError(f"cannot enumerate raw FDM output directory: {error}") from error
-    wave_paths = tuple(
-        sorted(
-            (path for path in children if path.name.startswith(prefix) and path.is_file()),
-            key=lambda path: path.name,
-        )
-    )
-    amr_paths = tuple(
-        sorted(
-            (path for path in children if path.name.startswith(amr_prefix) and path.is_file()),
-            key=lambda path: path.name,
-        )
-    )
-    if not wave_paths or not amr_paths:
-        raise ValueError("raw FDM output lacks matching FDM or AMR snapshot files")
-    wave_suffixes = tuple(path.name.removeprefix(prefix) for path in wave_paths)
-    amr_suffixes = tuple(path.name.removeprefix(amr_prefix) for path in amr_paths)
-    if wave_suffixes != amr_suffixes:
-        raise ValueError("FDM and AMR snapshot shard suffixes do not match")
+    groups: list[Path] = []
+    for child in children:
+        if not child.is_dir() or not child.name.startswith("group_"):
+            continue
+        if re.fullmatch(r"group_\d{5}", child.name) is None:
+            raise ValueError("raw FDM output contains an invalid group directory")
+        groups.append(child)
+    search_directories = (output_directory, *sorted(groups, key=lambda path: path.name))
+    expected_suffixes = tuple(f"{index:05d}" for index in range(1, provenance.mpi_ncpu + 1))
+
+    def collect(prefix_to_collect: str, label: str) -> dict[str, Path]:
+        matcher = re.compile(rf"^{re.escape(prefix_to_collect)}(\d{{5}})$")
+        result: dict[str, Path] = {}
+        for directory in search_directories:
+            try:
+                directory_children = tuple(directory.iterdir())
+            except OSError as error:
+                raise ValueError(f"cannot enumerate {label} shard directory: {error}") from error
+            for candidate in directory_children:
+                if not candidate.is_file() or not candidate.name.startswith(prefix_to_collect):
+                    continue
+                match = matcher.fullmatch(candidate.name)
+                if match is None:
+                    raise ValueError(f"{label} snapshot shard name is invalid")
+                suffix = match.group(1)
+                if suffix in result:
+                    raise ValueError(f"{label} snapshot shard suffix is duplicated")
+                result[suffix] = candidate
+        if tuple(sorted(result)) != expected_suffixes:
+            raise ValueError(
+                f"{label} snapshot shards do not match the expected MPI shard set"
+            )
+        return result
+
+    wave_by_suffix = collect(prefix, "FDM")
+    amr_by_suffix = collect(amr_prefix, "AMR")
+    all_paths = [
+        *(wave_by_suffix[suffix] for suffix in expected_suffixes),
+        *(amr_by_suffix[suffix] for suffix in expected_suffixes),
+    ]
+    try:
+        identities = [(path.stat().st_dev, path.stat().st_ino) for path in all_paths]
+    except OSError as error:
+        raise ValueError(f"cannot stat raw FDM snapshot file set: {error}") from error
+    if len(identities) != len(set(identities)):
+        raise ValueError("raw FDM snapshot shards must not alias one file")
     try:
         return (
-            tuple(_FileArtifact.from_path(path) for path in wave_paths),
-            tuple(_FileArtifact.from_path(path) for path in amr_paths),
+            tuple(_FileArtifact.from_path(wave_by_suffix[suffix]) for suffix in expected_suffixes),
+            tuple(_FileArtifact.from_path(amr_by_suffix[suffix]) for suffix in expected_suffixes),
         )
     except OSError as error:
         raise ValueError(f"cannot hash raw FDM snapshot file set: {error}") from error

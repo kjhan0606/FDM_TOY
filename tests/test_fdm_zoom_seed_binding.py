@@ -465,7 +465,10 @@ def _write_fdm_runtime_output(
     grouped: bool = False,
     compilation_text: str = "last commit = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
     time_code: float | None = None,
+    raw_provenance_version: int = 3,
 ) -> Path:
+    if raw_provenance_version not in {2, 3}:
+        raise ValueError("test FDM runtime output supports raw provenance V2/V3")
     label = f"{number:05d}"
     output = root / f"output_{label}"
     output.mkdir()
@@ -521,11 +524,17 @@ def _write_fdm_runtime_output(
         encoding="utf-8",
     )
     first, second = seed.solitons
+    output_set_fields = (
+        "mpi_ncpu = 2\nrestart_parent_output = 0\n"
+        if raw_provenance_version == 3
+        else ""
+    )
     (output / f"fdm_outer_wave_provenance_{label}.txt").write_text(
-        "# fdm_outer_wave_provenance_v2\n"
+        f"# fdm_outer_wave_provenance_v{raw_provenance_version}\n"
         f"time_code = {actual_time:.16e}\n"
         f"aexp = {aexp:.16e}\n"
         f"nstep_coarse = {number}\n"
+        f"{output_set_fields}"
         f"m_axion_ev = {seed.m_axion_ev:.16e}\n"
         "hbar_code = 2.0000000000000000e-03\n"
         "fdm_use_hjm = .false.\n"

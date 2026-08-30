@@ -247,7 +247,7 @@ class DualSolitonRunPreflight:
 
 @dataclass(frozen=True)
 class DualSolitonRuntimeIdentity:
-    """Binding between a materialized seed and one raw V2 solver output."""
+    """Binding between a materialized seed and one raw V2/V3 solver output."""
 
     seed_manifest_path: Path
     provenance_path: Path
@@ -534,8 +534,8 @@ def _validate_runtime_components(
     seed: PureFDMDualSolitonSeed,
 ) -> list[str]:
     reasons: list[str] = []
-    if provenance.source_schema_version != 2:
-        return ["raw provenance V2 is required for dual-soliton runtime identity"]
+    if provenance.source_schema_version not in {2, 3}:
+        return ["raw provenance V2 or V3 is required for dual-soliton runtime identity"]
     if provenance.fdm_dual_soliton_ic is not True:
         reasons.append("raw provenance does not confirm fdm_dual_soliton_ic=true")
     if provenance.fdm_use_hjm:
@@ -585,7 +585,7 @@ def _validate_runtime_components(
 def validate_pure_fdm_dual_soliton_runtime_identity(
     *, seed_manifest_path: str | Path, provenance_path: str | Path
 ) -> DualSolitonRuntimeIdentity:
-    """Verify the raw V2 output retained the exact materialized two-core state."""
+    """Verify the raw V2/V3 output retained the exact materialized two-core state."""
 
     manifest = Path(seed_manifest_path).expanduser().resolve()
     raw_provenance = Path(provenance_path).expanduser().resolve()
