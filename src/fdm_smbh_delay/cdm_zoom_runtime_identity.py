@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 from typing import Any, Iterable, Mapping
@@ -24,6 +25,7 @@ from .zoom_calibration import GalaxyMergerZoomCase
 CDM_NONCOMPACTING_ZOOM_RUNTIME_IDENTITY_SCHEMA_VERSION = 1
 _OUTPUT_DIRECTORY = re.compile(r"output_(\d{5})$")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
+_MYR_SECONDS = 3.15576e13
 
 
 def _sha256(path: Path) -> str:
@@ -69,6 +71,37 @@ def _output_file(directory: Path, reference: str, label: str) -> Path:
     return directory / candidate
 
 
+def _finite_number(value: str, label: str) -> float:
+    try:
+        result = float(value.replace("D", "E").replace("d", "e"))
+    except ValueError as error:
+        raise ValueError(f"{label} must be finite") from error
+    if not math.isfinite(result):
+        raise ValueError(f"{label} must be finite")
+    return result
+
+
+def _info_records(path: Path) -> dict[str, float]:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as error:
+        raise ValueError(f"cannot read output info file: {error}") from error
+    expected = {"time", "aexp", "unit_t"}
+    records: dict[str, float] = {}
+    for line in lines:
+        if "=" not in line:
+            continue
+        key, value = (item.strip() for item in line.split("=", 1))
+        if key not in expected:
+            continue
+        if key in records:
+            raise ValueError(f"output info file duplicates {key}")
+        records[key] = _finite_number(value, f"output info {key}")
+    if set(records) != expected or records["aexp"] <= 0.0 or records["unit_t"] <= 0.0:
+        raise ValueError("output info file must contain finite time/aexp/unit_t")
+    return records
+
+
 @dataclass(frozen=True)
 class _VerifiedCDMZoomContract:
     source_path: Path
@@ -77,6 +110,7 @@ class _VerifiedCDMZoomContract:
     case: GalaxyMergerZoomCase
     namelist_sha256: str
     capture_ledger_file: str
+    capture_binding: dict[str, Any]
 
 
 def _read_verified_contract(path: str | Path) -> _VerifiedCDMZoomContract:
@@ -178,6 +212,7 @@ def _read_verified_contract(path: str | Path) -> _VerifiedCDMZoomContract:
         case=case,
         namelist_sha256=namelist_sha256,
         capture_ledger_file=ledger_file,
+        capture_binding=dict(binding),
     )
 
 
@@ -211,17 +246,120 @@ class CDMNonCompactingZoomRuntimeIdentity:
                 "manifest_sha256": self.contract.plan.grid.manifest_sha256,
             },
             "complete_outputs": list(self.outputs),
-            "secular_sampling": {
-                "complete_output_count": complete_count,
+            "listed_output_count": {
+                "count": complete_count,
                 "minimum_complete_outputs": self.contract.plan.minimum_complete_outputs,
                 "status": (
-                    "minimum_complete_output_count_reached"
+                    "minimum_planned_output_count_reached"
                     if complete_count >= self.contract.plan.minimum_complete_outputs
-                    else "insufficient_complete_outputs"
+                    else "below_minimum_planned_output_count"
                 ),
             },
             "reasons": list(self.reasons),
         }
+
+
+@dataclass(frozen=True)
+class VerifiedCDMNonCompactingZoomOutputs:
+    """Re-read identity-verified output metadata for the orbit extractor."""
+
+    source_path: Path
+    source_sha256: str
+    contract: _VerifiedCDMZoomContract
+    outputs: tuple[dict[str, Any], ...]
+
+    @property
+    def output_directories(self) -> tuple[Path, ...]:
+        return tuple(Path(record["directory"]).resolve() for record in self.outputs)
+
+
+def read_verified_cdm_noncompacting_zoom_runtime_identity(
+    path: str | Path,
+) -> VerifiedCDMNonCompactingZoomOutputs:
+    """Require a current verified identity record before orbit extraction.
+
+    The record alone is insufficient: this re-reads the contract and every
+    listed output, so a later sidecar, namelist-copy, build, or cadence change
+    invalidates the prospective orbit input.
+    """
+
+    source = Path(path).expanduser().resolve()
+    try:
+        record = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"cannot read CDM zoom runtime identity: {error}") from error
+    expected_fields = {
+        "schema_version",
+        "status",
+        "interpretation",
+        "dark_matter_model",
+        "contract",
+        "complete_outputs",
+        "listed_output_count",
+        "reasons",
+    }
+    if not isinstance(record, Mapping) or set(record) != expected_fields:
+        raise ValueError("CDM zoom runtime identity fields are invalid")
+    if (
+        record.get("schema_version") != 1
+        or record.get("status") != "runtime_identity_verified"
+        or record.get("dark_matter_model") != "cdm"
+        or record.get("reasons") != []
+    ):
+        raise ValueError("CDM zoom runtime identity is not verified")
+    contract_record = record.get("contract")
+    if not isinstance(contract_record, Mapping):
+        raise ValueError("CDM zoom runtime identity contract is invalid")
+    contract_path = _path_field(contract_record, "path", "CDM zoom runtime identity contract")
+    if _sha256(contract_path) != _sha256_field(
+        contract_record.get("sha256"), "CDM zoom runtime identity contract SHA-256"
+    ):
+        raise ValueError("CDM zoom runtime identity contract SHA-256 no longer matches")
+    contract = _read_verified_contract(contract_path)
+    if contract_record != {
+        "path": str(contract.source_path),
+        "sha256": contract.source_sha256,
+        "case_id": contract.case.case_id,
+        "manifest_sha256": contract.plan.grid.manifest_sha256,
+    }:
+        raise ValueError("CDM zoom runtime identity contract differs from its current input")
+    output_records = record.get("complete_outputs")
+    if not isinstance(output_records, list) or not output_records:
+        raise ValueError("CDM zoom runtime identity requires complete outputs")
+    verified: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for saved in output_records:
+        if not isinstance(saved, Mapping) or not isinstance(saved.get("directory"), str):
+            raise ValueError("CDM zoom runtime identity output record is invalid")
+        actual = _verify_output(Path(saved["directory"]).expanduser().resolve(), contract)
+        if actual != dict(saved):
+            raise ValueError("CDM zoom runtime identity output metadata no longer matches")
+        if actual["output_number"] in seen:
+            raise ValueError("CDM zoom runtime identity outputs are duplicated")
+        seen.add(actual["output_number"])
+        verified.append(actual)
+    verified.sort(key=lambda item: item["output_number"])
+    reasons = _output_set_reasons(verified, contract)
+    if reasons:
+        raise ValueError("CDM zoom runtime identity is no longer valid: " + "; ".join(reasons))
+    count = record.get("listed_output_count")
+    expected_count = {
+        "count": len(verified),
+        "minimum_complete_outputs": contract.plan.minimum_complete_outputs,
+        "status": (
+            "minimum_planned_output_count_reached"
+            if len(verified) >= contract.plan.minimum_complete_outputs
+            else "below_minimum_planned_output_count"
+        ),
+    }
+    if count != expected_count:
+        raise ValueError("CDM zoom runtime identity output-count record is invalid")
+    return VerifiedCDMNonCompactingZoomOutputs(
+        source_path=source,
+        source_sha256=_sha256(source),
+        contract=contract,
+        outputs=tuple(verified),
+    )
 
 
 def _verify_output(
@@ -250,6 +388,19 @@ def _verify_output(
     compilation_copy = _output_file(
         directory, provenance.compilation_copy, "output compilation_copy"
     )
+    info_path = directory / f"info_{output_number}.txt"
+    info = _info_records(info_path)
+    if not math.isclose(
+        provenance.time_code, info["time"], rel_tol=1.0e-12, abs_tol=1.0e-14
+    ):
+        raise ValueError("output provenance time_code differs from info time")
+    if not math.isclose(
+        provenance.scale_factor, info["aexp"], rel_tol=1.0e-12, abs_tol=1.0e-14
+    ):
+        raise ValueError("output provenance aexp differs from info aexp")
+    time_myr = info["time"] * info["unit_t"] / _MYR_SECONDS
+    if not math.isfinite(time_myr):
+        raise ValueError("output proper time is invalid")
     return {
         "output_number": output_number,
         "directory": str(directory),
@@ -264,7 +415,52 @@ def _verify_output(
             "path": str(compilation_copy),
             "sha256": _sha256(compilation_copy),
         },
+        "info": {"path": str(info_path), "sha256": _sha256(info_path)},
+        "nstep_coarse": provenance.nstep_coarse,
+        "time_code": provenance.time_code,
+        "aexp": provenance.scale_factor,
+        "time_myr": time_myr,
     }
+
+
+def _output_set_reasons(
+    outputs: list[dict[str, Any]], contract: _VerifiedCDMZoomContract
+) -> list[str]:
+    if not outputs:
+        return []
+    reasons: list[str] = []
+    roots = {str(Path(record["directory"]).parent) for record in outputs}
+    if len(roots) != 1:
+        reasons.append("outputs do not share one run root")
+    build_hashes = {record["dm_run_provenance"]["build_git_hash"] for record in outputs}
+    if len(build_hashes) != 1:
+        reasons.append("outputs do not share one build_git_hash")
+    compilation_hashes = {record["compilation_copy"]["sha256"] for record in outputs}
+    if len(compilation_hashes) != 1:
+        reasons.append("outputs do not share one compilation-copy SHA-256")
+    ordered = sorted(outputs, key=lambda record: record["time_myr"])
+    if any(
+        left["time_myr"] >= right["time_myr"]
+        for left, right in zip(ordered[:-1], ordered[1:])
+    ):
+        reasons.append("output proper times are not strictly increasing")
+    if any(
+        left["nstep_coarse"] >= right["nstep_coarse"]
+        for left, right in zip(ordered[:-1], ordered[1:])
+    ):
+        reasons.append("output nstep_coarse values are not strictly increasing")
+    if any(
+        left["aexp"] > right["aexp"]
+        for left, right in zip(ordered[:-1], ordered[1:])
+    ):
+        reasons.append("output aexp values decrease with proper time")
+    if any(
+        right["time_myr"] - left["time_myr"]
+        > contract.plan.maximum_output_cadence_myr * (1.0 + 1.0e-12)
+        for left, right in zip(ordered[:-1], ordered[1:])
+    ):
+        reasons.append("output proper-time cadence exceeds the contracted maximum")
+    return reasons
 
 
 def assess_cdm_noncompacting_zoom_runtime_identity(
@@ -292,6 +488,7 @@ def assess_cdm_noncompacting_zoom_runtime_identity(
     if not prepared and not reasons:
         reasons.append("at least one complete lagRamses output is required")
     prepared.sort(key=lambda record: record["output_number"])
+    reasons.extend(_output_set_reasons(prepared, contract))
     return CDMNonCompactingZoomRuntimeIdentity(
         contract=contract,
         outputs=tuple(prepared),

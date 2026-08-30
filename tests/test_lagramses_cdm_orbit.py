@@ -6,6 +6,13 @@ from pathlib import Path
 import pytest
 
 from fdm_smbh_delay.capture_ledger import read_capture_ledger
+from fdm_smbh_delay.cdm_zoom_materialization import (
+    materialize_cdm_noncompacting_zoom_run_contract,
+)
+from fdm_smbh_delay.cdm_zoom_plan import load_cdm_noncompacting_zoom_plan
+from fdm_smbh_delay.cdm_zoom_runtime_identity import (
+    assess_cdm_noncompacting_zoom_runtime_identity,
+)
 from fdm_smbh_delay.lagramses_cdm_orbit import extract_lagramses_cdm_pair_orbit_track
 
 
@@ -17,6 +24,7 @@ def _write_output(
     primary_x: float,
     secondary_x: float,
     merge_radius: float = 0.0,
+    namelist: str,
 ) -> Path:
     label = f"{number:05d}"
     directory = root / f"output_{label}"
@@ -30,20 +38,20 @@ def _write_output(
         "sidm_enabled = .false.\n"
         "fdm_enabled = .false.\n"
         f"nstep_coarse = {number}\n"
-        f"time_code = {time_code:.1f}d0\n"
+        f"time_code = {time_code:.7f}d0\n"
         "aexp = 5.0d-1\n"
         "build_git_hash = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
         "namelist_copy = namelist.txt\n"
         "compilation_copy = compilation.txt\n"
         "smbh_capture_ledger_enabled = .true.\n"
-        "smbh_capture_ledger_file = smbh_capture_ledger_v1.jsonl\n"
+        "smbh_capture_ledger_file = zoom_capture.jsonl\n"
         f"smbh_merge_radius_cells = {merge_radius:.1f}d0\n"
         f"smbh_compaction_mode = {mode}\n"
         "dm_transport = collisionless_nbody\n",
         encoding="utf-8",
     )
     (directory / f"info_{label}.txt").write_text(
-        f"time = {time_code:.1f}d0\n"
+        f"time = {time_code:.7f}d0\n"
         "aexp = 5.0d-1\n"
         "unit_l = 3.0856775814913673d18\n"
         "unit_t = 3.15576d13\n"
@@ -55,7 +63,41 @@ def _write_output(
         f"2,5.0d7,{secondary_x:.6f},0.0,0.0,0.0,0.0,0.0,0.0,0.0\n",
         encoding="utf-8",
     )
+    (directory / "namelist.txt").write_text(namelist, encoding="utf-8")
+    (directory / "compilation.txt").write_text("build provenance\n", encoding="utf-8")
     return directory
+
+
+def _runtime_identity(root: Path, binding: Path, outputs: list[Path]) -> Path:
+    namelist = root / "zoom.nml"
+    namelist.write_text(
+        "&SINK_PARAMS\n"
+        "smbh=.true.\n"
+        "rmerge=0.0d0\n"
+        "smbh_capture_ledger=.true.\n"
+        "smbh_capture_ledger_file='zoom_capture.jsonl'\n"
+        "/\n",
+        encoding="utf-8",
+    )
+    plan = load_cdm_noncompacting_zoom_plan("configs/cdm_noncompacting_zoom_grid.yaml")
+    contract_directory = root / "contract"
+    materialize_cdm_noncompacting_zoom_run_contract(
+        specification_path="configs/cdm_noncompacting_zoom_grid.yaml",
+        case_id=plan.grid.cases[0].case_id,
+        capture_binding_path=binding,
+        capture_event_uid="capture-1-2",
+        primary_sink_id=1,
+        secondary_sink_id=2,
+        run_namelist_path=namelist,
+        capture_ledger_file="zoom_capture.jsonl",
+        output_directory=contract_directory,
+    )
+    decision = assess_cdm_noncompacting_zoom_runtime_identity(
+        contract_directory / "cdm_noncompacting_zoom_run_contract.json", outputs
+    )
+    identity = root / "runtime_identity.json"
+    identity.write_text(json.dumps(decision.as_dict(), indent=2, sort_keys=True) + "\n")
+    return identity
 
 
 def _write_capture_binding(root: Path) -> Path:
@@ -163,22 +205,28 @@ def _write_capture_binding(root: Path) -> Path:
 def test_extracts_periodic_comoving_relative_orbit_with_complete_provenance(
     tmp_path: Path,
 ) -> None:
-    outputs = (
-        _write_output(tmp_path, 3, time_code=3.0, primary_x=99.75, secondary_x=0.25),
-        _write_output(tmp_path, 1, time_code=1.0, primary_x=99.0, secondary_x=1.0),
-        _write_output(tmp_path, 2, time_code=2.0, primary_x=99.5, secondary_x=0.5),
+    namelist = (
+        "&SINK_PARAMS\n"
+        "smbh=.true.\n"
+        "rmerge=0.0d0\n"
+        "smbh_capture_ledger=.true.\n"
+        "smbh_capture_ledger_file='zoom_capture.jsonl'\n"
+        "/\n"
     )
+    outputs = [
+        _write_output(
+            tmp_path, 3, time_code=1.0002, primary_x=99.75, secondary_x=0.25, namelist=namelist
+        ),
+        _write_output(
+            tmp_path, 1, time_code=1.0, primary_x=99.0, secondary_x=1.0, namelist=namelist
+        ),
+        _write_output(
+            tmp_path, 2, time_code=1.0001, primary_x=99.5, secondary_x=0.5, namelist=namelist
+        ),
+    ]
     binding = _write_capture_binding(tmp_path)
-    track = extract_lagramses_cdm_pair_orbit_track(
-        outputs,
-        physics_id="zoomphys-cdm-test",
-        capture_event_uid="capture-1-2",
-        capture_binding_path=binding,
-        primary_sink_id=1,
-        secondary_sink_id=2,
-        position_coordinate="comoving",
-        time_coordinate="proper",
-    )
+    runtime_identity = _runtime_identity(tmp_path, binding, outputs)
+    track = extract_lagramses_cdm_pair_orbit_track(runtime_identity)
     record = track.as_dict()
     assert [sample["output_number"] for sample in record["samples"]] == [
         "00001",
@@ -195,27 +243,60 @@ def test_extracts_periodic_comoving_relative_orbit_with_complete_provenance(
 
 
 def test_refuses_compacting_or_incomplete_lagramses_outputs(tmp_path: Path) -> None:
+    namelist = (
+        "&SINK_PARAMS\n"
+        "smbh=.true.\n"
+        "rmerge=0.0d0\n"
+        "smbh_capture_ledger=.true.\n"
+        "smbh_capture_ledger_file='zoom_capture.jsonl'\n"
+        "/\n"
+    )
     outputs = [
-        _write_output(tmp_path, 1, time_code=1.0, primary_x=99.0, secondary_x=1.0),
-        _write_output(tmp_path, 2, time_code=2.0, primary_x=99.5, secondary_x=0.5),
+        _write_output(
+            tmp_path, 1, time_code=1.0, primary_x=99.0, secondary_x=1.0, namelist=namelist
+        ),
+        _write_output(
+            tmp_path, 2, time_code=1.0001, primary_x=99.5, secondary_x=0.5, namelist=namelist
+        ),
         _write_output(
             tmp_path,
             3,
-            time_code=3.0,
+            time_code=1.0002,
             primary_x=99.75,
             secondary_x=0.25,
             merge_radius=1.0,
+            namelist=namelist,
         ),
     ]
     binding = _write_capture_binding(tmp_path)
-    with pytest.raises(ValueError, match="not an accepted non-compacting CDM zoom"):
-        extract_lagramses_cdm_pair_orbit_track(
-            outputs,
-            physics_id="zoomphys-cdm-test",
-            capture_event_uid="capture-1-2",
-            capture_binding_path=binding,
-            primary_sink_id=1,
-            secondary_sink_id=2,
-            position_coordinate="physical",
-            time_coordinate="proper",
-        )
+    runtime_identity = _runtime_identity(tmp_path, binding, outputs)
+    with pytest.raises(ValueError, match="is not verified"):
+        extract_lagramses_cdm_pair_orbit_track(runtime_identity)
+
+
+def test_extractor_rereads_runtime_identity_outputs_before_using_them(tmp_path: Path) -> None:
+    namelist = (
+        "&SINK_PARAMS\n"
+        "smbh=.true.\n"
+        "rmerge=0.0d0\n"
+        "smbh_capture_ledger=.true.\n"
+        "smbh_capture_ledger_file='zoom_capture.jsonl'\n"
+        "/\n"
+    )
+    outputs = [
+        _write_output(
+            tmp_path, 1, time_code=1.0, primary_x=99.0, secondary_x=1.0, namelist=namelist
+        ),
+        _write_output(
+            tmp_path, 2, time_code=1.0001, primary_x=99.5, secondary_x=0.5, namelist=namelist
+        ),
+        _write_output(
+            tmp_path, 3, time_code=1.0002, primary_x=99.75, secondary_x=0.25, namelist=namelist
+        ),
+    ]
+    runtime_identity = _runtime_identity(tmp_path, _write_capture_binding(tmp_path), outputs)
+    (outputs[1] / "namelist.txt").write_text(
+        namelist.replace("rmerge=0.0d0", "rmerge=1.0d0"), encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="namelist copy SHA-256 differs"):
+        extract_lagramses_cdm_pair_orbit_track(runtime_identity)

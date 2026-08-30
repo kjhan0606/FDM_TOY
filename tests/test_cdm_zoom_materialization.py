@@ -155,6 +155,8 @@ def _write_runtime_output(
     number: int,
     namelist: str,
     ledger_file: str = "zoom_capture.jsonl",
+    time_code: float = 1.0,
+    build_git_hash: str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 ) -> Path:
     label = f"{number:05d}"
     directory = root / f"output_{label}"
@@ -167,9 +169,9 @@ def _write_runtime_output(
         "sidm_enabled = .false.\n"
         "fdm_enabled = .false.\n"
         f"nstep_coarse = {number}\n"
-        "time_code = 1.0d0\n"
+        f"time_code = {time_code:.7f}d0\n"
         "aexp = 5.0d-1\n"
-        "build_git_hash = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+        f"build_git_hash = {build_git_hash}\n"
         "namelist_copy = namelist.txt\n"
         "compilation_copy = compilation.txt\n"
         "smbh_capture_ledger_enabled = .true.\n"
@@ -181,6 +183,12 @@ def _write_runtime_output(
     )
     (directory / "namelist.txt").write_text(namelist, encoding="utf-8")
     (directory / "compilation.txt").write_text("build provenance\n", encoding="utf-8")
+    (directory / f"info_{label}.txt").write_text(
+        f"time = {time_code:.7f}d0\n"
+        "aexp = 5.0d-1\n"
+        "unit_t = 3.15576d13\n",
+        encoding="utf-8",
+    )
     return directory
 
 
@@ -270,10 +278,10 @@ def test_runtime_identity_requires_completed_output_namelist_copy_to_match_contr
     record = decision.as_dict()
     assert decision.verified
     assert record["complete_outputs"][0]["output_number"] == "00001"
-    assert record["secular_sampling"] == {
-        "complete_output_count": 1,
+    assert record["listed_output_count"] == {
+        "count": 1,
         "minimum_complete_outputs": 15,
-        "status": "insufficient_complete_outputs",
+        "status": "below_minimum_planned_output_count",
     }
 
     mismatched = _write_runtime_output(
@@ -306,3 +314,27 @@ def test_runtime_identity_rejects_changed_output_ledger_setting(tmp_path: Path) 
     )
     assert not decision.verified
     assert any("capture-ledger setting differs" in reason for reason in decision.reasons)
+
+
+def test_runtime_identity_rejects_mixed_builds_and_cadence(tmp_path: Path) -> None:
+    arguments = _arguments(tmp_path)
+    contract_directory = tmp_path / "contract"
+    materialize_cdm_noncompacting_zoom_run_contract(
+        **arguments,
+        output_directory=contract_directory,
+    )
+    namelist = Path(arguments["run_namelist_path"]).read_text(encoding="utf-8")
+    first = _write_runtime_output(tmp_path, number=1, namelist=namelist, time_code=1.0)
+    second = _write_runtime_output(
+        tmp_path,
+        number=2,
+        namelist=namelist,
+        time_code=1.0003,
+        build_git_hash="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    )
+    decision = assess_cdm_noncompacting_zoom_runtime_identity(
+        contract_directory / "cdm_noncompacting_zoom_run_contract.json", [first, second]
+    )
+    assert not decision.verified
+    assert any("do not share one build_git_hash" in reason for reason in decision.reasons)
+    assert any("cadence exceeds" in reason for reason in decision.reasons)

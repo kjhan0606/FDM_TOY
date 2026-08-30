@@ -13,7 +13,7 @@ import json
 import math
 from pathlib import Path
 import re
-from typing import Any, Iterable, Mapping
+from typing import Any, Mapping
 
 from .capture_ledger import read_capture_ledger
 from .cdm_zoom import assess_noncompacting_cdm_zoom_run
@@ -200,6 +200,7 @@ class LagRamsesCDMPairOrbitTrack:
     position_coordinate: str
     time_coordinate: str
     capture_binding: dict[str, Any]
+    runtime_identity: dict[str, Any]
     samples: tuple[dict[str, Any], ...]
     source_outputs: tuple[dict[str, Any], ...]
 
@@ -216,6 +217,7 @@ class LagRamsesCDMPairOrbitTrack:
             "physics_id": self.physics_id,
             "capture_event_uid": self.capture_event_uid,
             "capture_binding": self.capture_binding,
+            "runtime_identity": self.runtime_identity,
             "primary_sink_id": self.primary_sink_id,
             "secondary_sink_id": self.secondary_sink_id,
             "position_coordinate": self.position_coordinate,
@@ -226,44 +228,46 @@ class LagRamsesCDMPairOrbitTrack:
 
 
 def extract_lagramses_cdm_pair_orbit_track(
-    output_directories: Iterable[str | Path],
-    *,
-    physics_id: str,
-    capture_event_uid: str,
-    capture_binding_path: str | Path,
-    primary_sink_id: int,
-    secondary_sink_id: int,
-    position_coordinate: str,
-    time_coordinate: str,
+    runtime_identity_path: str | Path,
 ) -> LagRamsesCDMPairOrbitTrack:
-    """Read complete zero-radius-compaction outputs into one raw pair track."""
+    """Extract one raw track from the exact outputs in a verified identity.
 
-    if position_coordinate not in {"comoving", "physical"}:
-        raise ValueError("position_coordinate must be comoving or physical")
-    if time_coordinate != "proper":
-        raise ValueError("only explicitly certified proper time is accepted")
-    if primary_sink_id <= 0 or secondary_sink_id <= 0 or primary_sink_id == secondary_sink_id:
-        raise ValueError("primary and secondary sink IDs must be distinct positive integers")
-    physics_id = _nonempty(physics_id, "physics_id")
-    capture_event_uid = _nonempty(capture_event_uid, "capture_event_uid")
-    capture_binding = read_bound_cdm_capture(
-        capture_binding_path,
-        capture_event_uid=capture_event_uid,
-        primary_sink_id=primary_sink_id,
-        secondary_sink_id=secondary_sink_id,
+    Callers cannot substitute an independently chosen output set, case, pair,
+    coordinate convention, or capture binding after runtime verification.
+    """
+
+    # A local import avoids a module cycle: runtime validation itself checks
+    # the original capture event through ``read_bound_cdm_capture`` above.
+    from .cdm_zoom_runtime_identity import (
+        read_verified_cdm_noncompacting_zoom_runtime_identity,
     )
 
+    runtime = read_verified_cdm_noncompacting_zoom_runtime_identity(runtime_identity_path)
+    contract = runtime.contract
+    physics_id = contract.case.physics.physics_id
+    capture_binding = contract.capture_binding
+    capture_event_uid = _nonempty(capture_binding["capture_event_uid"], "capture_event_uid")
+    primary_sink_id = capture_binding["primary_sink_id"]
+    secondary_sink_id = capture_binding["secondary_sink_id"]
+    if (
+        isinstance(primary_sink_id, bool)
+        or not isinstance(primary_sink_id, int)
+        or isinstance(secondary_sink_id, bool)
+        or not isinstance(secondary_sink_id, int)
+        or primary_sink_id <= 0
+        or secondary_sink_id <= 0
+        or primary_sink_id == secondary_sink_id
+    ):
+        raise ValueError("runtime identity capture-pair sink IDs are invalid")
+    position_coordinate = contract.plan.position_coordinate
+    time_coordinate = contract.plan.time_coordinate
+
     prepared: list[tuple[float, dict[str, Any], dict[str, Any]]] = []
-    seen_outputs: set[str] = set()
-    for reference in output_directories:
-        directory = Path(reference).expanduser().resolve()
+    for directory in runtime.output_directories:
         match = _OUTPUT_DIRECTORY.fullmatch(directory.name)
         if match is None:
             raise ValueError("each lagRamses output directory must be output_00000 form")
         output_number = match.group(1)
-        if output_number in seen_outputs:
-            raise ValueError("lagRamses output directories are duplicated")
-        seen_outputs.add(output_number)
         complete = directory / "COMPLETE"
         try:
             marker = complete.read_text(encoding="utf-8").strip()
@@ -344,6 +348,12 @@ def extract_lagramses_cdm_pair_orbit_track(
         position_coordinate=position_coordinate,
         time_coordinate=time_coordinate,
         capture_binding=capture_binding,
+        runtime_identity={
+            "path": str(runtime.source_path),
+            "sha256": runtime.source_sha256,
+            "contract_path": str(contract.source_path),
+            "contract_sha256": contract.source_sha256,
+        },
         samples=tuple(item[1] for item in prepared),
         source_outputs=tuple(item[2] for item in prepared),
     )

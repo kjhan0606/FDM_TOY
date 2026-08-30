@@ -72,25 +72,25 @@ This removes only finite-radius numerical compaction; exact coordinate
 coincidence still requires explicit inspection.  It does not establish that the chosen
 resolution, force sources, cadence, or hardening physics are adequate.
 
-From three or more complete non-compacting outputs, extract the raw relative
-orbit before attempting an orbit average.  The coordinate convention and the
-proper-time interpretation are explicit command arguments; they are never
-guessed from the sink CSV.
+From a verified runtime-identity record containing at least three complete
+non-compacting outputs, extract the raw relative orbit before attempting an
+orbit average.  The extractor consumes precisely the identity-record output
+set: it does not accept caller-substituted case IDs, coordinates, capture
+bindings, or output directories.  The coordinate convention and proper-time
+interpretation remain the contracted plan values and are never guessed from
+the sink CSV.
 
 ```bash
 python scripts/extract_lagramses_cdm_pair_orbit.py \
-  --physics-id zoomphys-cdm-example \
-  --capture-event-uid capture-11799-11801 \
-  --capture-binding capture_dm_run_binding.json \
-  --primary-sink-id 11799 --secondary-sink-id 11801 \
-  --position-coordinate comoving --time-coordinate proper \
   --output cdm_raw_pair_orbit.json \
-  output_00042 output_00043 output_00044
+  cdm_zoom_runtime_identity.json
 ```
 
-The capture binding must identify that exact binary event in the original
-CDM capture ledger.  The resulting `raw_relative_orbit_track` preserves this
-binding, snapshot hashes, periodic minimum-image separations, and instantaneous relative states.  It is not yet
+The runtime identity rechecks that the contract's capture binding identifies
+the exact binary event in the original CDM capture ledger.  The resulting
+`raw_relative_orbit_track` preserves that binding, the runtime-identity hash,
+snapshot hashes, periodic minimum-image separations, and instantaneous
+relative states.  It is not yet
 a monotonic rate table: eccentric oscillations, stalled phases, and force
 source attribution must be assessed before building a CDM delay stage.
 
