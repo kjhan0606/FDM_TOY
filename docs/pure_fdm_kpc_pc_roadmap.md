@@ -251,6 +251,32 @@ python scripts/validate_lagramses_fdm_outer_wave_provenance.py \
 that it declares resolved-wave-only FDM force accounting.  It is deliberately
 not a calibrated response, an accepted outer closure, or a delay estimate.
 
+Each completed normal output also carries
+`resolved_physics_inventory_<output>.txt`.  This companion record names the
+explicit stars, gas, and active dark-matter channel states; the potential
+checkpoint; the sink state file; and the force/conservation ledgers.  FDM
+outputs additionally name the field snapshot and wave-provenance availability.
+It is a fail-closed pre-registration diagnostic:
+
+```bash
+python scripts/assess_lagramses_resolved_physics_inventory.py \
+  --stars-required --gas-required \
+  output_00042/resolved_physics_inventory_00042.txt \
+  results/resolved_physics_inventory_00042.json
+```
+
+The normal writer currently declares the force and conservation ledgers
+`unavailable`; therefore this command correctly returns `censored`.  It does
+not assign a zero force, zero torque, or zero delay.  An FDM record also
+remains censored until its wave provenance is available.  A particle dump
+whose stars have not been classified is censored even when a stellar channel
+is not requested, because the baryonic composition has not been stated.
+Subsequent force-work, conservation, mode, profile, and resolution records
+must still be measured and registered separately.  The current downstream
+registration readers do not yet require this diagnostic's hash; that binding
+is a separate implementation step, so its result must not be represented as
+an accepted model-physics record.
+
 For a controlled two-core experiment, define a YAML seed with exactly two
 FDM solitons and two SMBH sinks in code units, then materialize the matching
 all-wave `&FDM_PARAMS` fragment and the two-row lagRamses `ic_sink` input:
