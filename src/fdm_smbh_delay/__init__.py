@@ -12,12 +12,20 @@ from .capture_fdm_seed import (
     CaptureFDMSeedFrameSpecification,
     CaptureSMBHMassProjection,
     derive_dual_smbh_sink_pair_from_capture,
+    materialize_capture_derived_sink_pair_record,
     verify_mass_projection_source,
     verify_pure_fdm_seed_matches_capture_sink_pair,
 )
 from .capture_seed_binding import (
     CaptureSeedMaterializationBinding,
     assess_capture_seed_materialization_binding,
+    read_verified_capture_seed_materialization_binding,
+)
+from .fdm_zoom_seed_binding import (
+    FDMCaptureSeedZoomBinding,
+    assess_fdm_capture_seed_zoom_binding,
+    materialize_fdm_capture_seed_zoom_binding,
+    read_verified_fdm_capture_seed_zoom_binding,
 )
 from .capture_seed_assembly import (
     CaptureSolitonConfiguration,
@@ -89,6 +97,7 @@ from .dual_soliton_seed import (
     load_pure_fdm_dual_soliton_seed,
     materialize_pure_fdm_dual_soliton_seed,
     pure_fdm_dual_soliton_seed_from_mapping,
+    read_materialized_pure_fdm_dual_soliton_seed,
 )
 from .dual_soliton_preflight import (
     DualSolitonRunPreflight,
@@ -157,6 +166,7 @@ __all__ = [
     "CaptureFDMSeedFrameSpecification",
     "CaptureSMBHMassProjection",
     "CaptureSeedMaterializationBinding",
+    "FDMCaptureSeedZoomBinding",
     "CaptureSolitonConfiguration",
     "CaptureDMRunBinding",
     "CDMNonCompactingZoomRunContract",
@@ -219,12 +229,14 @@ __all__ = [
     "capture_derived_seed_mapping",
     "capture_soliton_configuration_from_mapping",
     "derive_dual_smbh_sink_pair_from_capture",
+    "materialize_capture_derived_sink_pair_record",
     "bind_nested_zoom_checkpoint",
     "bind_capture_event_to_dark_matter_run",
     "initial_kpc_to_hard_state_from_bridge",
     "integrate_case",
     "load_config",
     "load_pure_fdm_dual_soliton_seed",
+    "read_materialized_pure_fdm_dual_soliton_seed",
     "materialize_pure_fdm_dual_soliton_seed",
     "materialize_cdm_noncompacting_zoom_run_contract",
     "pure_fdm_dual_soliton_seed_from_mapping",
@@ -232,6 +244,7 @@ __all__ = [
     "validate_pure_fdm_dual_soliton_runtime_identity",
     "assess_dual_soliton_relaxation",
     "assess_capture_seed_materialization_binding",
+    "assess_fdm_capture_seed_zoom_binding",
     "assess_dm_comparison_physics_inputs",
     "assess_dm_comparison_smoke_outputs",
     "assess_model_specific_phase_ensemble",
@@ -251,9 +264,12 @@ __all__ = [
     "read_verified_dm_comparison_capture_ensemble",
     "read_resolved_model_physics_result",
     "read_pure_fdm_outer_result",
+    "read_verified_capture_seed_materialization_binding",
+    "read_verified_fdm_capture_seed_zoom_binding",
     "validate_outer_inner_handoff",
     "verify_mass_projection_source",
     "verify_pure_fdm_seed_matches_capture_sink_pair",
     "register_dm_comparison_capture_ensemble",
+    "materialize_fdm_capture_seed_zoom_binding",
 ]
 __version__ = "0.1.0"

@@ -356,8 +356,15 @@ silently reinterpreted as an SMBH mass.  The target zero CDM fraction is an
 explicit definition of the new pure-FDM experiment, not a claim about the
 source HR5 run.  The export verifies that the declared SHA-256 matches the
 projection file (with relative paths resolved beside the frame specification).
-It is a provenance-bound sink-pair input, not a soliton fit or an accepted
-physical delay.
+It also stores the exact capture-ledger and frame-specification digests.  A
+later seed check re-reads both sources and re-derives every sink row, rather
+than trusting the pair JSON as a kinematic authority.  It is a
+provenance-bound sink-pair input, not a soliton fit or an accepted physical
+delay.
+Older v1 pair records lack these raw-ledger/frame attestations and are
+therefore deliberately non-consumable by the current seed-binding gate;
+re-export them from the original ledger and frame specification instead of
+trying to upgrade the JSON by hand.
 
 To avoid manually copying those rows into a seed, supply the two soliton
 components independently (with no `sinks` field) and assemble both the
@@ -393,6 +400,34 @@ capture-derived numerical sink mass, projected SMBH mass, position, velocity,
 angular momentum, and target zero CDM fraction.  It is an input-identity
 check; it does not validate the soliton fit, wave relaxation, conservation,
 or any physical delay.
+
+Before treating that seed as the `smbh_seed_catalog` input of a declared FDM
+zoom case, join the saved capture-to-seed decision to the saved common zoom
+contract:
+
+```bash
+python scripts/materialize_fdm_capture_seed_zoom_binding.py \
+  results/model_zoom_execution_contract.json \
+  results/capture_seed_materialization_binding.json \
+  results/fdm_capture_seed_zoom_binding
+```
+
+The FDM contract must name that exact seed manifest as its sink-input artifact,
+use the same capture-event UID and SHA-256, declare the same axion mass, and
+state baryonic channels consistently with the seed.  A materialized dual
+soliton seed is all-wave (`fdm_use_hjm=false`), so a case that requests HJM is
+rejected instead of silently changing the initialization.  The wave-level
+field remains explicit even for this all-wave initial state.  A verified
+`fdm_capture_seed_zoom_identity_verified` record is still only a declaration
+gate: it does not show that lagRamses consumed `ic_sink` or the seed fragment,
+nor that the two solitons relaxed or that their wake is resolved.
+It also does **not** yet equate the seed's code-unit soliton profile with the
+zoom case's physical binary total mass, mass ratio, core radius, or soliton
+mass: the materialized seed has no validated dimensional field-mass/core
+diagnostic.  Those coordinates remain unbound until a relaxed wave-state
+measurement and its normalization artifact are introduced; they must not be
+treated as a similarity-class match merely because this declaration gate
+passes.
 
 Before the operator submits a completed run namelist, verify that its scalar
 FDM/AMR switches, all two-soliton components, and the run-directory

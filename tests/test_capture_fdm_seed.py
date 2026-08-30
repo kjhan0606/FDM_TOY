@@ -17,6 +17,7 @@ from fdm_smbh_delay.capture_fdm_seed import (
     CaptureFDMSeedFrameSpecification,
     CaptureSMBHMassProjection,
     derive_dual_smbh_sink_pair_from_capture,
+    materialize_capture_derived_sink_pair_record,
     verify_mass_projection_source,
     verify_pure_fdm_seed_matches_capture_sink_pair,
 )
@@ -349,11 +350,20 @@ def test_materialized_seed_binding_rechecks_capture_pair_and_catalog_provenance(
             source_sha256=hashlib.sha256(catalog.read_bytes()).hexdigest(),
         ),
     )
-    pair_record = derived.as_dict()
-    pair_record["mass_projection_validation"] = {
-        "status": "source_sha256_verified",
-        "resolved_source_path": str(catalog.resolve()),
-    }
+    frame_specification = CaptureFDMSeedFrameSpecification(
+        event_uid=event.event_uid,
+        frame=_frame(),
+        assignment=_assignment(),
+        mass_projection=_projection(
+            source_path="catalog.json",
+            source_sha256=hashlib.sha256(catalog.read_bytes()).hexdigest(),
+        ),
+    )
+    frame_path = tmp_path / "frame.json"
+    frame_path.write_text(json.dumps(frame_specification.as_dict()), encoding="utf-8")
+    pair_record = materialize_capture_derived_sink_pair_record(
+        derived, frame_specification_path=frame_path
+    )
     pair_path = tmp_path / "capture-sinks.json"
     pair_path.write_text(json.dumps(pair_record), encoding="utf-8")
     seed = PureFDMDualSolitonSeed(
@@ -430,6 +440,7 @@ def test_capture_sink_pair_cli_writes_atomic_provenance_bound_output(tmp_path: P
     record = json.loads(output.read_text(encoding="utf-8"))
     assert record["status"] == "capture_binary_dual_smbh_sink_pair_derived"
     assert record["mass_projection_validation"]["status"] == "source_sha256_verified"
+    assert record["frame_specification_validation"]["status"] == "source_sha256_verified"
 
 
 def test_capture_seed_assembly_cli_writes_loadable_seed_and_pair_evidence(
@@ -471,4 +482,6 @@ def test_capture_seed_assembly_cli_writes_loadable_seed_and_pair_evidence(
         text=True,
     )
     assert load_pure_fdm_dual_soliton_seed(seed_path).sinks[0].smbh_mass_code == pytest.approx(0.9)
-    assert json.loads(pair_path.read_text(encoding="utf-8"))["mass_projection_validation"]["status"] == "source_sha256_verified"
+    pair_record = json.loads(pair_path.read_text(encoding="utf-8"))
+    assert pair_record["mass_projection_validation"]["status"] == "source_sha256_verified"
+    assert pair_record["frame_specification_validation"]["status"] == "source_sha256_verified"

@@ -9,17 +9,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import json
 import math
 from pathlib import Path
 from typing import Any, Mapping
 
 import numpy as np
 
-from .capture_ledger import CaptureEvent, CaptureMember
+from .capture_ledger import CaptureEvent, CaptureMember, read_capture_ledger
 from .dual_soliton_seed import DualSMBHSinkSeed, PureFDMDualSolitonSeed
 
 
 CAPTURE_FDM_SEED_FRAME_SCHEMA_VERSION = 1
+CAPTURE_DERIVED_SINK_PAIR_SCHEMA_VERSION = 2
 
 
 def _finite(value: Any, name: str, *, positive: bool = False) -> float:
@@ -51,6 +53,14 @@ def _sink_dict(sink: DualSMBHSinkSeed) -> dict[str, Any]:
         "angular_momentum_code": list(sink.angular_momentum_code),
         "dark_matter_fraction": sink.dark_matter_fraction,
     }
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 @dataclass(frozen=True)
@@ -310,7 +320,7 @@ class CaptureDerivedDualSMBHSinkPair:
 
     def as_dict(self) -> dict[str, Any]:
         return {
-            "schema_version": 1,
+            "schema_version": CAPTURE_DERIVED_SINK_PAIR_SCHEMA_VERSION,
             "status": "capture_binary_dual_smbh_sink_pair_derived",
             "interpretation": (
                 "capture kinematics and total sink masses are transferred from the "
@@ -323,6 +333,7 @@ class CaptureDerivedDualSMBHSinkPair:
                 "event_uid": self.event_uid,
                 "event_sha256": self.event_sha256,
                 "ledger_path": str(self.capture_ledger_path),
+                "ledger_sha256": _file_sha256(self.capture_ledger_path),
                 "member_ids": list(self.member_ids),
             },
             "frame": self.frame.as_dict(),
@@ -422,6 +433,62 @@ def derive_dual_smbh_sink_pair_from_capture(
         mass_projection=mass_projection,
         sinks=sinks,
     )
+
+
+def materialize_capture_derived_sink_pair_record(
+    pair: CaptureDerivedDualSMBHSinkPair,
+    *,
+    frame_specification_path: str | Path,
+) -> dict[str, Any]:
+    """Return a v2 pair record whose frame and projection sources are attested.
+
+    ``CaptureDerivedDualSMBHSinkPair.as_dict`` remains useful for in-memory
+    inspection, but is deliberately not sufficient for a later persisted
+    capture-to-seed decision.  Persisted records must name the exact frame
+    specification that supplied the local coordinate transform and the SMBH
+    mass projection.
+    """
+
+    specification_path = Path(frame_specification_path).expanduser().resolve()
+    try:
+        specification = CaptureFDMSeedFrameSpecification.from_dict(
+            json.loads(specification_path.read_text(encoding="utf-8"))
+        )
+        projection_source = verify_mass_projection_source(
+            specification.mass_projection,
+            reference_directory=specification_path.parent,
+        )
+    except (OSError, json.JSONDecodeError, ValueError) as error:
+        raise ValueError(f"cannot attest capture frame specification: {error}") from error
+    try:
+        events = [
+            event
+            for event in read_capture_ledger(pair.capture_ledger_path).events
+            if event.event_uid == specification.event_uid
+        ]
+    except (OSError, ValueError) as error:
+        raise ValueError(f"cannot re-read capture ledger for pair attestation: {error}") from error
+    if len(events) != 1:
+        raise ValueError("capture frame specification does not identify exactly one ledger event")
+    expected = derive_dual_smbh_sink_pair_from_capture(
+        events[0],
+        frame=specification.frame,
+        assignment=specification.assignment,
+        mass_projection=specification.mass_projection,
+    )
+    if pair != expected:
+        raise ValueError("capture-derived pair differs from its attested frame specification")
+    record = pair.as_dict()
+    record["mass_projection_validation"] = {
+        "status": "source_sha256_verified",
+        "resolved_source_path": str(projection_source),
+    }
+    record["frame_specification_validation"] = {
+        "status": "source_sha256_verified",
+        "resolved_source_path": str(specification_path),
+        "sha256": _file_sha256(specification_path),
+    }
+    return record
 
 
 def verify_pure_fdm_seed_matches_capture_sink_pair(

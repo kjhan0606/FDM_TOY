@@ -14,7 +14,7 @@ import yaml
 from fdm_smbh_delay.capture_fdm_seed import (
     CaptureFDMSeedFrameSpecification,
     derive_dual_smbh_sink_pair_from_capture,
-    verify_mass_projection_source,
+    materialize_capture_derived_sink_pair_record,
 )
 from fdm_smbh_delay.capture_seed_assembly import (
     assemble_capture_derived_pure_fdm_seed,
@@ -45,10 +45,6 @@ def main() -> int:
     specification = CaptureFDMSeedFrameSpecification.from_dict(
         json.loads(args.frame_specification.read_text(encoding="utf-8"))
     )
-    source_path = verify_mass_projection_source(
-        specification.mass_projection,
-        reference_directory=args.frame_specification.parent,
-    )
     configuration = capture_soliton_configuration_from_mapping(
         yaml.safe_load(args.soliton_configuration.read_text(encoding="utf-8"))
     )
@@ -66,11 +62,10 @@ def main() -> int:
         mass_projection=specification.mass_projection,
     )
     seed = assemble_capture_derived_pure_fdm_seed(pair, configuration)
-    pair_record = pair.as_dict()
-    pair_record["mass_projection_validation"] = {
-        "status": "source_sha256_verified",
-        "resolved_source_path": str(source_path),
-    }
+    pair_record = materialize_capture_derived_sink_pair_record(
+        pair,
+        frame_specification_path=args.frame_specification,
+    )
     _write_atomic(
         args.seed_output.expanduser().resolve(),
         yaml.safe_dump(capture_derived_seed_mapping(seed), sort_keys=True),

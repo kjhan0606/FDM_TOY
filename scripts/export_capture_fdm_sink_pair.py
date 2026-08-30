@@ -12,7 +12,7 @@ import tempfile
 from fdm_smbh_delay.capture_fdm_seed import (
     CaptureFDMSeedFrameSpecification,
     derive_dual_smbh_sink_pair_from_capture,
-    verify_mass_projection_source,
+    materialize_capture_derived_sink_pair_record,
 )
 from fdm_smbh_delay.capture_ledger import read_capture_ledger
 
@@ -36,10 +36,6 @@ def main() -> int:
     specification = CaptureFDMSeedFrameSpecification.from_dict(
         json.loads(args.frame_specification.read_text(encoding="utf-8"))
     )
-    projection_source = verify_mass_projection_source(
-        specification.mass_projection,
-        reference_directory=args.frame_specification.parent,
-    )
     matches = [
         event
         for event in read_capture_ledger(args.ledger).events
@@ -53,11 +49,10 @@ def main() -> int:
         assignment=specification.assignment,
         mass_projection=specification.mass_projection,
     )
-    record = pair.as_dict()
-    record["mass_projection_validation"] = {
-        "status": "source_sha256_verified",
-        "resolved_source_path": str(projection_source),
-    }
+    record = materialize_capture_derived_sink_pair_record(
+        pair,
+        frame_specification_path=args.frame_specification,
+    )
     _write_json_atomic(args.output.expanduser().resolve(), record)
     print(json.dumps(record, indent=2, sort_keys=True))
     return 0
