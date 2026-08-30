@@ -153,6 +153,63 @@ single-stream HJM state, so an HJM seam is prohibited at initialization.  The
 materialized files are initial data only; relaxation, paired resolution,
 phase replicas, and the outer-wave evidence gates remain mandatory.
 
+When a complete pre-compaction capture ledger exists, first derive the two
+local sink rows with `export_capture_fdm_sink_pair.py`.  The frame
+specification binds the exact capture-event UID, local code units, member
+order, and angular-momentum vectors to an external `mass_projection` record:
+
+```bash
+python scripts/export_capture_fdm_sink_pair.py \
+  smbh_capture_ledger_v1.jsonl \
+  capture_fdm_seed_frame.json \
+  results/capture_fdm_sink_pair.json
+```
+
+The ledger supplies the numerical sink masses and kinematics.  The projection
+must separately supply two authoritative SMBH masses plus its source case ID,
+SHA-256, and path; neither total sink mass nor an accreted-mass diagnostic is
+silently reinterpreted as an SMBH mass.  The target zero CDM fraction is an
+explicit definition of the new pure-FDM experiment, not a claim about the
+source HR5 run.  The export verifies that the declared SHA-256 matches the
+projection file (with relative paths resolved beside the frame specification).
+It is a provenance-bound sink-pair input, not a soliton fit or an accepted
+physical delay.
+
+To avoid manually copying those rows into a seed, supply the two soliton
+components independently (with no `sinks` field) and assemble both the
+materializer-ready seed and the capture-pair evidence together:
+
+```bash
+python scripts/assemble_capture_dual_soliton_seed.py \
+  smbh_capture_ledger_v1.jsonl \
+  capture_fdm_seed_frame.json \
+  explicit_soliton_configuration.yaml \
+  capture_derived_seed.yaml \
+  results/capture_fdm_sink_pair.json
+```
+
+This command does not fit a soliton, select a phase, or alter the capture
+orbit.  It accepts only explicitly declared two-core FDM parameters and
+injects the provenance-bound sink rows.  The resulting YAML is then passed to
+`materialize_dual_soliton_ic.py`.
+
+Once the soliton parameters are independently specified and the seed is
+materialized, bind its two `ic_sink` rows back to that capture pair before run
+preflight:
+
+```bash
+python scripts/verify_capture_dual_soliton_seed.py \
+  results/capture_fdm_sink_pair.json \
+  initial_conditions/pure_fdm_case/dual_soliton_seed_manifest.json \
+  results/capture_seed_materialization_binding.json
+```
+
+Only `capture_seed_materialization_identity_verified` preserves the same
+capture-derived numerical sink mass, projected SMBH mass, position, velocity,
+angular momentum, and target zero CDM fraction.  It is an input-identity
+check; it does not validate the soliton fit, wave relaxation, conservation,
+or any physical delay.
+
 Before the operator submits a completed run namelist, verify that its scalar
 FDM/AMR switches, all two-soliton components, and the run-directory
 `ic_sink` remain identical to the materialized seed:

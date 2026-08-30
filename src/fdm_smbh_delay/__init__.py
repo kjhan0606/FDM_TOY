@@ -5,6 +5,26 @@ from .bridge_adapter import (
     build_kpc_model_from_profile_bundle,
     initial_kpc_to_hard_state_from_bridge,
 )
+from .capture_fdm_seed import (
+    CaptureDerivedDualSMBHSinkPair,
+    CaptureFDMSeedAssignment,
+    CaptureFDMSeedFrame,
+    CaptureFDMSeedFrameSpecification,
+    CaptureSMBHMassProjection,
+    derive_dual_smbh_sink_pair_from_capture,
+    verify_mass_projection_source,
+    verify_pure_fdm_seed_matches_capture_sink_pair,
+)
+from .capture_seed_binding import (
+    CaptureSeedMaterializationBinding,
+    assess_capture_seed_materialization_binding,
+)
+from .capture_seed_assembly import (
+    CaptureSolitonConfiguration,
+    assemble_capture_derived_pure_fdm_seed,
+    capture_derived_seed_mapping,
+    capture_soliton_configuration_from_mapping,
+)
 from .config import CaseConfig, load_config
 from .fdm_outer_halo import FDMOuterHaloClosure
 from .fdm_outer_wave_ledger import FDMOuterWaveLedger
@@ -81,6 +101,13 @@ from .orbit import IntegrationResult, integrate_case
 __all__ = [
     "CaseConfig",
     "BridgeMemberAssignment",
+    "CaptureDerivedDualSMBHSinkPair",
+    "CaptureFDMSeedAssignment",
+    "CaptureFDMSeedFrame",
+    "CaptureFDMSeedFrameSpecification",
+    "CaptureSMBHMassProjection",
+    "CaptureSeedMaterializationBinding",
+    "CaptureSolitonConfiguration",
     "EnvironmentProfileBundle",
     "FDMOuterHaloClosure",
     "FDMOuterWaveLedger",
@@ -117,7 +144,11 @@ __all__ = [
     "PureFDMOuterRunResult",
     "PureFDMOuterStage",
     "TabulatedSphericalProfile",
+    "assemble_capture_derived_pure_fdm_seed",
     "build_kpc_model_from_profile_bundle",
+    "capture_derived_seed_mapping",
+    "capture_soliton_configuration_from_mapping",
+    "derive_dual_smbh_sink_pair_from_capture",
     "bind_nested_zoom_checkpoint",
     "initial_kpc_to_hard_state_from_bridge",
     "integrate_case",
@@ -128,6 +159,7 @@ __all__ = [
     "preflight_pure_fdm_dual_soliton_run",
     "validate_pure_fdm_dual_soliton_runtime_identity",
     "assess_dual_soliton_relaxation",
+    "assess_capture_seed_materialization_binding",
     "read_lagramses_fdm_outer_wave_provenance",
     "compare_pure_fdm_outer_resolution_pair",
     "assess_pure_fdm_outer_phase_ensemble",
@@ -137,5 +169,7 @@ __all__ = [
     "preflight_pure_fdm_outer_zoom",
     "read_pure_fdm_outer_result",
     "validate_outer_inner_handoff",
+    "verify_mass_projection_source",
+    "verify_pure_fdm_seed_matches_capture_sink_pair",
 ]
 __version__ = "0.1.0"
