@@ -149,6 +149,13 @@ from .outer_inner_handoff import (
     HandoffSimilarityState,
     validate_outer_inner_handoff,
 )
+from .backreaction import (
+    BackreactionDecision,
+    BackreactionEvidence,
+    BackreactionGateConfig,
+    BackreactionTrackPoint,
+    assess_live_frozen_backreaction,
+)
 from .fdm_outer_response import FDMOuterResponseTable
 from .pure_fdm_zoom import (
     DeferredNestedZoomRequest,
@@ -316,6 +323,11 @@ __all__ = [
     "read_verified_pure_fdm_dual_soliton_run_preflight",
     "read_lagramses_namelist_assignment",
     "validate_outer_inner_handoff",
+    "BackreactionDecision",
+    "BackreactionEvidence",
+    "BackreactionGateConfig",
+    "BackreactionTrackPoint",
+    "assess_live_frozen_backreaction",
     "verify_mass_projection_source",
     "verify_pure_fdm_seed_matches_capture_sink_pair",
     "register_dm_comparison_capture_ensemble",

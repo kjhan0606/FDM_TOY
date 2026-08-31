@@ -663,6 +663,35 @@ field.
 
 ### 5. Calibration and acceptance — evaluation stage
 
+#### Runtime-versus-offline backreaction gate
+
+The default subgrid path is an offline consumer of measured environment
+response; it does not inject a second force into a live lagRamses run.  Before
+using a frozen profile, analytic closure, or measured residual, compare a live
+and a frozen calculation started from the same checkpoint.  The paired tracks
+must carry separate source hashes, common checkpoint identity, conservation
+errors, and orbital-resolution evidence.  The comparison is performed by
+`assess_live_frozen_backreaction` and is deliberately model agnostic:
+
+- `offline_acceptable`: CDM, SIDM, or FDM live/frozen orbital power and torque
+  agree within 20 percent, eccentricity differs by at most 0.02, signs do not
+  reverse, and both tracks pass the conservation/resolution gates.  The
+  offline closure is allowed only over the measured overlap; it is not a
+  global extrapolation.
+- `runtime_required`: the paired tracks are resolved but live wake/scattering/
+  wave backreaction changes a rate or eccentricity beyond those limits, or a
+  rate changes sign.  The runtime treatment (or a source-decomposed live
+  residual) must be retained; an analytic term must not be added on top of it.
+- `censored`: the tracks do not share a checkpoint, lack a positive-width
+  overlap or enough matched points, fail conservation/resolution, use the same
+  source artifact, or contain an unresolved power/torque rate.  No zero force,
+  zero delay, or runtime conclusion is inferred.
+
+For FDM the live track must explicitly use `live_wave_only` accounting.  A
+live wave wake and an analytic FDM drag are never summed.  For CDM and SIDM the
+same gate tests whether resolved wake/kinetic-energy exchange or scattering
+changes the offline closure; it does not assume that either effect is small.
+
 The evaluator compares orbit-averaged `dE_orb/dt`, `dL_orb/dt`, eccentricity,
 and their phase distributions on the positive-width overlap.  Paired
 resolution and phase-replicate runs are mandatory.  A live wake supplies its
