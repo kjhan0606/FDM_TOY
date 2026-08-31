@@ -6,7 +6,10 @@ from pathlib import Path
 import subprocess
 import sys
 
+import pytest
+
 from fdm_smbh_delay.backreaction import BackreactionTrackPoint
+from fdm_smbh_delay.backreaction import read_verified_backreaction_decision
 
 
 def _sha(path: Path) -> str:
@@ -86,6 +89,30 @@ def test_cli_verifies_source_hashes_and_writes_decision(tmp_path: Path) -> None:
     assert record["status"] == "offline_acceptable"
     assert record["input_manifest"]["sha256"] == _sha(manifest)
     assert record["gates"]["maximum_rate_fractional_difference"] == 0.2
+    verified = read_verified_backreaction_decision(output)
+    assert verified.offline_acceptable
+
+
+def test_saved_decision_status_edit_is_rejected(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path)
+    output = tmp_path / "decision.json"
+    subprocess.run(
+        [
+            sys.executable,
+            "scripts/assess_live_frozen_backreaction.py",
+            str(manifest),
+            str(output),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    record = json.loads(output.read_text(encoding="utf-8"))
+    record["status"] = "offline_acceptable"
+    record["reasons"] = ["manually edited"]
+    output.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(ValueError, match="differs from current evidence"):
+        read_verified_backreaction_decision(output)
 
 
 def test_cli_reports_runtime_required_for_a_large_change(tmp_path: Path) -> None:

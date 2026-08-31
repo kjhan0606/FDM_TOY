@@ -699,6 +699,9 @@ candidate delay may be passed to
 `offline_acceptable` decision.  `runtime_required` and `censored` decisions
 discard that candidate and remain explicit censored segments, so a missing
 paired test can never become a zero-delay assumption.
+The saved result is not trusted by itself: `read_verified_backreaction_decision`
+re-reads the input manifest and both current track files, re-hashes them, and
+recomputes the decision before a downstream consumer may use it.
 
 The evaluator compares orbit-averaged `dE_orb/dt`, `dL_orb/dt`, eccentricity,
 and their phase distributions on the positive-width overlap.  Paired

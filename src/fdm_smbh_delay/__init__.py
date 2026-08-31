@@ -154,9 +154,13 @@ from .backreaction import (
     BackreactionDecision,
     BackreactionEvidence,
     BackreactionGateConfig,
+    BackreactionManifest,
     BackreactionTrackPoint,
     assess_live_frozen_backreaction,
     materialize_backreaction_delay_segment,
+    read_backreaction_manifest,
+    read_backreaction_track,
+    read_verified_backreaction_decision,
 )
 from .fdm_outer_response import FDMOuterResponseTable
 from .pure_fdm_zoom import (
@@ -329,9 +333,13 @@ __all__ = [
     "BACKREACTION_SCHEMA_VERSION",
     "BackreactionEvidence",
     "BackreactionGateConfig",
+    "BackreactionManifest",
     "BackreactionTrackPoint",
     "assess_live_frozen_backreaction",
     "materialize_backreaction_delay_segment",
+    "read_backreaction_manifest",
+    "read_backreaction_track",
+    "read_verified_backreaction_decision",
     "verify_mass_projection_source",
     "verify_pure_fdm_seed_matches_capture_sink_pair",
     "register_dm_comparison_capture_ensemble",

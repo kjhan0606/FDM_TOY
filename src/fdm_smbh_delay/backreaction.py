@@ -12,8 +12,9 @@ from dataclasses import dataclass
 import hashlib
 import json
 import math
+from pathlib import Path
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Mapping
 
 import numpy as np
 
@@ -24,6 +25,16 @@ if TYPE_CHECKING:
 BACKREACTION_SCHEMA_VERSION = 1
 _MODELS = {"cdm", "sidm", "fdm"}
 _SHA256_RE = re.compile(r"[0-9a-fA-F]{64}")
+_TRACK_FIELDS = {
+    "separation_pc",
+    "orbital_power_pc2_myr3",
+    "orbital_torque_msun_pc2_myr",
+    "eccentricity",
+}
+_DECISION_INTERPRETATION = (
+    "paired live/frozen force-treatment decision only; this is not "
+    "a coalescence-time estimate"
+)
 
 
 def _finite(value: Any, name: str, *, positive: bool = False) -> float:
@@ -49,6 +60,24 @@ def _sha256(value: Any, name: str) -> str:
     if not isinstance(value, str) or _SHA256_RE.fullmatch(value) is None:
         raise ValueError(f"{name} must be exactly 64 hexadecimal characters")
     return value.lower()
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _read_json(path: Path, label: str) -> dict[str, Any]:
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"cannot read {label}: {error}") from error
+    if not isinstance(record, dict):
+        raise ValueError(f"{label} must be a JSON object")
+    return record
 
 
 @dataclass(frozen=True)
@@ -86,6 +115,30 @@ class BackreactionTrackPoint:
         }
 
 
+def read_backreaction_track(path: str | Path) -> tuple[BackreactionTrackPoint, ...]:
+    """Read one measured track after validating its exact schema."""
+
+    source = Path(path).expanduser().resolve()
+    record = _read_json(source, "backreaction track")
+    if set(record) != {"schema_version", "status", "track"}:
+        raise ValueError("backreaction track fields are invalid")
+    if record["schema_version"] != 1 or record["status"] != "measured_track":
+        raise ValueError("backreaction track is not a measured_track schema-v1 record")
+    raw_points = record["track"]
+    if not isinstance(raw_points, list):
+        raise ValueError("backreaction track must contain a list")
+    points: list[BackreactionTrackPoint] = []
+    for index, raw in enumerate(raw_points):
+        if not isinstance(raw, Mapping) or set(raw) != _TRACK_FIELDS:
+            raise ValueError(f"backreaction track point {index} fields are invalid")
+        try:
+            points.append(BackreactionTrackPoint(**raw))
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"backreaction track point {index} is invalid: {error}") from error
+    _validate_points(tuple(points), "backreaction track")
+    return tuple(points)
+
+
 @dataclass(frozen=True)
 class BackreactionEvidence:
     """Provenance and quality metadata for one live/frozen pair."""
@@ -116,8 +169,16 @@ class BackreactionEvidence:
             "frozen_force_accounting",
         ):
             _nonempty(getattr(self, name), name)
-        _sha256(self.live_source_sha256, "live_source_sha256")
-        _sha256(self.frozen_source_sha256, "frozen_source_sha256")
+        object.__setattr__(
+            self,
+            "live_source_sha256",
+            _sha256(self.live_source_sha256, "live_source_sha256"),
+        )
+        object.__setattr__(
+            self,
+            "frozen_source_sha256",
+            _sha256(self.frozen_source_sha256, "frozen_source_sha256"),
+        )
         for name in (
             "maximum_live_relative_energy_error",
             "maximum_frozen_relative_energy_error",
@@ -125,11 +186,13 @@ class BackreactionEvidence:
             value = _finite(getattr(self, name), name)
             if value < 0.0:
                 raise ValueError(f"{name} must be non-negative")
+            object.__setattr__(self, name, value)
         for name in (
             "minimum_live_orbital_resolution_cells",
             "minimum_frozen_orbital_resolution_cells",
         ):
-            _finite(getattr(self, name), name, positive=True)
+            value = _finite(getattr(self, name), name, positive=True)
+            object.__setattr__(self, name, value)
         if self.model == "fdm" and self.live_force_accounting != "live_wave_only":
             raise ValueError(
                 "FDM live track must use live_wave_only force accounting"
@@ -199,6 +262,138 @@ class BackreactionGateConfig:
         }
 
 
+def _gate_config_from_mapping(
+    record: Any, *, enforce_project_floor: bool = True
+) -> BackreactionGateConfig:
+    if record is None:
+        return BackreactionGateConfig()
+    if not isinstance(record, Mapping):
+        raise ValueError("backreaction gates must be an object")
+    allowed = {
+        "minimum_overlap_factor",
+        "minimum_overlap_points",
+        "maximum_rate_fractional_difference",
+        "maximum_eccentricity_difference",
+        "maximum_relative_energy_error",
+        "minimum_orbital_resolution_cells",
+        "maximum_log_separation_match",
+        "rate_floor_fraction",
+    }
+    if set(record) != allowed:
+        raise ValueError("backreaction gates fields are invalid")
+    config = BackreactionGateConfig(**dict(record))
+    if enforce_project_floor:
+        baseline = BackreactionGateConfig()
+        if (
+            config.minimum_overlap_factor < baseline.minimum_overlap_factor
+            or config.minimum_overlap_points < baseline.minimum_overlap_points
+            or config.maximum_rate_fractional_difference > baseline.maximum_rate_fractional_difference
+            or config.maximum_eccentricity_difference > baseline.maximum_eccentricity_difference
+            or config.maximum_relative_energy_error > baseline.maximum_relative_energy_error
+            or config.minimum_orbital_resolution_cells < baseline.minimum_orbital_resolution_cells
+            or config.maximum_log_separation_match > baseline.maximum_log_separation_match
+            or config.rate_floor_fraction < baseline.rate_floor_fraction
+        ):
+            raise ValueError(
+                "backreaction gates may only be stricter than the project defaults"
+            )
+    return config
+
+
+@dataclass(frozen=True)
+class BackreactionManifest:
+    """A fully re-readable live/frozen manifest and its source tracks."""
+
+    path: Path
+    sha256: str
+    model: str
+    live_points: tuple[BackreactionTrackPoint, ...]
+    frozen_points: tuple[BackreactionTrackPoint, ...]
+    evidence: BackreactionEvidence
+    config: BackreactionGateConfig
+
+
+def _manifest_side(
+    record: Any,
+    *,
+    label: str,
+    base: Path,
+) -> tuple[dict[str, Any], tuple[BackreactionTrackPoint, ...]]:
+    expected = {
+        "checkpoint_id",
+        "source",
+        "force_accounting",
+        "maximum_relative_energy_error",
+        "minimum_orbital_resolution_cells",
+    }
+    if not isinstance(record, Mapping) or set(record) != expected:
+        raise ValueError(f"{label} evidence fields are invalid")
+    source = record.get("source")
+    if not isinstance(source, Mapping) or set(source) != {"path", "sha256"}:
+        raise ValueError(f"{label} source fields are invalid")
+    source_path = Path(_nonempty(source.get("path"), f"{label} source path")).expanduser()
+    source_path = (source_path if source_path.is_absolute() else base / source_path).resolve()
+    declared_sha = _sha256(source.get("sha256"), f"{label} source SHA-256")
+    try:
+        actual_sha = _file_sha256(source_path)
+    except OSError as error:
+        raise ValueError(f"cannot read {label} source: {error}") from error
+    if actual_sha != declared_sha:
+        raise ValueError(f"{label} source SHA-256 differs")
+    parsed = dict(record)
+    parsed["checkpoint_id"] = _nonempty(parsed["checkpoint_id"], f"{label} checkpoint_id")
+    parsed["source_path"] = str(source_path)
+    parsed["source_sha256"] = actual_sha
+    parsed["force_accounting"] = _nonempty(
+        parsed["force_accounting"], f"{label} force_accounting"
+    )
+    return parsed, read_backreaction_track(source_path)
+
+
+def read_backreaction_manifest(path: str | Path) -> BackreactionManifest:
+    """Read a manifest and re-hash both measured source track files."""
+
+    source = Path(path).expanduser().resolve()
+    record = _read_json(source, "backreaction manifest")
+    expected = {"schema_version", "model", "live", "frozen"}
+    optional = {"gates"}
+    if set(record) - expected - optional or not expected.issubset(record):
+        raise ValueError("backreaction manifest fields are invalid")
+    if record["schema_version"] != 1:
+        raise ValueError("unsupported backreaction manifest schema")
+    model = _nonempty(record.get("model"), "backreaction model")
+    live_record, live_points = _manifest_side(
+        record.get("live"), label="live", base=source.parent
+    )
+    frozen_record, frozen_points = _manifest_side(
+        record.get("frozen"), label="frozen", base=source.parent
+    )
+    evidence = BackreactionEvidence(
+        model=model,
+        live_checkpoint_id=live_record["checkpoint_id"],
+        frozen_checkpoint_id=frozen_record["checkpoint_id"],
+        live_source_path=live_record["source_path"],
+        live_source_sha256=live_record["source_sha256"],
+        frozen_source_path=frozen_record["source_path"],
+        frozen_source_sha256=frozen_record["source_sha256"],
+        live_force_accounting=live_record["force_accounting"],
+        frozen_force_accounting=frozen_record["force_accounting"],
+        maximum_live_relative_energy_error=live_record["maximum_relative_energy_error"],
+        maximum_frozen_relative_energy_error=frozen_record["maximum_relative_energy_error"],
+        minimum_live_orbital_resolution_cells=live_record["minimum_orbital_resolution_cells"],
+        minimum_frozen_orbital_resolution_cells=frozen_record["minimum_orbital_resolution_cells"],
+    )
+    return BackreactionManifest(
+        path=source,
+        sha256=_file_sha256(source),
+        model=model,
+        live_points=live_points,
+        frozen_points=frozen_points,
+        evidence=evidence,
+        config=_gate_config_from_mapping(record.get("gates")),
+    )
+
+
 @dataclass(frozen=True)
 class BackreactionDecision:
     """Non-throwing recommendation for the force-treatment boundary."""
@@ -231,10 +426,7 @@ class BackreactionDecision:
         return {
             "schema_version": BACKREACTION_SCHEMA_VERSION,
             "status": self.status,
-            "interpretation": (
-                "paired live/frozen force-treatment decision only; this is not "
-                "a coalescence-time estimate"
-            ),
+            "interpretation": _DECISION_INTERPRETATION,
             "model": self.model,
             "overlap": {
                 "low_pc": self.overlap_low_pc,
@@ -572,3 +764,71 @@ def assess_live_frozen_backreaction(
         reasons=reasons,
         config=config,
     )
+
+
+def read_verified_backreaction_decision(
+    path: str | Path,
+) -> BackreactionDecision:
+    """Rebuild a saved CLI decision from its manifest and current track bytes."""
+
+    source = Path(path).expanduser().resolve()
+    record = _read_json(source, "backreaction decision")
+    expected_fields = {
+        "schema_version",
+        "status",
+        "interpretation",
+        "model",
+        "overlap",
+        "maximum_power_fractional_difference",
+        "maximum_torque_fractional_difference",
+        "maximum_eccentricity_difference",
+        "reasons",
+        "evidence",
+        "gates",
+        "input_manifest",
+    }
+    if set(record) != expected_fields:
+        raise ValueError("backreaction decision fields are invalid")
+    if record.get("schema_version") != BACKREACTION_SCHEMA_VERSION:
+        raise ValueError("unsupported backreaction decision schema")
+    if record.get("interpretation") != _DECISION_INTERPRETATION:
+        raise ValueError("backreaction decision interpretation is invalid")
+    manifest_record = record.get("input_manifest")
+    if not isinstance(manifest_record, Mapping) or set(manifest_record) != {
+        "path",
+        "sha256",
+    }:
+        raise ValueError("backreaction input manifest fields are invalid")
+    manifest_path = Path(
+        _nonempty(manifest_record.get("path"), "backreaction input manifest path")
+    ).expanduser()
+    manifest_path = (
+        manifest_path if manifest_path.is_absolute() else source.parent / manifest_path
+    ).resolve()
+    manifest_sha = _sha256(
+        manifest_record.get("sha256"), "backreaction input manifest SHA-256"
+    )
+    try:
+        actual_manifest_sha = _file_sha256(manifest_path)
+    except OSError as error:
+        raise ValueError(f"cannot read backreaction input manifest: {error}") from error
+    if actual_manifest_sha != manifest_sha:
+        raise ValueError("backreaction input manifest SHA-256 differs")
+    manifest = read_backreaction_manifest(manifest_path)
+    if manifest.sha256 != manifest_sha or manifest.path != manifest_path:
+        raise ValueError("backreaction input manifest identity differs")
+    decision = assess_live_frozen_backreaction(
+        model=manifest.model,
+        live_points=manifest.live_points,
+        frozen_points=manifest.frozen_points,
+        evidence=manifest.evidence,
+        config=manifest.config,
+    )
+    expected_record = decision.as_dict()
+    expected_record["input_manifest"] = {
+        "path": str(manifest.path),
+        "sha256": manifest.sha256,
+    }
+    if record != expected_record:
+        raise ValueError("saved backreaction decision differs from current evidence")
+    return decision
