@@ -9,11 +9,16 @@ creates a force or a delay and it never treats an unresolved rate as zero.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import json
 import math
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from .delay_budget import DelaySegment
 
 
 BACKREACTION_SCHEMA_VERSION = 1
@@ -181,6 +186,18 @@ class BackreactionGateConfig:
         if self.minimum_overlap_points < 2:
             raise ValueError("minimum_overlap_points must be at least two")
 
+    def as_dict(self) -> dict[str, float | int]:
+        return {
+            "minimum_overlap_factor": self.minimum_overlap_factor,
+            "minimum_overlap_points": self.minimum_overlap_points,
+            "maximum_rate_fractional_difference": self.maximum_rate_fractional_difference,
+            "maximum_eccentricity_difference": self.maximum_eccentricity_difference,
+            "maximum_relative_energy_error": self.maximum_relative_energy_error,
+            "minimum_orbital_resolution_cells": self.minimum_orbital_resolution_cells,
+            "maximum_log_separation_match": self.maximum_log_separation_match,
+            "rate_floor_fraction": self.rate_floor_fraction,
+        }
+
 
 @dataclass(frozen=True)
 class BackreactionDecision:
@@ -196,6 +213,7 @@ class BackreactionDecision:
     maximum_eccentricity_difference: float | None
     reasons: tuple[str, ...]
     evidence: BackreactionEvidence
+    config: BackreactionGateConfig
 
     @property
     def offline_acceptable(self) -> bool:
@@ -228,7 +246,69 @@ class BackreactionDecision:
             "maximum_eccentricity_difference": self.maximum_eccentricity_difference,
             "reasons": list(self.reasons),
             "evidence": self.evidence.as_dict(),
+            "gates": self.config.as_dict(),
         }
+
+
+def materialize_backreaction_delay_segment(
+    decision: BackreactionDecision,
+    *,
+    name: str,
+    offline_delay_myr: float | None,
+    source_case_id: str | None = None,
+) -> DelaySegment:
+    """Turn a backreaction decision into one censor-preserving delay segment.
+
+    A candidate delay is materialized only for ``offline_acceptable``.  For a
+    resolved but materially different pair (``runtime_required``), or for
+    inadequate evidence (``censored``), the candidate is discarded and the
+    returned segment has no delay.  The local import keeps this module
+    independent from the generic delay composer at import time.
+    """
+
+    name = _nonempty(name, "delay segment name")
+    if source_case_id is not None:
+        source_case_id = _nonempty(source_case_id, "source_case_id")
+    decision_digest = hashlib.sha256(
+        json.dumps(
+            decision.as_dict(), sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+    ).hexdigest()
+    from .delay_budget import DelaySegment
+
+    if decision.offline_acceptable:
+        if offline_delay_myr is None:
+            raise ValueError(
+                "offline_acceptable backreaction requires an offline delay"
+            )
+        delay = _finite(offline_delay_myr, "offline_delay_myr")
+        if delay < 0.0:
+            raise ValueError("offline_delay_myr must be non-negative")
+        return DelaySegment(
+            name,
+            "complete",
+            delay,
+            reason=(
+                "paired live/frozen backreaction accepted an offline closure "
+                "over the measured support"
+            ),
+            source_case_id=source_case_id,
+            source_sha256=decision_digest,
+        )
+
+    reason = (
+        f"backreaction status={decision.status}; offline delay is not usable"
+    )
+    if decision.reasons:
+        reason += ": " + "; ".join(decision.reasons)
+    return DelaySegment(
+        name,
+        "censored",
+        None,
+        reason=reason,
+        source_case_id=source_case_id,
+        source_sha256=decision_digest,
+    )
 
 
 def _validate_points(
@@ -290,6 +370,7 @@ def _decision(
     maximum_torque: float | None,
     maximum_eccentricity: float | None,
     reasons: list[str],
+    config: BackreactionGateConfig,
 ) -> BackreactionDecision:
     return BackreactionDecision(
         status=status,
@@ -302,6 +383,7 @@ def _decision(
         maximum_eccentricity_difference=maximum_eccentricity,
         reasons=tuple(dict.fromkeys(reasons)),
         evidence=evidence,
+        config=config,
     )
 
 
@@ -375,6 +457,7 @@ def assess_live_frozen_backreaction(
             maximum_torque=None,
             maximum_eccentricity=None,
             reasons=reasons,
+            config=config,
         )
     if overlap_high / overlap_low < config.minimum_overlap_factor:
         reasons.append("live/frozen overlap has insufficient separation width")
@@ -487,4 +570,5 @@ def assess_live_frozen_backreaction(
         maximum_torque=maximum_torque,
         maximum_eccentricity=maximum_eccentricity,
         reasons=reasons,
+        config=config,
     )

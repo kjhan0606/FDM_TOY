@@ -5,9 +5,11 @@ import hashlib
 import pytest
 
 from fdm_smbh_delay.backreaction import (
+    BackreactionGateConfig,
     BackreactionEvidence,
-    BackreactionTrackPoint,
     assess_live_frozen_backreaction,
+    BackreactionTrackPoint,
+    materialize_backreaction_delay_segment,
 )
 
 
@@ -200,3 +202,60 @@ def test_no_overlap_is_censored() -> None:
     )
     assert decision.censored
     assert decision.matched_points == 0
+
+
+def test_non_accepted_decision_cannot_materialize_a_candidate_delay() -> None:
+    live, frozen = _tracks(frozen_power_scale=1.5)
+    decision = assess_live_frozen_backreaction(
+        model="cdm",
+        live_points=live,
+        frozen_points=frozen,
+        evidence=_evidence(),
+    )
+    segment = materialize_backreaction_delay_segment(
+        decision,
+        name="cdm_kpc_to_hard",
+        offline_delay_myr=123.0,
+        source_case_id="case-1",
+    )
+    assert segment.status == "censored"
+    assert segment.delay_myr is None
+    assert segment.source_sha256 is not None
+    assert "runtime_required" in segment.reason
+
+
+def test_accepted_decision_materializes_a_provenance_bound_delay() -> None:
+    live, frozen = _tracks()
+    decision = assess_live_frozen_backreaction(
+        model="cdm",
+        live_points=live,
+        frozen_points=frozen,
+        evidence=_evidence(),
+        config=BackreactionGateConfig(),
+    )
+    segment = materialize_backreaction_delay_segment(
+        decision,
+        name="cdm_kpc_to_hard",
+        offline_delay_myr=12.5,
+        source_case_id="case-1",
+    )
+    assert segment.status == "complete"
+    assert segment.delay_myr == pytest.approx(12.5)
+    assert segment.source_case_id == "case-1"
+    assert segment.source_sha256 is not None
+
+
+def test_accepted_decision_requires_a_delay_value() -> None:
+    live, frozen = _tracks()
+    decision = assess_live_frozen_backreaction(
+        model="cdm",
+        live_points=live,
+        frozen_points=frozen,
+        evidence=_evidence(),
+    )
+    with pytest.raises(ValueError, match="requires an offline delay"):
+        materialize_backreaction_delay_segment(
+            decision,
+            name="cdm_kpc_to_hard",
+            offline_delay_myr=None,
+        )

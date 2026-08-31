@@ -692,6 +692,14 @@ live wave wake and an analytic FDM drag are never summed.  For CDM and SIDM the
 same gate tests whether resolved wake/kinetic-energy exchange or scattering
 changes the offline closure; it does not assume that either effect is small.
 
+The non-submitting CLI `scripts/assess_live_frozen_backreaction.py` reads two
+SHA-256-bound measured track files and writes the decision atomically.  A
+candidate delay may be passed to
+`materialize_backreaction_delay_segment` only after an
+`offline_acceptable` decision.  `runtime_required` and `censored` decisions
+discard that candidate and remain explicit censored segments, so a missing
+paired test can never become a zero-delay assumption.
+
 The evaluator compares orbit-averaged `dE_orb/dt`, `dL_orb/dt`, eccentricity,
 and their phase distributions on the positive-width overlap.  Paired
 resolution and phase-replicate runs are mandatory.  A live wake supplies its

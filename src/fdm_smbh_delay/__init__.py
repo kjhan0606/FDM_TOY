@@ -150,11 +150,13 @@ from .outer_inner_handoff import (
     validate_outer_inner_handoff,
 )
 from .backreaction import (
+    BACKREACTION_SCHEMA_VERSION,
     BackreactionDecision,
     BackreactionEvidence,
     BackreactionGateConfig,
     BackreactionTrackPoint,
     assess_live_frozen_backreaction,
+    materialize_backreaction_delay_segment,
 )
 from .fdm_outer_response import FDMOuterResponseTable
 from .pure_fdm_zoom import (
@@ -324,10 +326,12 @@ __all__ = [
     "read_lagramses_namelist_assignment",
     "validate_outer_inner_handoff",
     "BackreactionDecision",
+    "BACKREACTION_SCHEMA_VERSION",
     "BackreactionEvidence",
     "BackreactionGateConfig",
     "BackreactionTrackPoint",
     "assess_live_frozen_backreaction",
+    "materialize_backreaction_delay_segment",
     "verify_mass_projection_source",
     "verify_pure_fdm_seed_matches_capture_sink_pair",
     "register_dm_comparison_capture_ensemble",
