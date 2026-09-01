@@ -7,6 +7,7 @@ from fdm_smbh_delay.binary_evolution import (
     BinaryEvolutionConfig,
     BoundBinaryModel,
     BoundBinaryState,
+    FDMExchangeRates,
     GasMigrationModel,
     StellarHardeningModel,
     UncalibratedBinaryState,
@@ -14,6 +15,7 @@ from fdm_smbh_delay.binary_evolution import (
     binary_rate_budget,
     calibrated_qe_fdm_rate_provider,
     find_gw_transition_pc,
+    gw_dominates_environment,
     integrate_bound_binary,
     legacy_circular_fdm_rate_provider,
     orbital_invariants,
@@ -103,10 +105,12 @@ def test_binary_evolution_stops_at_gw_transition_and_returns_peters_delay() -> N
     assert result.gw_completion_delay_myr is not None
     assert result.gravitational_wave_segment.status == "complete"
     assert result.environment_fdm_segment.status == "complete"
-    assert max(abs(sample.energy_closure_error) for sample in result.samples) < 1.0
     assert max(
-        abs(sample.angular_momentum_closure_error) for sample in result.samples
-    ) < 1.0
+        sample.energy_closure_relative_error for sample in result.samples
+    ) < 1.0e-6
+    assert max(
+        sample.angular_momentum_closure_relative_error for sample in result.samples
+    ) < 1.0e-6
 
 
 def test_binary_resume_matches_uninterrupted_solution() -> None:
@@ -146,6 +150,38 @@ def test_uncalibrated_fdm_state_is_not_silently_extrapolated() -> None:
     assert result.status == "uncalibrated"
     assert result.environment_fdm_segment.status == "censored"
     assert result.environment_fdm_segment.reason == result.reason
+
+
+def test_missing_environment_does_not_trigger_gw_transition() -> None:
+    model = BoundBinaryModel(1.0e8, 1.0e8)
+    rates = binary_rate_budget(model, semimajor_axis_pc=1.0, eccentricity_squared=0.0)
+    assert not rates.environmental_channels_present
+    assert not gw_dominates_environment(rates)
+    result = integrate_bound_binary(
+        initial_state=BoundBinaryState(0.0, 1.0, 0.0),
+        model=model,
+        config=BinaryEvolutionConfig(10.0, 0.1, 1.0e-5),
+    )
+    assert result.status == "censored"
+    assert result.environment_fdm_segment.status == "censored"
+    assert "no environmental channel" in result.reason
+
+
+def test_expanding_environment_is_not_relabelled_as_gw_dominated() -> None:
+    def expanding(_axis: float, _eccentricity: float) -> FDMExchangeRates:
+        return FDMExchangeRates(1.0e-6, 0.0, "expanding-test")
+
+    model = BoundBinaryModel(1.0e8, 1.0e8, fdm_rate_provider=expanding)
+    rates = binary_rate_budget(model, semimajor_axis_pc=1.0, eccentricity_squared=0.0)
+    assert rates.environmental_semimajor_axis_rate_pc_myr > 0.0
+    assert not gw_dominates_environment(rates)
+    result = integrate_bound_binary(
+        initial_state=BoundBinaryState(0.0, 1.0, 0.0),
+        model=model,
+        config=BinaryEvolutionConfig(10.0, 0.1, 1.0e-5),
+    )
+    assert result.status == "stalled"
+    assert result.environment_fdm_segment.status == "censored"
 
 
 def test_legacy_fdm_adapter_rejects_unmeasured_q_and_e() -> None:

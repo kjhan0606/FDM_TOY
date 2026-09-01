@@ -448,6 +448,9 @@ def materialize_backreaction_delay_segment(
     name: str,
     offline_delay_myr: float | None,
     source_case_id: str | None = None,
+    start_separation_pc: float | None = None,
+    end_separation_pc: float | None = None,
+    delay_source_sha256: str | None = None,
 ) -> DelaySegment:
     """Turn a backreaction decision into one censor-preserving delay segment.
 
@@ -473,6 +476,36 @@ def materialize_backreaction_delay_segment(
             raise ValueError(
                 "offline_acceptable backreaction requires an offline delay"
             )
+        if source_case_id is None:
+            raise ValueError(
+                "offline_acceptable backreaction requires source_case_id"
+            )
+        if start_separation_pc is None or end_separation_pc is None:
+            raise ValueError(
+                "offline_acceptable backreaction requires the integrated separation interval"
+            )
+        start = _finite(start_separation_pc, "start_separation_pc", positive=True)
+        end = _finite(end_separation_pc, "end_separation_pc", positive=True)
+        if start < end:
+            raise ValueError(
+                "integrated backreaction interval must run from larger to smaller separation"
+            )
+        if (
+            decision.overlap_low_pc is None
+            or decision.overlap_high_pc is None
+            or end < decision.overlap_low_pc
+            or start > decision.overlap_high_pc
+        ):
+            raise ValueError(
+                "integrated backreaction interval lies outside the measured overlap"
+            )
+        if delay_source_sha256 is None:
+            raise ValueError(
+                "offline_acceptable backreaction requires a hash-bound delay source"
+            )
+        delay_source_sha256 = _sha256(
+            delay_source_sha256, "delay_source_sha256"
+        )
         delay = _finite(offline_delay_myr, "offline_delay_myr")
         if delay < 0.0:
             raise ValueError("offline_delay_myr must be non-negative")
@@ -482,10 +515,11 @@ def materialize_backreaction_delay_segment(
             delay,
             reason=(
                 "paired live/frozen backreaction accepted an offline closure "
-                "over the measured support"
+                f"over measured support [{end:g}, {start:g}] pc; "
+                f"decision={decision_digest}"
             ),
             source_case_id=source_case_id,
-            source_sha256=decision_digest,
+            source_sha256=delay_source_sha256,
         )
 
     reason = (
@@ -500,6 +534,73 @@ def materialize_backreaction_delay_segment(
         reason=reason,
         source_case_id=source_case_id,
         source_sha256=decision_digest,
+    )
+
+
+def read_verified_backreaction_delay_record(
+    path: str | Path, *, decision: BackreactionDecision
+) -> DelaySegment:
+    """Read an integrated delay record bound to one verified decision.
+
+    The record carries the measured start/end separations and a separate
+    upstream integration artifact.  This prevents a scalar delay from being
+    promoted to a global closure, and the overlap check in
+    :func:`materialize_backreaction_delay_segment` prevents extrapolation.
+    """
+
+    source = Path(path).expanduser().resolve()
+    record = _read_json(source, "backreaction delay record")
+    expected = {
+        "schema_version",
+        "status",
+        "name",
+        "model",
+        "decision_sha256",
+        "delay_myr",
+        "start_separation_pc",
+        "end_separation_pc",
+        "source_case_id",
+        "source",
+    }
+    if set(record) != expected:
+        raise ValueError("backreaction delay record fields are invalid")
+    if record["schema_version"] != 1 or record["status"] != "integrated_delay":
+        raise ValueError("backreaction delay record has unsupported schema/status")
+    name = _nonempty(record["name"], "backreaction delay name")
+    model = _nonempty(record["model"], "backreaction delay model")
+    if model != decision.model:
+        raise ValueError("backreaction delay model differs from decision")
+    decision_digest = hashlib.sha256(
+        json.dumps(decision.as_dict(), sort_keys=True, separators=(",", ":"))
+        .encode("utf-8")
+    ).hexdigest()
+    if _sha256(record["decision_sha256"], "decision_sha256") != decision_digest:
+        raise ValueError("backreaction delay decision identity differs")
+    source_record = record["source"]
+    if not isinstance(source_record, Mapping) or set(source_record) != {"path", "sha256"}:
+        raise ValueError("backreaction delay source fields are invalid")
+    source_path = Path(_nonempty(source_record["path"], "delay source path")).expanduser()
+    source_path = (
+        source_path if source_path.is_absolute() else source.parent / source_path
+    ).resolve()
+    declared_source_sha = _sha256(source_record["sha256"], "delay source SHA-256")
+    try:
+        actual_source_sha = _file_sha256(source_path)
+    except OSError as error:
+        raise ValueError(f"cannot read backreaction delay source: {error}") from error
+    if actual_source_sha != declared_source_sha:
+        raise ValueError("backreaction delay source SHA-256 differs")
+    delay = _finite(record["delay_myr"], "delay_myr")
+    if delay < 0.0:
+        raise ValueError("delay_myr must be non-negative")
+    return materialize_backreaction_delay_segment(
+        decision,
+        name=name,
+        offline_delay_myr=delay,
+        source_case_id=_nonempty(record["source_case_id"], "source_case_id"),
+        start_separation_pc=record["start_separation_pc"],
+        end_separation_pc=record["end_separation_pc"],
+        delay_source_sha256=declared_source_sha,
     )
 
 

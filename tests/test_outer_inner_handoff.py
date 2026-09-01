@@ -95,3 +95,18 @@ def test_handoff_rejects_force_sign_change() -> None:
     )
     assert decision.status == "censored"
     assert "orbital power changes sign across handoff" in decision.reasons
+
+
+def test_handoff_censors_zero_exchange_instead_of_accepting_agreement() -> None:
+    zero_points = tuple(
+        HandoffRatePoint(separation, 0.0, 0.0, 0.2)
+        for separation in (10.0, 20.0, 40.0, 80.0)
+    )
+    decision = validate_outer_inner_handoff(
+        outer_points=zero_points,
+        inner_points=zero_points,
+        outer_similarity=_similarity(),
+        inner_similarity=_similarity(),
+    )
+    assert decision.status == "censored"
+    assert "unresolved" in decision.reasons[-1]

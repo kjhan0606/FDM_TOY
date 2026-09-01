@@ -261,6 +261,7 @@ class BinaryRateBudget:
     gw: ChannelRates
     total_semimajor_axis_rate_pc_myr: float
     total_eccentricity_squared_rate_per_myr: float
+    environmental_channels_present: bool = False
 
     @property
     def environmental_semimajor_axis_rate_pc_myr(self) -> float:
@@ -359,6 +360,24 @@ class BinaryEvolutionSample:
     angular_momentum_closure_error: float
     rates: BinaryRateBudget
 
+    @property
+    def energy_closure_relative_error(self) -> float:
+        """Dimensionless closure residual relative to the orbital energy."""
+
+        return float(
+            abs(self.energy_closure_error)
+            / max(abs(self.orbital_energy), np.finfo(float).tiny)
+        )
+
+    @property
+    def angular_momentum_closure_relative_error(self) -> float:
+        """Dimensionless closure residual relative to orbital angular momentum."""
+
+        return float(
+            abs(self.angular_momentum_closure_error)
+            / max(abs(self.orbital_angular_momentum), np.finfo(float).tiny)
+        )
+
 
 @dataclass(frozen=True)
 class BinaryEvolutionResult:
@@ -374,10 +393,18 @@ class BinaryEvolutionResult:
             return DelaySegment(
                 "environment_fdm_to_gw", "complete", self.final_state.elapsed_myr
             )
-        if self.status in {"timeout", "stalled"}:
+        if self.status == "timeout":
             return DelaySegment(
                 "environment_fdm_to_gw",
                 "timeout",
+                None,
+                elapsed_lower_bound_myr=self.final_state.elapsed_myr,
+                reason=self.reason,
+            )
+        if self.status == "stalled":
+            return DelaySegment(
+                "environment_fdm_to_gw",
+                "censored",
                 None,
                 elapsed_lower_bound_myr=self.final_state.elapsed_myr,
                 reason=self.reason,
@@ -391,6 +418,14 @@ class BinaryEvolutionResult:
                 reason=self.reason,
             )
         if self.status == "uncalibrated":
+            return DelaySegment(
+                "environment_fdm_to_gw",
+                "censored",
+                None,
+                elapsed_lower_bound_myr=self.final_state.elapsed_myr,
+                reason=self.reason,
+            )
+        if self.status == "censored":
             return DelaySegment(
                 "environment_fdm_to_gw",
                 "censored",
@@ -553,14 +588,28 @@ def binary_rate_budget(
         total_eccentricity_squared_rate_per_myr=float(
             sum(rate.eccentricity_squared_rate_per_myr for rate in channels)
         ),
+        environmental_channels_present=any(
+            channel is not None
+            for channel in (model.stellar, model.gas, model.fdm_rate_provider)
+        ),
     )
 
 
 def gw_dominates_environment(rates: BinaryRateBudget) -> bool:
-    environmental_shrinkage = max(
-        -rates.environmental_semimajor_axis_rate_pc_myr, 0.0
-    )
-    return bool(-rates.gw.semimajor_axis_rate_pc_myr >= environmental_shrinkage)
+    """Return true only when a resolved, shrinking environment is overtaken.
+
+    A missing environment or a non-shrinking/expanding environmental rate is
+    not evidence that the GW regime has begun.  Treating either case as a
+    zero environmental rate would silently turn missing physics into a GW-only
+    completion.
+    """
+
+    if not rates.environmental_channels_present:
+        return False
+    environmental_rate = rates.environmental_semimajor_axis_rate_pc_myr
+    if not np.isfinite(environmental_rate) or environmental_rate >= 0.0:
+        return False
+    return bool(-rates.gw.semimajor_axis_rate_pc_myr >= -environmental_rate)
 
 
 def find_gw_transition_pc(
@@ -639,31 +688,6 @@ def _sample(
     )
 
 
-def _derivative(
-    model: BoundBinaryModel, semimajor_axis_pc: float, eccentricity_squared: float
-) -> tuple[float, float]:
-    rates = binary_rate_budget(
-        model,
-        semimajor_axis_pc=semimajor_axis_pc,
-        eccentricity_squared=eccentricity_squared,
-    )
-    return (
-        rates.total_semimajor_axis_rate_pc_myr,
-        rates.total_eccentricity_squared_rate_per_myr,
-    )
-
-
-def _allocate_exact_exchange(
-    total_orbital_change: float, channel_rates: np.ndarray
-) -> np.ndarray:
-    total_rate = float(np.sum(channel_rates))
-    if abs(total_rate) <= np.finfo(float).tiny:
-        if abs(total_orbital_change) <= np.finfo(float).eps:
-            return np.zeros(4)
-        raise ValueError("finite orbital change has no conjugate channel rate")
-    return -total_orbital_change * channel_rates / total_rate
-
-
 def advance_bound_binary_rk4(
     state: BoundBinaryState,
     model: BoundBinaryModel,
@@ -673,40 +697,66 @@ def advance_bound_binary_rk4(
         raise ValueError("binary time step must be finite and positive")
     a0 = state.semimajor_axis_pc
     y0 = state.eccentricity_squared
-    k1a, k1y = _derivative(model, a0, y0)
-    k2a, k2y = _derivative(
-        model, a0 + 0.5 * time_step_myr * k1a, y0 + 0.5 * time_step_myr * k1y
+    rates1 = binary_rate_budget(
+        model, semimajor_axis_pc=a0, eccentricity_squared=y0
     )
-    k3a, k3y = _derivative(
-        model, a0 + 0.5 * time_step_myr * k2a, y0 + 0.5 * time_step_myr * k2y
+    k1a = rates1.total_semimajor_axis_rate_pc_myr
+    k1y = rates1.total_eccentricity_squared_rate_per_myr
+    rates2 = binary_rate_budget(
+        model,
+        semimajor_axis_pc=a0 + 0.5 * time_step_myr * k1a,
+        eccentricity_squared=y0 + 0.5 * time_step_myr * k1y,
     )
-    k4a, k4y = _derivative(
-        model, a0 + time_step_myr * k3a, y0 + time_step_myr * k3y
+    k2a = rates2.total_semimajor_axis_rate_pc_myr
+    k2y = rates2.total_eccentricity_squared_rate_per_myr
+    rates3 = binary_rate_budget(
+        model,
+        semimajor_axis_pc=a0 + 0.5 * time_step_myr * k2a,
+        eccentricity_squared=y0 + 0.5 * time_step_myr * k2y,
     )
+    k3a = rates3.total_semimajor_axis_rate_pc_myr
+    k3y = rates3.total_eccentricity_squared_rate_per_myr
+    rates4 = binary_rate_budget(
+        model,
+        semimajor_axis_pc=a0 + time_step_myr * k3a,
+        eccentricity_squared=y0 + time_step_myr * k3y,
+    )
+    k4a = rates4.total_semimajor_axis_rate_pc_myr
+    k4y = rates4.total_eccentricity_squared_rate_per_myr
     final_axis = a0 + time_step_myr * (k1a + 2.0 * k2a + 2.0 * k3a + k4a) / 6.0
     final_e2 = y0 + time_step_myr * (k1y + 2.0 * k2y + 2.0 * k3y + k4y) / 6.0
     if final_axis <= 0.0 or not 0.0 <= final_e2 < 1.0:
         raise ValueError("finite binary step left the bound-orbit domain")
 
-    initial_energy, initial_angular_momentum = orbital_invariants(model, a0, y0)
-    final_energy, final_angular_momentum = orbital_invariants(
-        model, final_axis, final_e2
-    )
-    midpoint_rates = binary_rate_budget(
-        model,
-        semimajor_axis_pc=0.5 * (a0 + final_axis),
-        eccentricity_squared=0.5 * (y0 + final_e2),
-    )
+    stage_rates = (rates1, rates2, rates3, rates4)
     powers = np.asarray(
-        [midpoint_rates.channel(name).orbital_power_msun_pc2_myr3 for name in CHANNELS]
+        [
+            time_step_myr
+            * sum(
+                weight * rate.channel(name).orbital_power_msun_pc2_myr3
+                for weight, rate in zip((1.0, 2.0, 2.0, 1.0), stage_rates)
+            )
+            / 6.0
+            for name in CHANNELS
+        ]
     )
     torques = np.asarray(
-        [midpoint_rates.channel(name).orbital_torque_msun_pc2_myr2 for name in CHANNELS]
+        [
+            time_step_myr
+            * sum(
+                weight * rate.channel(name).orbital_torque_msun_pc2_myr2
+                for weight, rate in zip((1.0, 2.0, 2.0, 1.0), stage_rates)
+            )
+            / 6.0
+            for name in CHANNELS
+        ]
     )
-    energy_increment = _allocate_exact_exchange(final_energy - initial_energy, powers)
-    angular_increment = _allocate_exact_exchange(
-        final_angular_momentum - initial_angular_momentum, torques
-    )
+    # ``power`` and ``torque`` are orbital dE/dt and dL/dt.  The reservoirs
+    # therefore receive their negatives.  RK4 quadrature is independent of
+    # the final element difference, so the reported closure is diagnostic
+    # rather than exact by construction.
+    energy_increment = -powers
+    angular_increment = -torques
     return BoundBinaryState(
         elapsed_myr=state.elapsed_myr + time_step_myr,
         semimajor_axis_pc=float(final_axis),
@@ -812,6 +862,39 @@ def integrate_bound_binary(
                 state,
                 tuple(samples),
                 str(error),
+                None,
+            )
+        if not rates.environmental_channels_present:
+            return BinaryEvolutionResult(
+                "censored",
+                state,
+                _samples_with_final(
+                    samples,
+                    state,
+                    model,
+                    reference_energy_total,
+                    reference_angular_momentum_total,
+                ),
+                "no environmental channel is available for the binary stage",
+                None,
+            )
+        if rates.environmental_semimajor_axis_rate_pc_myr >= 0.0:
+            status = (
+                "stalled"
+                if rates.environmental_semimajor_axis_rate_pc_myr > 0.0
+                else "censored"
+            )
+            return BinaryEvolutionResult(
+                status,
+                state,
+                _samples_with_final(
+                    samples,
+                    state,
+                    model,
+                    reference_energy_total,
+                    reference_angular_momentum_total,
+                ),
+                "environmental channels are not shrinking the binary",
                 None,
             )
         if state.semimajor_axis_pc <= config.target_semimajor_axis_pc:

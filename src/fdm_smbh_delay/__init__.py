@@ -149,6 +149,8 @@ from .outer_inner_handoff import (
     HandoffSimilarityState,
     validate_outer_inner_handoff,
 )
+from .delay_budget import read_verified_delay_segment_record
+from .pta_delay import compose_verified_pta_delay
 from .backreaction import (
     BACKREACTION_SCHEMA_VERSION,
     BackreactionDecision,
@@ -160,6 +162,7 @@ from .backreaction import (
     materialize_backreaction_delay_segment,
     read_backreaction_manifest,
     read_backreaction_track,
+    read_verified_backreaction_delay_record,
     read_verified_backreaction_decision,
 )
 from .fdm_outer_response import FDMOuterResponseTable
@@ -340,6 +343,9 @@ __all__ = [
     "read_backreaction_manifest",
     "read_backreaction_track",
     "read_verified_backreaction_decision",
+    "read_verified_backreaction_delay_record",
+    "read_verified_delay_segment_record",
+    "compose_verified_pta_delay",
     "verify_mass_projection_source",
     "verify_pure_fdm_seed_matches_capture_sink_pair",
     "register_dm_comparison_capture_ensemble",

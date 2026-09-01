@@ -696,12 +696,20 @@ The non-submitting CLI `scripts/assess_live_frozen_backreaction.py` reads two
 SHA-256-bound measured track files and writes the decision atomically.  A
 candidate delay may be passed to
 `materialize_backreaction_delay_segment` only after an
-`offline_acceptable` decision.  `runtime_required` and `censored` decisions
-discard that candidate and remain explicit censored segments, so a missing
-paired test can never become a zero-delay assumption.
+`offline_acceptable` decision, with a hash-bound integrated-delay artifact and
+both endpoints inside the measured overlap.  `runtime_required` and
+`censored` decisions discard that candidate and remain explicit censored
+segments, so a missing paired test can never become a zero-delay assumption or
+an extrapolation to an unmeasured separation.
 The saved result is not trusted by itself: `read_verified_backreaction_decision`
 re-reads the input manifest and both current track files, re-hashes them, and
 recomputes the decision before a downstream consumer may use it.
+
+The end-to-end `scripts/compute_pta_delay.py` driver is the downstream
+consumer.  It requires the verified decision, the overlap-bound integrated
+kpc record, the accepted 1 pc to 0.01 pc FDM summary, and a hash-bound Peters
+record before composing a PTA-facing delay.  It writes a censored result and
+returns a non-zero status whenever any interval is not complete.
 
 The evaluator compares orbit-averaged `dE_orb/dt`, `dL_orb/dt`, eccentricity,
 and their phase distributions on the positive-width overlap.  Paired

@@ -26,6 +26,7 @@ gpu = ["numba>=0.60", "torch>=2.8"]
 fdm-smbh-delay = "fdm_smbh_delay.cli:main"
 fdm-smbh-compose = "fdm_smbh_delay.true_time_cli:main"
 cdm-smbh-compose = "fdm_smbh_delay.cdm_true_time_cli:main"
+fdm-pta-delay = "fdm_smbh_delay.pta_delay_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

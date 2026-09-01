@@ -78,18 +78,25 @@ live-wave parameter grid, and first PyUL_NBody resolution tests are documented
 in [`docs/merge_calibration.md`](docs/merge_calibration.md). These tools leave
 the separate lagRamses working tree unchanged.
 
-To combine a sink time with all three physical intervals, use:
+To combine a sink time with the three physical intervals, use only verified
+records:
 
 ```bash
-fdm-smbh-compose \
+fdm-pta-delay \
   --z-sink 1.0 \
+  --backreaction-decision results/case/backreaction_decision.json \
+  --backreaction-delay-record results/case/kpc_to_pc_delay.json \
   --fdm-summary results/case/summary.json \
-  --kpc-to-pc-delay "100 Myr" \
-  --gw-delay "3 Myr"
+  --gw-record results/case/gravitational_wave_delay.json
 ```
 
 The command returns no `true_merge_time_myr` if an interval is missing,
-invalid, or censored. Missing physics is never interpreted as zero delay.
+invalid, or censored, and exits with status 2 for a non-complete estimate.
+Missing physics is never interpreted as zero delay. A bare `--kpc-to-pc-delay`
+or `--gw-delay` value is retained only as an explicit censored/operator-asserted
+record; it can never create a complete physical estimate. The kpc delay record
+must be bound to a verified live/frozen decision and its integrated separation
+interval must lie inside that decision's measured overlap.
 `uncalibrated`, `outside-support`, and `stalled` FDM summaries are composed as
 explicitly censored intervals, distinct from absent inputs. The JSON result
 lists both `missing_segments` and `censored_segments`; its additive `segments`

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import math
+from pathlib import Path
 import re
+from typing import Any
 
 from astropy import units as u
 from astropy.cosmology import FlatLambdaCDM
@@ -67,6 +70,52 @@ class DelaySegment:
             or re.fullmatch(r"[0-9a-fA-F]{64}", self.source_sha256) is None
         ):
             raise ValueError("source_sha256 must be exactly 64 hexadecimal characters")
+
+
+_DELAY_RECORD_FIELDS = {
+    "name",
+    "status",
+    "delay_myr",
+    "elapsed_lower_bound_myr",
+    "reason",
+    "source_case_id",
+    "source_sha256",
+}
+
+
+def read_verified_delay_segment_record(
+    path: str | Path, *, expected_name: str
+) -> DelaySegment:
+    """Read one serialized delay segment without accepting a hand-typed delay.
+
+    Completed records must carry both a case identifier and a SHA-256 digest.
+    The digest is an upstream evidence identity; this reader deliberately does
+    not infer a physical interval from a bare number supplied on a command
+    line.  Non-complete records remain useful as explicit censoring evidence.
+    """
+
+    expected_name = expected_name.strip()
+    if not expected_name:
+        raise ValueError("expected delay segment name must be non-empty")
+    source = Path(path).expanduser().resolve()
+    try:
+        record: Any = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"cannot read delay segment record: {error}") from error
+    if not isinstance(record, dict) or set(record) != _DELAY_RECORD_FIELDS:
+        raise ValueError("delay segment record fields are invalid")
+    if record.get("name") != expected_name:
+        raise ValueError("delay segment record name differs from requested interval")
+    try:
+        segment = DelaySegment(**record)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"delay segment record is invalid: {error}") from error
+    if segment.status == "complete":
+        if segment.source_case_id is None or segment.source_sha256 is None:
+            raise ValueError(
+                "completed delay segment records require source_case_id and source_sha256"
+            )
+    return segment
 
 
 @dataclass(frozen=True)

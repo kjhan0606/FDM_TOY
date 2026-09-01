@@ -211,10 +211,30 @@ def validate_outer_inner_handoff(
     if len(pairs) < config.minimum_overlap_points:
         reasons.append("overlap has too few matched rate points")
 
+    all_power = [
+        abs(point.orbital_power_pc2_myr3) for point in outer_points + inner_points
+    ]
+    all_torque = [
+        abs(point.orbital_torque_msun_pc2_myr)
+        for point in outer_points + inner_points
+    ]
+    power_floor = max(max(all_power, default=0.0), np.finfo(float).tiny) * config.rate_floor_fraction
+    torque_floor = max(max(all_torque, default=0.0), np.finfo(float).tiny) * config.rate_floor_fraction
     power_differences: list[float] = []
     torque_differences: list[float] = []
     eccentricity_differences: list[float] = []
+    unresolved = False
     for outer, inner in pairs:
+        if (
+            abs(outer.orbital_power_pc2_myr3) <= power_floor
+            or abs(inner.orbital_power_pc2_myr3) <= power_floor
+        ):
+            unresolved = True
+        if (
+            abs(outer.orbital_torque_msun_pc2_myr) <= torque_floor
+            or abs(inner.orbital_torque_msun_pc2_myr) <= torque_floor
+        ):
+            unresolved = True
         if np.sign(outer.orbital_power_pc2_myr3) != np.sign(inner.orbital_power_pc2_myr3):
             reasons.append("orbital power changes sign across handoff")
         if np.sign(outer.orbital_torque_msun_pc2_myr) != np.sign(inner.orbital_torque_msun_pc2_myr):
@@ -223,19 +243,20 @@ def validate_outer_inner_handoff(
             _fractional_difference(
                 outer.orbital_power_pc2_myr3,
                 inner.orbital_power_pc2_myr3,
-                config.rate_floor_fraction
-                * max(abs(outer.orbital_power_pc2_myr3), abs(inner.orbital_power_pc2_myr3), 1.0),
+                power_floor,
             )
         )
         torque_differences.append(
             _fractional_difference(
                 outer.orbital_torque_msun_pc2_myr,
                 inner.orbital_torque_msun_pc2_myr,
-                config.rate_floor_fraction
-                * max(abs(outer.orbital_torque_msun_pc2_myr), abs(inner.orbital_torque_msun_pc2_myr), 1.0),
+                torque_floor,
             )
         )
         eccentricity_differences.append(abs(outer.eccentricity - inner.eccentricity))
+
+    if unresolved:
+        reasons.append("one or more paired power/torque rates are unresolved")
 
     maximum_power = max(power_differences, default=None)
     maximum_torque = max(torque_differences, default=None)

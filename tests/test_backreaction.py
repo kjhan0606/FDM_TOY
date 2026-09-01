@@ -238,11 +238,34 @@ def test_accepted_decision_materializes_a_provenance_bound_delay() -> None:
         name="cdm_kpc_to_hard",
         offline_delay_myr=12.5,
         source_case_id="case-1",
+        start_separation_pc=8.0,
+        end_separation_pc=1.0,
+        delay_source_sha256=_sha("integrated-delay"),
     )
     assert segment.status == "complete"
     assert segment.delay_myr == pytest.approx(12.5)
     assert segment.source_case_id == "case-1"
     assert segment.source_sha256 is not None
+
+
+def test_accepted_decision_rejects_delay_outside_measured_overlap() -> None:
+    live, frozen = _tracks()
+    decision = assess_live_frozen_backreaction(
+        model="cdm",
+        live_points=live,
+        frozen_points=frozen,
+        evidence=_evidence(),
+    )
+    with pytest.raises(ValueError, match="outside the measured overlap"):
+        materialize_backreaction_delay_segment(
+            decision,
+            name="cdm_kpc_to_hard",
+            offline_delay_myr=12.5,
+            source_case_id="case-1",
+            start_separation_pc=20.0,
+            end_separation_pc=1.0,
+            delay_source_sha256=_sha("integrated-delay"),
+        )
 
 
 def test_accepted_decision_requires_a_delay_value() -> None:
