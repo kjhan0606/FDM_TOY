@@ -102,9 +102,21 @@ ledger hashes, or `absent`, with no invented zero-valued ledger.  Positive
 stellar mass or gas fraction requires the respective channel to be available.
 The model evidence is then distinct:
 
-- CDM uses only the accepted profile/force/conservation evidence;
+- CDM uses only the accepted profile/force/conservation evidence and must
+  declare `force_accounting: resolved_collisionless_only` in its runtime
+  sidecar.  The current checked-out lagRamses writer does not yet emit this
+  CDM/SIDM token, so its outputs remain ineligible until an explicitly
+  authorized writer patch and rebuild provide the runtime-derived value;
 - SIDM additionally preserves the accepted scattering ledger and measured
-  maximum scatter probability;
+  maximum scatter probability.  The current conservative production gate is
+  `sidm_max_scatter_probability <= 0.10`, with
+  `force_accounting: resolved_collisionless_plus_scattering`; a larger or
+  missing value remains censored rather than being treated as a resolved
+  secular rate.  The present lagRamses normal-output sidecar reports only the
+  latest output-local scatter maximum, while the cumulative scattering ledger
+  is still unavailable.  Therefore this scalar is not yet a scientific
+  cumulative-production gate: SIDM rates remain censored until the writer
+  emits and the consumer validates a cumulative scatter history;
 - FDM additionally preserves a full, time-resolved wave ledger, its separate
   one-output raw wave-provenance record, and the field-snapshot index.  The
   full ledger is cross-checked against the registered force, profile, and

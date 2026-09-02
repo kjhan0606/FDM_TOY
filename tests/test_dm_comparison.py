@@ -130,6 +130,7 @@ def _provenance_records(model: str) -> dict[str, str]:
     }
     if model == "cdm":
         records["dm_transport"] = "collisionless_nbody"
+        records["force_accounting"] = "resolved_collisionless_only"
     elif model == "sidm":
         records.update(
             {
@@ -140,6 +141,7 @@ def _provenance_records(model: str) -> dict[str, str]:
                 "sidm_angular": "isotropic",
                 "sidm_inelastic": ".false.",
                 "sidm_max_scatter_probability": "1.0d-2",
+                "force_accounting": "resolved_collisionless_plus_scattering",
             }
         )
     else:

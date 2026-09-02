@@ -185,6 +185,7 @@ def _write_ready_inventory_assessment(
     model: str,
     *,
     model_zoom_identity: dict[str, str],
+    cdm_execution_identity: dict[str, str] | None = None,
 ) -> tuple[Path, dict[str, Path]]:
     """Create a v2 inventory fixture with real, hash-bound ledger files."""
 
@@ -331,7 +332,22 @@ def _write_ready_inventory_assessment(
         f"model_zoom_sink_initial_conditions_sha256 = {model_zoom_identity['sink_initial_conditions_sha256']}\n"
     )
     if model == "cdm":
-        common += "dm_transport = collisionless_nbody\n"
+        common += (
+            "dm_transport = collisionless_nbody\n"
+            "force_accounting = resolved_collisionless_only\n"
+            "smbh_merge_radius_cells = 0.0d0\n"
+            "smbh_compaction_mode = no_finite_radius_rmerge_zero\n"
+        )
+        if cdm_execution_identity is not None:
+            common += "cdm_zoom_execution_identity_status = available\n"
+            cdm_execution_identity = {
+                **cdm_execution_identity,
+                "cdm_zoom_capture_event_sha256": capture_event_sha256,
+            }
+            common += "".join(
+                f"{name} = {value}\n"
+                for name, value in sorted(cdm_execution_identity.items())
+            )
     elif model == "sidm":
         common += (
             "sidm_cross_section_cm2_g = 1.0d0\n"
@@ -340,7 +356,8 @@ def _write_ready_inventory_assessment(
             "sidm_power = -4.0d0\n"
             "sidm_angular = isotropic\n"
             "sidm_inelastic = .false.\n"
-            "sidm_max_scatter_probability = 1.0d-2\n"
+            "sidm_max_scatter_probability = 2.0d-2\n"
+            "force_accounting = resolved_collisionless_plus_scattering\n"
         )
     else:
         common += (
@@ -374,6 +391,9 @@ def _physics_input(
             "path": str(path.relative_to(tmp_path)),
             "sha256": _sha256(path),
         }
+    host_orbit_path = tmp_path / "shared" / "host_orbit_initial_conditions.dat"
+    host_orbit_path.write_text("host orbit initial conditions\n", encoding="utf-8")
+    host_orbit_sha256 = _sha256(host_orbit_path)
     artifact_names = {
         "cdm": ("environment_profile", "force_ledger", "conservation_ledger"),
         "sidm": (
@@ -424,6 +444,20 @@ def _physics_input(
                 ],
                 "sink_initial_conditions_sha256": shared_inputs["smbh_seed_catalog"]["sha256"],
             },
+            cdm_execution_identity=(
+                {
+                    "cdm_zoom_plan_manifest_sha256": manifest_sha256,
+                    "cdm_zoom_host_orbit_initial_conditions_sha256": host_orbit_sha256,
+                    "cdm_zoom_initial_conditions_sha256": shared_inputs["initial_conditions"][
+                        "sha256"
+                    ],
+                    "cdm_zoom_sink_initial_conditions_sha256": shared_inputs[
+                        "smbh_seed_catalog"
+                    ]["sha256"],
+                }
+                if model == "cdm"
+                else None
+            ),
         )
         inventory_assessments[model] = {
             "path": str(assessment_path.relative_to(tmp_path)),
@@ -550,9 +584,21 @@ def _result_record(
     artifacts: dict[str, str],
     power_factor: float = 1.0,
     force_accounting: str = "live_wave_only",
+    runtime_identity_path: Path | None = None,
 ) -> dict[str, object]:
     model = case.physics.dark_matter_model
-    evidence: dict[str, object] = {"artifact_sha256s": artifacts}
+    if model == "cdm":
+        evidence: dict[str, object] = {
+            "artifact_sha256s": artifacts,
+            "force_accounting": "resolved_collisionless_only",
+        }
+    elif model == "sidm":
+        evidence = {
+            "artifact_sha256s": artifacts,
+            "force_accounting": "resolved_collisionless_plus_scattering",
+        }
+    else:
+        evidence = {"artifact_sha256s": artifacts}
     if model == "sidm":
         evidence["maximum_scatter_probability"] = 0.02
     elif model == "fdm":
@@ -561,13 +607,29 @@ def _result_record(
             minimum_de_broglie_resolution_cells=8.0,
             minimum_wake_resolution_cells=8.0,
         )
+    if runtime_identity_path is None:
+        runtime_identity_path = physics_input.parent / (
+            f"runtime_identity_{model}_r{case.replicate}_l{case.numerics.levelmax}.json"
+        )
+        _write_json(
+            runtime_identity_path,
+            {
+                "schema_version": 1,
+                "status": "test_runtime_identity_artifact",
+                "case_id": case.case_id,
+            },
+        )
     result: dict[str, object] = {
-        "schema_version": 3,
+        "schema_version": 5,
         "status": "complete",
         "case_id": case.case_id,
         "case": case.as_dict(),
         "dark_matter_model": model,
         "zoom_manifest_sha256": manifest_sha256,
+        "runtime_identity": {
+            "path": str(runtime_identity_path.resolve()),
+            "sha256": _sha256(runtime_identity_path),
+        },
         "capture_event_uid": "capture-7-9",
         "physics_input_path": str(physics_input),
         "physics_input_sha256": _sha256(physics_input),
@@ -611,7 +673,7 @@ def _result_record(
         f"{model}-r{case.replicate}-l{case.numerics.levelmax}.json"
     )
     rate_ledger = {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "diagnosed",
         "case_id": result["case_id"],
         "case": result["case"],
@@ -627,7 +689,7 @@ def _result_record(
         "model_evidence": result["model_evidence"],
     }
     _write_json(rate_ledger_path, rate_ledger)
-    result["schema_version"] = 3
+    result["schema_version"] = 5
     result["rate_ledger_path"] = str(rate_ledger_path)
     result["rate_ledger_sha256"] = _sha256(rate_ledger_path)
     return result

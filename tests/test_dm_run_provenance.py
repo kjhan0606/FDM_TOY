@@ -112,6 +112,7 @@ def _records(model: str, *, nstep: int = 12, ledger_name: str = "smbh_capture_le
     }
     if model == "cdm":
         records["dm_transport"] = "collisionless_nbody"
+        records["force_accounting"] = "resolved_collisionless_only"
     elif model == "sidm":
         records.update(
             {
@@ -122,6 +123,7 @@ def _records(model: str, *, nstep: int = 12, ledger_name: str = "smbh_capture_le
                 "sidm_angular": "isotropic",
                 "sidm_inelastic": ".false.",
                 "sidm_max_scatter_probability": "1.0d-2",
+                "force_accounting": "resolved_collisionless_plus_scattering",
             }
         )
     elif model == "fdm":
@@ -178,6 +180,29 @@ def test_reads_each_dark_matter_realization_without_mixing_models(tmp_path: Path
         assert provenance.parameter("fdm_force_accounting") == "resolved_wave_only"
     if model == "sidm":
         assert provenance.parameter("sidm_cross_section_cm2_g") == pytest.approx(1.0)
+
+
+def test_cdm_force_accounting_is_explicitly_required(tmp_path: Path) -> None:
+    records = _records("cdm")
+    del records["force_accounting"]
+    path = tmp_path / "cdm.txt"
+    _write_provenance(path, records)
+    with pytest.raises(ValueError, match="CDM run-provenance flags are inconsistent"):
+        read_dark_matter_run_provenance(path)
+
+    records["force_accounting"] = "analytic_drag"
+    _write_provenance(path, records)
+    with pytest.raises(ValueError, match="CDM run-provenance flags are inconsistent"):
+        read_dark_matter_run_provenance(path)
+
+
+def test_sidm_scatter_probability_gate_is_fail_closed(tmp_path: Path) -> None:
+    records = _records("sidm")
+    records["sidm_max_scatter_probability"] = "1.01d-1"
+    path = tmp_path / "sidm.txt"
+    _write_provenance(path, records)
+    with pytest.raises(ValueError, match="exceeds the conservative 0.1 gate"):
+        read_dark_matter_run_provenance(path)
 
 
 def test_reads_complete_cdm_zoom_execution_identity_only_for_cdm(tmp_path: Path) -> None:

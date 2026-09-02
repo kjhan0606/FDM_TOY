@@ -16,6 +16,15 @@ DM_RUN_PROVENANCE_MAGIC = "# dm_run_provenance_v1"
 _MODELS = {"cdm", "sidm", "fdm", "none"}
 _SHA256 = re.compile(r"[0-9a-fA-F]{64}")
 
+# These are execution-side tokens, not fitted physical coefficients.  They
+# state which resolved source supplied the environmental force in the output.
+# A missing or different token must keep a model result out of the delay path;
+# in particular, an analytic drag term must not be silently added to a live
+# particle/wave force.
+CDM_FORCE_ACCOUNTING = "resolved_collisionless_only"
+SIDM_FORCE_ACCOUNTING = "resolved_collisionless_plus_scattering"
+SIDM_MAX_SCATTER_PROBABILITY_GATE = 0.10
+
 
 def _file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -225,20 +234,39 @@ def read_dark_matter_run_provenance(path: str | Path) -> DarkMatterRunProvenance
     elif present_execution_identity:
         raise ValueError("CDM zoom execution-identity digests require a status")
     if model == "cdm":
-        if not pic or sidm or fdm or records.get("dm_transport") != "collisionless_nbody":
+        if (
+            not pic
+            or sidm
+            or fdm
+            or records.get("dm_transport") != "collisionless_nbody"
+            or records.get("force_accounting") != CDM_FORCE_ACCOUNTING
+        ):
             raise ValueError("CDM run-provenance flags are inconsistent")
         parameters["dm_transport"] = "collisionless_nbody"
+        parameters["force_accounting"] = CDM_FORCE_ACCOUNTING
     elif model == "sidm":
         if not pic or not sidm or fdm:
             raise ValueError("SIDM run-provenance flags are inconsistent")
+        if records.get("force_accounting") != SIDM_FORCE_ACCOUNTING:
+            raise ValueError(
+                "SIDM run-provenance force_accounting must be "
+                f"{SIDM_FORCE_ACCOUNTING}"
+            )
         for key in ("sidm_cross_section_cm2_g", "sidm_v0_km_s", "sidm_power"):
             parameters[key] = _number(records, key, positive=key == "sidm_cross_section_cm2_g")
         for key in ("sidm_type", "sidm_angular"):
             parameters[key] = _required(records, key)
         parameters["sidm_inelastic"] = _logical(records, "sidm_inelastic")
-        parameters["sidm_max_scatter_probability"] = _number(
+        scatter_probability = _number(
             records, "sidm_max_scatter_probability", nonnegative=True
         )
+        if scatter_probability > SIDM_MAX_SCATTER_PROBABILITY_GATE:
+            raise ValueError(
+                "sidm_max_scatter_probability exceeds the conservative "
+                f"{SIDM_MAX_SCATTER_PROBABILITY_GATE:g} gate"
+            )
+        parameters["sidm_max_scatter_probability"] = scatter_probability
+        parameters["force_accounting"] = SIDM_FORCE_ACCOUNTING
     elif model == "fdm":
         if sidm or not fdm or records.get("fdm_force_accounting") != "resolved_wave_only":
             raise ValueError("FDM run-provenance flags or force accounting are inconsistent")

@@ -63,7 +63,12 @@ def main() -> int:
         for fine, coarse in args.pair
     )
     assessment = assess_model_specific_phase_ensemble(members)
-    record = assessment.as_dict()
+    # Keep the specification itself in the cache.  The manifest digest binds
+    # the case list, while this path/digest pair lets downstream consumers
+    # re-read the current YAML and reject a stale or self-declared manifest.
+    record = assessment.as_dict(
+        zoom_specification_path=args.specification.expanduser().resolve()
+    )
     _write_json_atomic(args.output.expanduser().resolve(), record)
     print(json.dumps(record, indent=2, sort_keys=True))
     return 0 if assessment.ready_for_separate_model_interpretation else 2

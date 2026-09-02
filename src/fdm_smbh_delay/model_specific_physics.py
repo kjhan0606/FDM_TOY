@@ -23,7 +23,13 @@ from .dm_comparison import (
     read_verified_dm_comparison_capture_ensemble,
     read_dm_comparison_physics_input,
 )
-from .dm_run_provenance import DarkMatterRunProvenance, read_dark_matter_run_provenance
+from .dm_run_provenance import (
+    CDM_FORCE_ACCOUNTING,
+    SIDM_FORCE_ACCOUNTING,
+    SIDM_MAX_SCATTER_PROBABILITY_GATE,
+    DarkMatterRunProvenance,
+    read_dark_matter_run_provenance,
+)
 from .outer_inner_handoff import HandoffRatePoint
 from .resolved_physics_inventory import (
     ResolvedPhysicsInventoryAssessment,
@@ -32,12 +38,17 @@ from .resolved_physics_inventory import (
 from .zoom_calibration import GalaxyMergerZoomCase
 
 
-MODEL_SPECIFIC_PHYSICS_RESULT_SCHEMA_VERSION = 3
-MODEL_SPECIFIC_RATE_LEDGER_SCHEMA_VERSION = 2
+MODEL_SPECIFIC_PHYSICS_RESULT_SCHEMA_VERSION = 5
+MODEL_SPECIFIC_RATE_LEDGER_SCHEMA_VERSION = 3
 _MODELS = ("cdm", "sidm", "fdm")
 _CHANNELS = ("stars", "gas", "dark_matter")
 _SHA256_RE = re.compile(r"[0-9a-fA-F]{64}")
 _FDM_FORCE_ACCOUNTING = {"live_wave_only"}
+_FORCE_ACCOUNTING_BY_MODEL = {
+    "cdm": {CDM_FORCE_ACCOUNTING},
+    "sidm": {SIDM_FORCE_ACCOUNTING},
+    "fdm": _FDM_FORCE_ACCOUNTING,
+}
 
 
 def _file_sha256(path: Path) -> str:
@@ -144,12 +155,21 @@ class ModelSpecificEvidence:
         for name, digest in self.artifact_sha256s:
             _nonempty(name, "artifact name")
             _sha256(digest, f"{name} SHA-256")
+        if self.force_accounting not in _FORCE_ACCOUNTING_BY_MODEL[self.dark_matter_model]:
+            expected = ", ".join(sorted(_FORCE_ACCOUNTING_BY_MODEL[self.dark_matter_model]))
+            label = (
+                "resolved-wave force accounting"
+                if self.dark_matter_model == "fdm"
+                else "resolved force accounting"
+            )
+            raise ValueError(
+                f"{self.dark_matter_model} evidence must use {label} ({expected})"
+            )
         if self.dark_matter_model == "cdm":
             if any(
                 value is not None
                 for value in (
                     self.maximum_scatter_probability,
-                    self.force_accounting,
                     self.minimum_de_broglie_resolution_cells,
                     self.minimum_wake_resolution_cells,
                 )
@@ -164,11 +184,15 @@ class ModelSpecificEvidence:
             )
             if not 0.0 <= probability <= 1.0:
                 raise ValueError("maximum_scatter_probability must lie in [0, 1]")
+            if probability > SIDM_MAX_SCATTER_PROBABILITY_GATE:
+                raise ValueError(
+                    "maximum_scatter_probability exceeds the conservative "
+                    f"{SIDM_MAX_SCATTER_PROBABILITY_GATE:g} gate"
+                )
             object.__setattr__(self, "maximum_scatter_probability", probability)
             if any(
                 value is not None
                 for value in (
-                    self.force_accounting,
                     self.minimum_de_broglie_resolution_cells,
                     self.minimum_wake_resolution_cells,
                 )
@@ -191,13 +215,15 @@ class ModelSpecificEvidence:
         return dict(self.artifact_sha256s)
 
     def as_dict(self) -> dict[str, Any]:
-        record: dict[str, Any] = {"artifact_sha256s": dict(self.artifact_sha256s)}
+        record: dict[str, Any] = {
+            "artifact_sha256s": dict(self.artifact_sha256s),
+            "force_accounting": self.force_accounting,
+        }
         if self.dark_matter_model == "sidm":
             record["maximum_scatter_probability"] = self.maximum_scatter_probability
         elif self.dark_matter_model == "fdm":
             record.update(
                 {
-                    "force_accounting": self.force_accounting,
                     "minimum_de_broglie_resolution_cells": self.minimum_de_broglie_resolution_cells,
                     "minimum_wake_resolution_cells": self.minimum_wake_resolution_cells,
                 }
@@ -212,7 +238,7 @@ class ModelSpecificEvidence:
         model: str,
         expected_artifacts: Mapping[str, str],
     ) -> "ModelSpecificEvidence":
-        expected_fields = {"artifact_sha256s"}
+        expected_fields = {"artifact_sha256s", "force_accounting"}
         if model == "sidm":
             expected_fields.add("maximum_scatter_probability")
         elif model == "fdm":
@@ -257,6 +283,8 @@ class ResolvedModelPhysicsResult:
     zoom_manifest_sha256: str
     source_path: Path
     source_sha256: str
+    runtime_identity_path: Path
+    runtime_identity_sha256: str
     capture_event_uid: str
     capture_event_sha256: str
     physics_input_path: Path
@@ -275,6 +303,7 @@ class ResolvedModelPhysicsResult:
     def __post_init__(self) -> None:
         _sha256(self.zoom_manifest_sha256, "zoom_manifest_sha256")
         _sha256(self.source_sha256, "source_sha256")
+        _sha256(self.runtime_identity_sha256, "runtime_identity_sha256")
         _sha256(self.physics_input_sha256, "physics_input_sha256")
         _sha256(self.rate_ledger_sha256, "rate_ledger_sha256")
         _nonempty(self.comparison_family_id, "comparison_family_id")
@@ -336,6 +365,10 @@ class ResolvedModelPhysicsResult:
             "dark_matter_model": self.dark_matter_model,
             "zoom_manifest_sha256": self.zoom_manifest_sha256,
             "source": {"path": str(self.source_path), "sha256": self.source_sha256},
+            "runtime_identity": {
+                "path": str(self.runtime_identity_path),
+                "sha256": self.runtime_identity_sha256,
+            },
             "capture_event_uid": self.capture_event_uid,
             "capture_event_sha256": self.capture_event_sha256,
             "physics_input": {
@@ -492,6 +525,7 @@ def _require_model_zoom_execution_identity(
     zoom_manifest_sha256: str,
     capture_binding: Mapping[str, Any],
     capture_ensemble: Any,
+    model_evidence: ModelSpecificEvidence,
 ) -> None:
     """Bind the resolved result's requested case to the sidecar read by the solver."""
 
@@ -532,6 +566,21 @@ def _require_model_zoom_execution_identity(
         }
         if any(run.parameter(name) != value for name, value in expected_sidm.items()):
             raise ValueError("normal-output SIDM controls differ from the zoom case")
+        sidecar_probability = run.parameter("sidm_max_scatter_probability")
+        if sidecar_probability is None or not math.isclose(
+            float(sidecar_probability),
+            float(model_evidence.maximum_scatter_probability),
+            rel_tol=1.0e-12,
+            abs_tol=1.0e-14,
+        ):
+            raise ValueError(
+                "normal-output SIDM maximum scatter probability differs from model evidence"
+            )
+        if run.parameter("force_accounting") != model_evidence.force_accounting:
+            raise ValueError("normal-output SIDM force accounting differs from model evidence")
+    elif run.dark_matter_model == "cdm":
+        if run.parameter("force_accounting") != model_evidence.force_accounting:
+            raise ValueError("normal-output CDM force accounting differs from model evidence")
     elif run.dark_matter_model == "fdm":
         if (
             case.numerics.fdm_use_hjm is None
@@ -546,6 +595,10 @@ def _require_model_zoom_execution_identity(
             raise ValueError("normal-output FDM HJM control differs from the zoom case")
         if run.parameter("fdm_first_wave_level") != case.numerics.fdm_first_wave_level:
             raise ValueError("normal-output FDM first wave level differs from the zoom case")
+        if run.parameter("fdm_force_accounting") != "resolved_wave_only":
+            raise ValueError("normal-output FDM force accounting is not resolved_wave_only")
+        if model_evidence.force_accounting != "live_wave_only":
+            raise ValueError("FDM model evidence force accounting is not live_wave_only")
 
 
 def _read_rate_ledger(
@@ -558,6 +611,7 @@ def _read_rate_ledger(
     inventory_assessment: ResolvedPhysicsInventoryAssessment,
     capture_binding: Mapping[str, Any],
     capture_ensemble: Any,
+    model_evidence: ModelSpecificEvidence,
 ) -> tuple[Path, str]:
     """Require an independent, output-bound source for every accepted rate field."""
 
@@ -646,6 +700,7 @@ def _read_rate_ledger(
         zoom_manifest_sha256=zoom_manifest_sha256,
         capture_binding=capture_binding,
         capture_ensemble=capture_ensemble,
+        model_evidence=model_evidence,
     )
     for key in ("environment_channels", "rate_points", "diagnostics", "model_evidence"):
         if ledger.get(key) != record.get(key):
@@ -680,6 +735,7 @@ def read_resolved_model_physics_result(
         "rate_points",
         "diagnostics",
         "model_evidence",
+        "runtime_identity",
     }
     if record.get("schema_version") != MODEL_SPECIFIC_PHYSICS_RESULT_SCHEMA_VERSION or set(record) != expected:
         raise ValueError("resolved model-physics result fields are invalid")
@@ -759,6 +815,11 @@ def read_resolved_model_physics_result(
         model=model,
         expected_artifacts=_accepted_artifacts(physics_input, model),
     )
+    runtime_identity_path, runtime_identity_sha256 = _artifact_path_and_sha256(
+        record.get("runtime_identity"),
+        base=source.parent,
+        label="runtime identity",
+    )
     rate_ledger_path, rate_ledger_sha256 = _read_rate_ledger(
         record,
         result_path=source,
@@ -768,6 +829,7 @@ def read_resolved_model_physics_result(
         inventory_assessment=inventory_assessment,
         capture_binding=capture_binding,
         capture_ensemble=capture_ensemble,
+        model_evidence=evidence,
     )
     try:
         return ResolvedModelPhysicsResult(
@@ -775,6 +837,8 @@ def read_resolved_model_physics_result(
             zoom_manifest_sha256=_sha256(zoom_manifest_sha256, "zoom_manifest_sha256"),
             source_path=source,
             source_sha256=_file_sha256(source),
+            runtime_identity_path=runtime_identity_path,
+            runtime_identity_sha256=runtime_identity_sha256,
             capture_event_uid=capture_event_uid,
             capture_event_sha256=capture_event_sha256,
             physics_input_path=physics_input_path,
@@ -823,6 +887,41 @@ class ModelSpecificResolutionAssessment:
     def accepted(self) -> bool:
         return self.status == "accepted_model_specific_rates"
 
+    @staticmethod
+    def _result_descriptor(result: ResolvedModelPhysicsResult) -> dict[str, Any]:
+        """Persist enough identity to re-read both results later.
+
+        A phase-ensemble assessment is consumed by the CDM delay path, so a
+        status-only summary is not sufficient.  The descriptor deliberately
+        keeps the source paths and hashes for the result, physics-input, and
+        diagnosed rate ledger; the consumer reopens all three through the
+        normal strict readers before accepting the assessment.
+        """
+
+        return {
+            "case_id": result.case.case_id,
+            "case": result.case.as_dict(),
+            "zoom_manifest_sha256": result.zoom_manifest_sha256,
+            "source": {
+                "path": str(result.source_path),
+                "sha256": result.source_sha256,
+            },
+            "runtime_identity": {
+                "path": str(result.runtime_identity_path),
+                "sha256": result.runtime_identity_sha256,
+            },
+            "capture_event_uid": result.capture_event_uid,
+            "capture_event_sha256": result.capture_event_sha256,
+            "physics_input": {
+                "path": str(result.physics_input_path),
+                "sha256": result.physics_input_sha256,
+            },
+            "rate_ledger": {
+                "path": str(result.rate_ledger_path),
+                "sha256": result.rate_ledger_sha256,
+            },
+        }
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "schema_version": 1,
@@ -833,14 +932,10 @@ class ModelSpecificResolutionAssessment:
             ),
             "dark_matter_model": self.reference.dark_matter_model,
             "reference": {
-                "case_id": self.reference.case.case_id,
-                "source": str(self.reference.source_path),
-                "sha256": self.reference.source_sha256,
+                **self._result_descriptor(self.reference),
             },
             "comparison": {
-                "case_id": self.comparison.case.case_id,
-                "source": str(self.comparison.source_path),
-                "sha256": self.comparison.source_sha256,
+                **self._result_descriptor(self.comparison),
             },
             "matched_rate_points": self.matched_rate_points,
             "maximum_power_fractional_difference": self.maximum_power_fractional_difference,
@@ -1014,10 +1109,26 @@ class ModelSpecificPhaseEnsemble:
     def ready_for_separate_model_interpretation(self) -> bool:
         return self.status == "accepted_model_specific_phase_ensemble"
 
-    def as_dict(self) -> dict[str, Any]:
+    def as_dict(
+        self,
+        *,
+        zoom_specification_path: str | Path | None = None,
+    ) -> dict[str, Any]:
         reference = self.members[0].reference if self.members else None
+        capture_event = None
+        if reference is not None:
+            capture_event = {
+                "event_uid": reference.capture_event_uid,
+                "event_sha256": reference.capture_event_sha256,
+            }
+        specification_path: str | None = None
+        specification_sha256: str | None = None
+        if zoom_specification_path is not None:
+            resolved_specification = Path(zoom_specification_path).expanduser().resolve()
+            specification_path = str(resolved_specification)
+            specification_sha256 = _file_sha256(resolved_specification)
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "status": self.status,
             "interpretation": (
                 "phase-replica acceptance within one DM model only; no cross-model "
@@ -1025,6 +1136,12 @@ class ModelSpecificPhaseEnsemble:
             ),
             "dark_matter_model": None if reference is None else reference.dark_matter_model,
             "physics_id": None if reference is None else reference.case.physics.physics_id,
+            "zoom_manifest_sha256": (
+                None if reference is None else reference.zoom_manifest_sha256
+            ),
+            "zoom_specification_path": specification_path,
+            "zoom_specification_sha256": specification_sha256,
+            "capture_event": capture_event,
             "replicates": [] if reference is None else [
                 item.reference.case.replicate for item in self.members
             ],

@@ -15,8 +15,11 @@ from pathlib import Path
 import re
 from typing import Any, Mapping
 
+from astropy import units as u
+
 from .capture_ledger import read_capture_ledger
 from .cdm_zoom import assess_noncompacting_cdm_zoom_run
+from .constants import G_INTERNAL
 from .dm_run_provenance import read_dark_matter_run_provenance
 
 
@@ -24,6 +27,7 @@ LAGRAMSES_CDM_PAIR_TRACK_SCHEMA_VERSION = 1
 _OUTPUT_DIRECTORY = re.compile(r"output_(\d{5})$")
 _PC_CGS = 3.0856775814913673e18
 _MYR_SECONDS = 3.15576e13
+_MSUN_CGS = float((1.0 * u.Msun).to_value(u.g))
 
 
 def _file_sha256(path: Path) -> str:
@@ -61,7 +65,15 @@ def _info_records(path: Path) -> dict[str, str]:
         if "=" not in line:
             continue
         key, value = (item.strip() for item in line.split("=", 1))
-        if key in {"time", "aexp", "unit_l", "unit_t", "boxlen"}:
+        if key in {
+            "time",
+            "aexp",
+            "unit_l",
+            "unit_d",
+            "unit_t",
+            "unit_m",
+            "boxlen",
+        }:
             if key in records:
                 raise ValueError(f"lagRamses info file duplicates {key}")
             records[key] = value
@@ -323,6 +335,30 @@ def extract_lagramses_cdm_pair_orbit_track(
             "relative_velocity_code": list(relative_velocity_code),
             "separation_pc": separation_pc,
         }
+        # RAMSES info files expose the density unit (unit_d); a few derived
+        # products expose unit_m directly.  Preserve an explicit Kepler-period
+        # estimate when either mass scale is available so the later secular
+        # estimator can require orbit-covered blocks.  Extraction of the
+        # instantaneous track remains useful on older outputs, but such a
+        # track is deliberately censored by the orbit-averaging step.
+        if "unit_m" in info:
+            unit_mass_cgs = _number(info["unit_m"], "output unit_m", positive=True)
+        elif "unit_d" in info:
+            unit_density_cgs = _number(info["unit_d"], "output unit_d", positive=True)
+            unit_mass_cgs = unit_density_cgs * unit_length_cgs**3
+        else:
+            unit_mass_cgs = 0.0
+        if unit_mass_cgs > 0.0:
+            total_mass_msun = (
+                (primary.mass_code + secondary.mass_code) * unit_mass_cgs / _MSUN_CGS
+            )
+            if total_mass_msun > 0.0:
+                sample["orbital_period_myr"] = 2.0 * math.pi * math.sqrt(
+                    separation_pc**3 / (G_INTERNAL * total_mass_msun)
+                )
+                sample["orbital_period_method"] = (
+                    "instantaneous_two_body_kepler_estimate"
+                )
         source = {
             "output_number": output_number,
             "directory": str(directory),

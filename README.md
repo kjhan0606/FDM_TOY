@@ -121,8 +121,23 @@ interpolates or extrapolates the zoom correction.
 
 CDM comparison runs use a separate, provenance-gated capture-to-hardening-to-
 GW interface.  It requires accepted CDM resolution and phase evidence for
-each environmental interval and rejects HR5-style fixed population delays:
+each environmental interval, explicit collisionless force accounting, and
+orbit-covered secular blocks with regression-quality and uncertainty gates;
+stalled or under-covered tracks remain `censored`.  The extractor's period is
+an instantaneous two-body Kepler sampling proxy, not proof of a completed
+orbit in the extended host potential.  It rejects HR5-style fixed population
+delays:
 [`docs/CDM_COALESCENCE_INTERFACE.md`](docs/CDM_COALESCENCE_INTERFACE.md).
+
+Resolved model-physics results use schema version 5 and carry a hash-checked
+`runtime_identity` artifact.  The phase cache records and re-hashes the exact
+zoom specification file.  For the rate-track anchor, CDM stage composition
+reopens the non-compacting runtime identity, checks its case/manifest/capture
+contract, and requires the rate-ledger output sidecar to belong to that
+attested output set; an identity path alone is not sufficient.  The generic
+schema-v5 result reader treats `runtime_identity` as a hash-checked artifact;
+semantic runtime validation is performed by the CDM rate-track anchor, not by
+schema-v5 alone for arbitrary CDM/SIDM/FDM results.
 
 ## Example configuration
 

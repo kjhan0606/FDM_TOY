@@ -224,7 +224,8 @@ def _write_runtime_output(
         f"smbh_capture_ledger_file = {ledger_file}\n"
         "smbh_merge_radius_cells = 0.0d0\n"
         "smbh_compaction_mode = no_finite_radius_rmerge_zero\n"
-        "dm_transport = collisionless_nbody\n",
+        "dm_transport = collisionless_nbody\n"
+        "force_accounting = resolved_collisionless_only\n",
         encoding="utf-8",
     )
     provenance = directory / f"dm_run_provenance_{label}.txt"

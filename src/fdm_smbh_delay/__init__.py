@@ -38,8 +38,11 @@ from .capture_seed_assembly import (
     capture_soliton_configuration_from_mapping,
 )
 from .dm_run_provenance import (
+    CDM_FORCE_ACCOUNTING,
     CaptureDMRunBinding,
     DarkMatterRunProvenance,
+    SIDM_FORCE_ACCOUNTING,
+    SIDM_MAX_SCATTER_PROBABILITY_GATE,
     bind_capture_event_to_dark_matter_run,
     read_dark_matter_run_provenance,
 )
@@ -219,6 +222,7 @@ __all__ = [
     "VerifiedFDMZoomRuntimeOutputs",
     "CaptureSolitonConfiguration",
     "CaptureDMRunBinding",
+    "CDM_FORCE_ACCOUNTING",
     "CDMNonCompactingZoomRunContract",
     "CDMNonCompactingZoomRuntimeIdentity",
     "DMComparisonCaptureEnsemble",
@@ -234,6 +238,8 @@ __all__ = [
     "ModelSpecificResolutionAssessment",
     "EnvironmentProfileBundle",
     "DarkMatterRunProvenance",
+    "SIDM_FORCE_ACCOUNTING",
+    "SIDM_MAX_SCATTER_PROBABILITY_GATE",
     "FDMOuterHaloClosure",
     "FDMOuterWaveLedger",
     "LagRamsesFDMOuterWaveProvenance",

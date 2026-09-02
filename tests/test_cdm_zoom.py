@@ -21,6 +21,7 @@ def _write_provenance(tmp_path: Path, *, radius: str | None, mode: str | None) -
         "smbh_capture_ledger_enabled": ".true.",
         "smbh_capture_ledger_file": "smbh_capture_ledger_v1.jsonl",
         "dm_transport": "collisionless_nbody",
+        "force_accounting": "resolved_collisionless_only",
     }
     if radius is not None:
         values["smbh_merge_radius_cells"] = radius

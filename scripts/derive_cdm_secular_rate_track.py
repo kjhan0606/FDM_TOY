@@ -27,12 +27,19 @@ def main() -> int:
     parser.add_argument("raw_orbit_track", type=Path)
     parser.add_argument("--stage", choices=("capture_to_hard_binary", "hard_binary_to_gw_regime"), required=True)
     parser.add_argument("--samples-per-block", type=int, required=True)
+    parser.add_argument(
+        "--minimum-orbits-per-block",
+        type=float,
+        default=1.0,
+        help="minimum instantaneous Kepler-period sampling proxies per regression block",
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     record = derive_cdm_secular_rate_track(
         args.raw_orbit_track.expanduser().resolve(),
         stage=args.stage,
         samples_per_block=args.samples_per_block,
+        minimum_orbits_per_block=args.minimum_orbits_per_block,
     )
     _write_json_atomic(args.output.expanduser().resolve(), record)
     print(json.dumps(record, indent=2, sort_keys=True))

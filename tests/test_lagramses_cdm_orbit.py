@@ -26,6 +26,8 @@ def _write_output(
     secondary_x: float,
     merge_radius: float = 0.0,
     namelist: str,
+    unit_m: float | None = None,
+    unit_d: float | None = None,
 ) -> Path:
     label = f"{number:05d}"
     directory = root / f"output_{label}"
@@ -48,17 +50,22 @@ def _write_output(
         "smbh_capture_ledger_file = zoom_capture.jsonl\n"
         f"smbh_merge_radius_cells = {merge_radius:.1f}d0\n"
         f"smbh_compaction_mode = {mode}\n"
-        "dm_transport = collisionless_nbody\n",
+        "dm_transport = collisionless_nbody\n"
+        "force_accounting = resolved_collisionless_only\n",
         encoding="utf-8",
     )
-    (directory / f"info_{label}.txt").write_text(
+    info = (
         f"time = {time_code:.7f}d0\n"
         "aexp = 5.0d-1\n"
         "unit_l = 3.0856775814913673d18\n"
         "unit_t = 3.15576d13\n"
-        "boxlen = 100.0d0\n",
-        encoding="utf-8",
+        "boxlen = 100.0d0\n"
     )
+    if unit_m is not None:
+        info += f"unit_m = {unit_m:.16e}\n"
+    if unit_d is not None:
+        info += f"unit_d = {unit_d:.16e}\n"
+    (directory / f"info_{label}.txt").write_text(info, encoding="utf-8")
     (directory / f"sink_{label}.csv").write_text(
         f"1,1.0d8,{primary_x:.6f},0.0,0.0,0.0,0.0,0.0,0.0,0.0\n"
         f"2,5.0d7,{secondary_x:.6f},0.0,0.0,0.0,0.0,0.0,0.0,0.0\n",
@@ -275,13 +282,31 @@ def test_extracts_periodic_comoving_relative_orbit_with_complete_provenance(
     )
     outputs = [
         _write_output(
-            tmp_path, 3, time_code=1.0002, primary_x=99.75, secondary_x=0.25, namelist=namelist
+            tmp_path,
+            3,
+            time_code=1.0002,
+            primary_x=99.75,
+            secondary_x=0.25,
+            namelist=namelist,
+            unit_d=1.98847e33 / (3.0856775814913673e18**3),
         ),
         _write_output(
-            tmp_path, 1, time_code=1.0, primary_x=99.0, secondary_x=1.0, namelist=namelist
+            tmp_path,
+            1,
+            time_code=1.0,
+            primary_x=99.0,
+            secondary_x=1.0,
+            namelist=namelist,
+            unit_d=1.98847e33 / (3.0856775814913673e18**3),
         ),
         _write_output(
-            tmp_path, 2, time_code=1.0001, primary_x=99.5, secondary_x=0.5, namelist=namelist
+            tmp_path,
+            2,
+            time_code=1.0001,
+            primary_x=99.5,
+            secondary_x=0.5,
+            namelist=namelist,
+            unit_d=1.98847e33 / (3.0856775814913673e18**3),
         ),
     ]
     binding = _write_capture_binding(tmp_path)
@@ -300,6 +325,12 @@ def test_extracts_periodic_comoving_relative_orbit_with_complete_provenance(
     assert len(record["source_outputs"]) == 3
     assert record["capture_binding"]["capture_event_sha256"]
     assert record["status"] == "raw_relative_orbit_track"
+    assert all(sample["orbital_period_myr"] > 0.0 for sample in record["samples"])
+    assert all(
+        sample["orbital_period_method"]
+        == "instantaneous_two_body_kepler_estimate"
+        for sample in record["samples"]
+    )
 
 
 def test_refuses_compacting_or_incomplete_lagramses_outputs(tmp_path: Path) -> None:
