@@ -354,3 +354,32 @@ def test_cli_writes_one_atomic_record_for_each_contract_stage(tmp_path: Path) ->
     record = json.loads(output.read_text(encoding="utf-8"))
     assert record["status"] == "dm_comparison_physics_inputs_not_verified"
     assert "lacks normal-output inventory" in record["reasons"][0]
+
+
+def test_family_preflight_can_gate_on_the_selected_writer_source(tmp_path: Path) -> None:
+    paths = _fixture(tmp_path)
+    writer = tmp_path / "output_amr.kjhan.f90"
+    writer.write_text(
+        "write(unit,*) 'dm_transport = collisionless_nbody'\n"
+        "write(unit,*) 'sidm_max_scatter_probability = ', pmax_value\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "results" / "preflight-with-writer.json"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "scripts/preflight_dm_comparison_family.py",
+            str(paths["manifest"]),
+            str(output),
+            "--writer-source",
+            str(writer),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 2
+    record = json.loads(output.read_text(encoding="utf-8"))
+    assert record["status"] == "comparison_family_preflight_not_ready"
+    assert record["writer_source_audit"]["status"] == "source_token_missing"
+    assert any("writer source" in reason for reason in record["reasons"])

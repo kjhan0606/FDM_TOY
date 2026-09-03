@@ -193,6 +193,20 @@ checked-out lagRamses writer does not yet emit the CDM/SIDM token, so its
 outputs are not production-eligible for this reader until a separately
 authorized writer patch and rebuild provide the exact runtime-derived token.
 
+Before a submission, the operator may run the non-submitting source audit:
+
+```bash
+python scripts/audit_lagramses_writer_force_accounting.py \
+  /path/to/lagRamses/patch/lagRamses/output_amr.kjhan.f90 \
+  results/lagramses_writer_force_accounting_audit.json
+```
+
+`source_token_missing` is an expected blocker for the current checkout.  Even
+`source_tokens_present_requires_runtime_test` is only a prerequisite: it does
+not attest a compiled executable or prove that the emitted values were
+derived from active runtime controls.  The normal-output sidecar and its
+consumer remain the authoritative production gate.
+
 After completion, check every output before extracting a pair orbit.  This
 requires the `COMPLETE` marker, native no-finite-radius provenance, the same
 ledger setting, the five attested execution-input digests, the contracted

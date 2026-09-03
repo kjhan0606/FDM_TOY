@@ -73,6 +73,11 @@ For example, with operator-prepared records:
 
 ```bash
 python scripts/preflight_dm_comparison_family.py family.json results/family_preflight.json
+
+# Optional source-level blocker check before submission:
+python scripts/preflight_dm_comparison_family.py \
+  family.json results/family_preflight.json \
+  --writer-source /path/to/lagRamses/patch/lagRamses/output_amr.kjhan.f90
 python scripts/assess_dm_comparison_smoke.py family.json results/family_smoke.json
 python scripts/register_dm_comparison_capture_ensemble.py \
   capture_registration.json results/capture_ensemble.json
@@ -107,6 +112,10 @@ The model evidence is then distinct:
   sidecar.  The current checked-out lagRamses writer does not yet emit this
   CDM/SIDM token, so its outputs remain ineligible until an explicitly
   authorized writer patch and rebuild provide the runtime-derived value;
+- Before submission, the non-submitting
+  `scripts/audit_lagramses_writer_force_accounting.py` scan can identify this
+  source-level blocker.  A token found in source still requires a compiled
+  writer integration test and a runtime sidecar check;
 - SIDM additionally preserves the accepted scattering ledger and measured
   maximum scatter probability.  The current conservative production gate is
   `sidm_max_scatter_probability <= 0.10`, with
@@ -839,7 +848,7 @@ relaxation stage now also has a bounded Lageunha execution wrapper: it binds a
 verified sample ledger, uses a shell-free one-thread child environment, writes
 the result through a private temporary path, and publishes a recheckable
 wrapper-declared attestation only after a successful source-bound result.
-The full toy-repository suite passes (`546 passed` at the latest check).
+The full toy-repository suite passes (`583 passed` at the latest check).
 
 No pure-FDM outer zoom has been submitted, and no actual Lageunha relaxation
 extractor command or end-to-end physical delay has been run or accepted.  The
