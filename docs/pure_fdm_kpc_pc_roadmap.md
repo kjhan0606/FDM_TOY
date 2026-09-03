@@ -867,7 +867,7 @@ relaxation stage now also has a bounded Lageunha execution wrapper: it binds a
 verified sample ledger, uses a shell-free one-thread child environment, writes
 the result through a private temporary path, and publishes a recheckable
 wrapper-declared attestation only after a successful source-bound result.
-The full toy-repository suite passes (`594 passed` at the latest check).
+The full toy-repository suite passes (`595 passed` at the latest check).
 
 No pure-FDM outer zoom has been submitted, and no actual Lageunha relaxation
 extractor command or end-to-end physical delay has been run or accepted.  The
