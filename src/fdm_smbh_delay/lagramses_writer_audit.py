@@ -20,6 +20,21 @@ from typing import Any
 
 AUDIT_SCHEMA_VERSION = 1
 
+_MODEL_REQUIREMENTS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "cdm": (
+        "force_accounting = resolved_collisionless_only",
+        ("dm_transport", "collisionless"),
+    ),
+    "sidm": (
+        "force_accounting = resolved_collisionless_plus_scattering",
+        ("sidm_max_scatter_probability", "sidm_Pmax"),
+    ),
+    "fdm": (
+        "fdm_force_accounting = resolved_wave_only",
+        ("fdm_outer_ledger_enabled", "fdm_first_wave_level", "fdm_use_hjm"),
+    ),
+}
+
 
 def _file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -110,8 +125,16 @@ def _model_scan(code: str, token: str, evidence: tuple[str, ...]) -> dict[str, A
 
 def audit_lagramses_writer_force_accounting(
     source: str | Path,
+    *,
+    required_models: tuple[str, ...] = ("cdm", "sidm"),
 ) -> WriterForceAccountingAudit:
     """Scan one writer source file without compiling or executing it."""
+
+    requested = tuple(dict.fromkeys(required_models))
+    if not requested or any(model not in _MODEL_REQUIREMENTS for model in requested):
+        raise ValueError(
+            "required_models must contain one or more of cdm, sidm, or fdm"
+        )
 
     source_path = Path(source).expanduser().resolve()
     if not source_path.is_file():
@@ -136,16 +159,8 @@ def audit_lagramses_writer_force_accounting(
 
     code = _fortran_code(raw)
     models = {
-        "cdm": _model_scan(
-            code,
-            "force_accounting = resolved_collisionless_only",
-            ("dm_transport", "collisionless"),
-        ),
-        "sidm": _model_scan(
-            code,
-            "force_accounting = resolved_collisionless_plus_scattering",
-            ("sidm_max_scatter_probability", "sidm_Pmax"),
-        ),
+        model: _model_scan(code, *_MODEL_REQUIREMENTS[model])
+        for model in requested
     }
     reasons: list[str] = []
     for model, result in models.items():
