@@ -8,6 +8,7 @@ import pytest
 
 from fdm_smbh_delay.pure_fdm_outer_submission import (
     assess_pure_fdm_outer_submission,
+    read_verified_pure_fdm_outer_submission,
 )
 from fdm_smbh_delay.pure_fdm_zoom import preflight_pure_fdm_outer_zoom
 from fdm_smbh_delay.zoom_calibration import load_zoom_grid
@@ -104,6 +105,31 @@ def test_outer_submission_accepts_exact_inputs_after_runtime_test(tmp_path: Path
     assert decision.ready
     assert decision.runtime_attestation is not None
     assert decision.as_dict()["execution"]["scheduler"] == "Slurm only"
+
+
+def test_saved_submission_decision_is_rebuilt_before_verification(tmp_path: Path) -> None:
+    specification, manifest, preflight, source = _outer_inputs(tmp_path)
+    attestation = _runtime_attestation(tmp_path, specification, source)
+    decision = assess_pure_fdm_outer_submission(
+        specification, manifest, preflight, source, attestation
+    )
+    record_path = tmp_path / "submission.json"
+    record_path.write_text(
+        json.dumps(decision.as_dict(), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    verified = read_verified_pure_fdm_outer_submission(
+        record_path, specification, manifest, preflight, source, attestation
+    )
+    assert verified.ready
+
+    saved = json.loads(record_path.read_text(encoding="utf-8"))
+    saved["interpretation"] = "edited by operator"
+    record_path.write_text(json.dumps(saved, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="does not match current inputs"):
+        read_verified_pure_fdm_outer_submission(
+            record_path, specification, manifest, preflight, source, attestation
+        )
 
 
 def test_outer_submission_rejects_tampered_manifest_before_runtime_attestation(

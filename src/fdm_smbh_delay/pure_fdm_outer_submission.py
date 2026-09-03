@@ -272,3 +272,38 @@ def assess_pure_fdm_outer_submission(
         outer_case_count=case_count,
         nested_request_count=nested_count,
     )
+
+
+def read_verified_pure_fdm_outer_submission(
+    record_path: str | Path,
+    specification: str | Path,
+    manifest: str | Path,
+    preflight: str | Path,
+    writer_source: str | Path,
+    runtime_attestation: str | Path,
+) -> PureFDMOuterSubmissionPreflight:
+    """Rebuild and compare a saved ready decision before operator submission.
+
+    A saved JSON file is not evidence by itself.  All source artifacts are
+    re-read and hashed through :func:`assess_pure_fdm_outer_submission`, then
+    the complete canonical record is compared.  Non-ready records are
+    intentionally rejected by this verified reader.
+    """
+
+    saved_path = Path(record_path).expanduser().resolve()
+    saved = _read_json(saved_path, "outer submission preflight")
+    decision = assess_pure_fdm_outer_submission(
+        specification,
+        manifest,
+        preflight,
+        writer_source,
+        runtime_attestation,
+    )
+    if not decision.ready:
+        raise ValueError(
+            "current outer submission inputs are not ready: "
+            + "; ".join(decision.reasons)
+        )
+    if saved != decision.as_dict():
+        raise ValueError("saved outer submission preflight does not match current inputs")
+    return decision
