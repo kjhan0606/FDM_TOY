@@ -66,7 +66,8 @@ def _fdm_sidecar(path: Path) -> None:
 
 def _runtime_supporting_files(output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "COMPLETE").write_text("", encoding="utf-8")
+    label = output_dir.name.removeprefix("output_")
+    (output_dir / "COMPLETE").write_text(f"{label}\n", encoding="utf-8")
     (output_dir / "namelist.txt").write_text(
         "&RUN_PARAMS\n"
         "use_fdm=.true.\n"
@@ -91,6 +92,10 @@ def _runtime_supporting_files(output_dir: Path) -> None:
         "Run completed\n",
         encoding="utf-8",
     )
+    for rank in (1, 2):
+        (output_dir / f"fdm_{label}.out{rank:05d}").write_bytes(
+            f"synthetic FDM shard {rank}\n".encode("utf-8")
+        )
 
 
 def _raw_fdm_outer_provenance(output_dir: Path) -> None:
@@ -139,12 +144,59 @@ def _runtime_attestation(
     _raw_fdm_outer_provenance(output_dir)
     sidecar = output_dir / "dm_run_provenance_00042.txt"
     _fdm_sidecar(sidecar)
+    (tmp_path / "output_fdm.f90").write_text(
+        "subroutine output_fdm_outer_wave_provenance\nend subroutine\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin" / "Makefile").write_text("FDM_OBJ = output_fdm.o\n", encoding="utf-8")
+    build_manifest = _build_manifest(tmp_path, source)
     record = build_fdm_writer_runtime_attestation(
-        source, executable, sidecar, operator_confirmed=True
+        source,
+        executable,
+        sidecar,
+        build_manifest=build_manifest,
+        operator_confirmed=True,
     )
     path = tmp_path / "runtime_attestation.json"
     path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
     return path
+
+
+def _build_manifest(tmp_path: Path, source: Path) -> Path:
+    output_fdm = tmp_path / "output_fdm.f90"
+    makefile = tmp_path / "bin" / "Makefile"
+    output_fdm.write_text(
+        "subroutine output_fdm_outer_wave_provenance\nend subroutine\n",
+        encoding="utf-8",
+    )
+    makefile.parent.mkdir(parents=True, exist_ok=True)
+    makefile.write_text("FDM_OBJ = output_fdm.o\n", encoding="utf-8")
+    manifest = tmp_path / "build-manifest.json"
+    entries = []
+    for role, path in (
+        ("output_amr", source),
+        ("output_fdm", output_fdm),
+        ("bin_makefile", makefile),
+    ):
+        entries.append({"role": role, "path": str(path.resolve()), "sha256": _sha256(path)})
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "status": "lagramses_build_source_manifest",
+                "repository": str(tmp_path.resolve()),
+                "git_commit": "a" * 40,
+                "git_dirty": False,
+                "files": entries,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return manifest
 
 
 def test_runtime_attestation_requires_explicit_operator_confirmation(
@@ -161,7 +213,12 @@ def test_runtime_attestation_requires_explicit_operator_confirmation(
     sidecar = output_dir / "dm_run_provenance_00042.txt"
     _fdm_sidecar(sidecar)
     with pytest.raises(ValueError, match="operator_confirmed"):
-        build_fdm_writer_runtime_attestation(source, executable, sidecar)
+        build_fdm_writer_runtime_attestation(
+            source,
+            executable,
+            sidecar,
+            build_manifest=_build_manifest(tmp_path, source),
+        )
 
 
 def test_outer_submission_requires_compiled_writer_attestation(tmp_path: Path) -> None:
@@ -284,7 +341,11 @@ def test_runtime_attestation_requires_completed_supporting_files(
     (output_dir / artifact).unlink()
     with pytest.raises(ValueError, match=expected):
         build_fdm_writer_runtime_attestation(
-            source, executable, sidecar, operator_confirmed=True
+            source,
+            executable,
+            sidecar,
+            build_manifest=_build_manifest(tmp_path, source),
+            operator_confirmed=True,
         )
 
 
@@ -304,7 +365,11 @@ def test_runtime_attestation_rejects_compilation_build_mismatch(tmp_path: Path) 
     )
     with pytest.raises(ValueError, match="last commit"):
         build_fdm_writer_runtime_attestation(
-            source, executable, sidecar, operator_confirmed=True
+            source,
+            executable,
+            sidecar,
+            build_manifest=_build_manifest(tmp_path, source),
+            operator_confirmed=True,
         )
 
 
@@ -327,7 +392,11 @@ def test_runtime_attestation_rejects_missing_success_log(tmp_path: Path) -> None
     )
     with pytest.raises(ValueError, match="completion marker"):
         build_fdm_writer_runtime_attestation(
-            source, executable, sidecar, operator_confirmed=True
+            source,
+            executable,
+            sidecar,
+            build_manifest=_build_manifest(tmp_path, source),
+            operator_confirmed=True,
         )
 
 
@@ -351,5 +420,76 @@ def test_runtime_attestation_rejects_singleton_mpi_launch(tmp_path: Path) -> Non
     )
     with pytest.raises(ValueError, match="multi-rank MPI"):
         build_fdm_writer_runtime_attestation(
-            source, executable, sidecar, operator_confirmed=True
+            source,
+            executable,
+            sidecar,
+            build_manifest=_build_manifest(tmp_path, source),
+            operator_confirmed=True,
+        )
+
+
+def test_runtime_attestation_rejects_raw_mpi_count_mismatch(tmp_path: Path) -> None:
+    specification, _, _, source = _outer_inputs(tmp_path)
+    del specification
+    executable = tmp_path / "ramses"
+    executable.write_bytes(b"compiled writer integration fixture\n")
+    executable.chmod(0o755)
+    output_dir = tmp_path / "output_00042"
+    _runtime_supporting_files(output_dir)
+    _raw_fdm_outer_provenance(output_dir)
+    sidecar = output_dir / "dm_run_provenance_00042.txt"
+    _fdm_sidecar(sidecar)
+    raw = output_dir / "fdm_outer_wave_provenance_00042.txt"
+    raw.write_text(raw.read_text(encoding="utf-8").replace("mpi_ncpu = 2", "mpi_ncpu = 3"), encoding="utf-8")
+    with pytest.raises(ValueError, match="mpi_ncpu"):
+        build_fdm_writer_runtime_attestation(
+            source,
+            executable,
+            sidecar,
+            build_manifest=_build_manifest(tmp_path, source),
+            operator_confirmed=True,
+        )
+
+
+def test_runtime_attestation_rejects_wrong_complete_label(tmp_path: Path) -> None:
+    specification, _, _, source = _outer_inputs(tmp_path)
+    del specification
+    executable = tmp_path / "ramses"
+    executable.write_bytes(b"compiled writer integration fixture\n")
+    executable.chmod(0o755)
+    output_dir = tmp_path / "output_00042"
+    _runtime_supporting_files(output_dir)
+    _raw_fdm_outer_provenance(output_dir)
+    sidecar = output_dir / "dm_run_provenance_00042.txt"
+    _fdm_sidecar(sidecar)
+    (output_dir / "COMPLETE").write_text("00041\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="COMPLETE marker content"):
+        build_fdm_writer_runtime_attestation(
+            source,
+            executable,
+            sidecar,
+            build_manifest=_build_manifest(tmp_path, source),
+            operator_confirmed=True,
+        )
+
+
+def test_runtime_attestation_rejects_incomplete_fdm_shards(tmp_path: Path) -> None:
+    specification, _, _, source = _outer_inputs(tmp_path)
+    del specification
+    executable = tmp_path / "ramses"
+    executable.write_bytes(b"compiled writer integration fixture\n")
+    executable.chmod(0o755)
+    output_dir = tmp_path / "output_00042"
+    _runtime_supporting_files(output_dir)
+    _raw_fdm_outer_provenance(output_dir)
+    sidecar = output_dir / "dm_run_provenance_00042.txt"
+    _fdm_sidecar(sidecar)
+    (output_dir / "fdm_00042.out00002").unlink()
+    with pytest.raises(ValueError, match="shard set"):
+        build_fdm_writer_runtime_attestation(
+            source,
+            executable,
+            sidecar,
+            build_manifest=_build_manifest(tmp_path, source),
+            operator_confirmed=True,
         )

@@ -35,6 +35,15 @@ def main() -> int:
     parser.add_argument("fdm_sidecar", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument(
+        "--build-manifest",
+        required=True,
+        type=Path,
+        help=(
+            "clean-build source manifest containing output_amr, output_fdm, "
+            "and bin/Makefile hashes"
+        ),
+    )
+    parser.add_argument(
         "--operator-confirmed",
         action="store_true",
         help=(
@@ -48,6 +57,7 @@ def main() -> int:
             args.source,
             args.executable,
             args.fdm_sidecar,
+            build_manifest=args.build_manifest,
             operator_confirmed=args.operator_confirmed,
         )
     except (OSError, UnicodeError, TypeError, ValueError) as error:

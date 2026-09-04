@@ -29,8 +29,9 @@ from .zoom_calibration import ZoomGrid, load_zoom_grid
 
 
 PURE_FDM_OUTER_SUBMISSION_SCHEMA_VERSION = 1
-WRITER_RUNTIME_ATTESTATION_SCHEMA_VERSION = 4
+WRITER_RUNTIME_ATTESTATION_SCHEMA_VERSION = 5
 _SHA256_RE = re.compile(r"[0-9a-fA-F]{64}")
+_GIT_COMMIT_RE = re.compile(r"[0-9a-fA-F]{40}")
 _OUTPUT_DIRECTORY_RE = re.compile(r"output_[0-9]{5}")
 
 
@@ -72,6 +73,71 @@ def _artifact(record: Any, name: str) -> tuple[Path, str]:
     if actual != expected:
         raise ValueError(f"{name} SHA-256 does not match the current file")
     return path, actual
+
+
+def _validate_build_manifest(
+    path: Path, *, source_path: Path, build_hash: str
+) -> dict[str, Any]:
+    """Validate the immutable source manifest used for one compiled binary.
+
+    The executable cannot carry a complete Git tree in its output sidecar.
+    The operator therefore supplies a small, hashed manifest of the source
+    roles that select the FDM writer.  Re-reading and hashing every listed
+    file prevents a later source edit or a manifest with only the attested
+    ``output_amr`` file from being silently accepted.
+    """
+
+    record = _read_json(path, "LagRamses build source manifest")
+    expected_keys = {"schema_version", "status", "repository", "git_commit", "git_dirty", "files"}
+    if set(record) != expected_keys:
+        raise ValueError("LagRamses build source manifest has an unsupported key set")
+    if record.get("schema_version") != 1 or record.get("status") != "lagramses_build_source_manifest":
+        raise ValueError("unsupported LagRamses build source manifest schema")
+    repository_value = record.get("repository")
+    if not isinstance(repository_value, str) or not repository_value.strip():
+        raise ValueError("LagRamses build source manifest repository is required")
+    repository = Path(repository_value).expanduser().resolve()
+    if not repository.is_dir():
+        raise ValueError("LagRamses build source manifest repository is not a directory")
+    git_commit = record.get("git_commit")
+    if not isinstance(git_commit, str) or _GIT_COMMIT_RE.fullmatch(git_commit) is None:
+        raise ValueError("LagRamses build source manifest git_commit must be a full SHA-1")
+    git_commit = git_commit.lower()
+    if record.get("git_dirty") is not False:
+        raise ValueError("LagRamses build source manifest must attest a clean worktree")
+    if build_hash != git_commit:
+        raise ValueError("LagRamses build source manifest commit differs from the sidecar build hash")
+    files = record.get("files")
+    if not isinstance(files, list) or not files:
+        raise ValueError("LagRamses build source manifest files are required")
+    required_roles = {"output_amr", "output_fdm", "bin_makefile"}
+    seen_roles: set[str] = set()
+    resolved_files: dict[str, Path] = {}
+    for entry in files:
+        if not isinstance(entry, Mapping) or set(entry) != {"role", "path", "sha256"}:
+            raise ValueError("LagRamses build source manifest file entries are invalid")
+        role = entry.get("role")
+        if not isinstance(role, str) or not role.strip() or role in seen_roles:
+            raise ValueError("LagRamses build source manifest roles must be unique")
+        raw_file = entry.get("path")
+        if not isinstance(raw_file, str) or not raw_file.strip():
+            raise ValueError("LagRamses build source manifest file path is required")
+        file_path = Path(raw_file).expanduser().resolve()
+        try:
+            file_path.relative_to(repository)
+        except ValueError as error:
+            raise ValueError("LagRamses build source manifest file escapes its repository") from error
+        expected_sha = _sha256(entry.get("sha256"), f"build manifest {role}.sha256")
+        if not file_path.is_file() or _file_sha256(file_path) != expected_sha:
+            raise ValueError(f"LagRamses build source manifest file is missing or changed: {role}")
+        seen_roles.add(role)
+        resolved_files[role] = file_path
+    if not required_roles.issubset(seen_roles):
+        missing = sorted(required_roles - seen_roles)
+        raise ValueError("LagRamses build source manifest is missing roles: " + ", ".join(missing))
+    if resolved_files["output_amr"] != source_path:
+        raise ValueError("LagRamses build source manifest output_amr does not match the attested source")
+    return record
 
 
 def _sidecar_relative_artifact(
@@ -181,7 +247,7 @@ def _runtime_artifact_context(
 
 def _validate_runtime_supporting_artifacts(
     context: Mapping[str, Path], provenance: Any
-) -> tuple[int, int]:
+) -> tuple[int, int, tuple[Path, ...]]:
     assignments = _namelist_assignments(context["namelist"])
     for key in (
         "use_fdm",
@@ -263,6 +329,10 @@ def _validate_runtime_supporting_artifacts(
         raise ValueError(
             "runtime log does not attest one consistent multi-rank MPI execution"
         )
+    complete_text = _read_text(context["complete_marker"], "COMPLETE marker")
+    output_label = context["output_directory"].name.removeprefix("output_")
+    if complete_text.split() != [output_label]:
+        raise ValueError("COMPLETE marker content does not match its output label")
     try:
         raw_wave = read_lagramses_fdm_outer_wave_provenance(
             context["outer_wave_provenance"]
@@ -271,6 +341,8 @@ def _validate_runtime_supporting_artifacts(
         raise ValueError(f"raw FDM outer-wave provenance is invalid: {error}") from error
     if raw_wave.source_schema_version < 3:
         raise ValueError("raw FDM outer-wave provenance lacks MPI output-set identity")
+    if raw_wave.mpi_ncpu is None or raw_wave.mpi_ncpu != nproc_matches[0]:
+        raise ValueError("raw FDM mpi_ncpu disagrees with the runtime MPI transcript")
     raw_decision = raw_wave.decision()
     if raw_decision.get("status") != "available_raw_provenance":
         raise ValueError(
@@ -299,7 +371,24 @@ def _validate_runtime_supporting_artifacts(
     expected_prefix = f"fdm_{context['output_directory'].name.removeprefix('output_')}.out"
     if raw_wave.psi_snapshot_prefix != expected_prefix:
         raise ValueError("raw FDM provenance snapshot prefix does not match its output")
-    return nproc_matches[0], effective_first_wave_level
+    shard_pattern = re.compile(re.escape(raw_wave.psi_snapshot_prefix) + r"(\d{5})$")
+    candidates = sorted(
+        path for path in context["output_directory"].iterdir()
+        if path.is_file() and path.name.startswith(raw_wave.psi_snapshot_prefix)
+    )
+    expected_shard_names = {
+        f"{raw_wave.psi_snapshot_prefix}{rank:05d}" for rank in range(1, nproc_matches[0] + 1)
+    }
+    candidate_names = {path.name for path in candidates}
+    if candidate_names != expected_shard_names or any(
+        shard_pattern.fullmatch(path.name) is None or path.stat().st_size <= 0
+        for path in candidates
+    ):
+        raise ValueError(
+            "FDM field shard set does not exactly match the raw MPI output-set identity"
+        )
+    shards = tuple(context["output_directory"] / name for name in sorted(expected_shard_names))
+    return nproc_matches[0], effective_first_wave_level, shards
 
 
 def _validate_manifest(path: Path, grid: ZoomGrid) -> None:
@@ -340,6 +429,8 @@ def _validate_runtime_attestation(
         "compilation",
         "run_log",
         "fdm_outer_provenance",
+        "fdm_field_shards",
+        "build_manifest",
         "execution",
     }
     if set(record) != expected_keys:
@@ -354,11 +445,13 @@ def _validate_runtime_attestation(
         raise ValueError("writer runtime attestation source does not match the audit")
     executable_path, executable_sha = _artifact(record.get("executable"), "executable")
     sidecar_path, sidecar_sha = _artifact(record.get("fdm_sidecar"), "fdm_sidecar")
+    build_manifest_path, _ = _artifact(record.get("build_manifest"), "build_manifest")
     expected = _build_runtime_attestation_record(
         attested_source,
         executable_path,
         sidecar_path,
         source_sha256=attested_source_sha,
+        build_manifest_path=build_manifest_path,
     )
     if record != expected:
         raise ValueError(
@@ -377,8 +470,9 @@ def _build_runtime_attestation_record(
     sidecar_path: Path,
     *,
     source_sha256: str | None = None,
+    build_manifest_path: Path,
 ) -> dict[str, Any]:
-    """Build a canonical v4 record from one completed output directory."""
+    """Build a canonical v5 record from one completed output directory."""
 
     source_payload = _artifact_payload(source_path)
     if source_sha256 is not None and source_payload["sha256"] != source_sha256:
@@ -400,7 +494,13 @@ def _build_runtime_attestation_record(
     if provenance.parameter("fdm_outer_ledger_enabled") is not True:
         raise ValueError("FDM sidecar does not enable the outer-wave ledger")
     context = _runtime_artifact_context(sidecar_path, provenance)
-    nproc, effective_first_wave_level = _validate_runtime_supporting_artifacts(
+    build_hash = provenance.build_git_hash.strip().lower()
+    _validate_build_manifest(
+        build_manifest_path,
+        source_path=source_path,
+        build_hash=build_hash,
+    )
+    nproc, effective_first_wave_level, shards = _validate_runtime_supporting_artifacts(
         context, provenance
     )
     return {
@@ -416,6 +516,8 @@ def _build_runtime_attestation_record(
         "fdm_outer_provenance": _artifact_payload(
             context["outer_wave_provenance"]
         ),
+        "fdm_field_shards": [_artifact_payload(path) for path in shards],
+        "build_manifest": _artifact_payload(build_manifest_path),
         "execution": {
             "run_directory": str(context["run_directory"]),
             "output_directory": str(context["output_directory"]),
@@ -431,6 +533,7 @@ def build_fdm_writer_runtime_attestation(
     executable: str | Path,
     fdm_sidecar: str | Path,
     *,
+    build_manifest: str | Path,
     operator_confirmed: bool = False,
 ) -> dict[str, Any]:
     """Record artifacts from an operator-completed FDM writer integration test.
@@ -461,6 +564,7 @@ def build_fdm_writer_runtime_attestation(
         executable_path,
         sidecar_path,
         source_sha256=audit.source_sha256,
+        build_manifest_path=Path(build_manifest).expanduser().resolve(),
     )
 
 

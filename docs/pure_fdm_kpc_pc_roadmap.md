@@ -292,19 +292,32 @@ python scripts/record_fdm_writer_runtime_attestation.py \
   /path/to/compiled/ramses \
   /path/to/test/fdm/dm_run_provenance_00042.txt \
   results/fdm_writer_runtime_attestation.json \
+  --build-manifest /path/to/lagRamses/build_source_manifest.json \
   --operator-confirmed
 ```
 
-The resulting schema-v4 attestation hashes and re-parses the FDM sidecar and
+Create the manifest from a clean checkout before recording the run:
+
+```bash
+python scripts/create_lagramses_build_manifest.py \
+  /path/to/lagRamses \
+  /path/to/lagRamses/build_source_manifest.json
+```
+
+The resulting schema-v5 attestation hashes and re-parses the FDM sidecar and
 the raw `fdm_outer_wave_provenance_<output>.txt` record,
 requires its `COMPLETE` marker and sidecar-referenced namelist/compilation
-copies, checks that the compilation `last commit` agrees with the sidecar
-build identity, requires a consistent multi-rank MPI transcript, and requires
-one `Run completed` line per rank in the Slurm run log.  A missing raw wave
-record, singleton MPI fallback, or analytic-drag accounting is rejected.  It
-remains an operator attestation of a prior test, not a cryptographic proof
-that the binary ran or that a physical outer-halo case is scientifically
-resolved.
+copies, checks that the compilation `last commit` agrees with the full clean
+revision in the source manifest, and re-hashes the required `output_amr`,
+`output_fdm`, and `bin/Makefile` files.  It requires a consistent multi-rank
+MPI transcript, compares the transcript rank count with raw provenance, checks
+that `COMPLETE` names its output, and records every expected FDM field-shard
+path and SHA-256.  A missing raw wave record, singleton MPI fallback, partial
+shard set, mislabeled completion marker, or analytic-drag accounting is
+rejected.  Master-only RAMSES diagnostics are valid; a per-rank transcript is
+also accepted when every rank reports the same completion.  It remains an
+operator attestation of a prior test, not a cryptographic proof that the
+binary ran or that a physical outer-halo case is scientifically resolved.
 Pass the resulting file with `--runtime-attestation` to the submission gate,
 then use `verify_pure_fdm_outer_submission.py` immediately before Slurm
 submission.
