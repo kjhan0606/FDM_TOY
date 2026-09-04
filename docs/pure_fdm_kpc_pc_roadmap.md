@@ -295,12 +295,16 @@ python scripts/record_fdm_writer_runtime_attestation.py \
   --operator-confirmed
 ```
 
-The resulting schema-v2 attestation hashes and re-parses the FDM sidecar,
+The resulting schema-v4 attestation hashes and re-parses the FDM sidecar and
+the raw `fdm_outer_wave_provenance_<output>.txt` record,
 requires its `COMPLETE` marker and sidecar-referenced namelist/compilation
 copies, checks that the compilation `last commit` agrees with the sidecar
-build identity, and requires `Run completed` in the Slurm run log.  It remains
-an operator attestation of a prior test, not a cryptographic proof that the
-binary ran or that a physical outer-halo case is scientifically resolved.
+build identity, requires a consistent multi-rank MPI transcript, and requires
+one `Run completed` line per rank in the Slurm run log.  A missing raw wave
+record, singleton MPI fallback, or analytic-drag accounting is rejected.  It
+remains an operator attestation of a prior test, not a cryptographic proof
+that the binary ran or that a physical outer-halo case is scientifically
+resolved.
 Pass the resulting file with `--runtime-attestation` to the submission gate,
 then use `verify_pure_fdm_outer_submission.py` immediately before Slurm
 submission.
@@ -888,7 +892,7 @@ relaxation stage now also has a bounded Lageunha execution wrapper: it binds a
 verified sample ledger, uses a shell-free one-thread child environment, writes
 the result through a private temporary path, and publishes a recheckable
 wrapper-declared attestation only after a successful source-bound result.
-The full toy-repository suite passes (`600 passed` at the latest check).
+The full toy-repository suite passes (`601 passed` at the latest check).
 
 No pure-FDM outer zoom has been submitted, and no actual Lageunha relaxation
 extractor command or end-to-end physical delay has been run or accepted.  The

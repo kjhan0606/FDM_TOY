@@ -12,6 +12,21 @@
 # changes the lagRamses checkout and never claims a physical merger result.
 set -euo pipefail
 
+# Keep this smoke test bounded even when the executable initializes threaded
+# FFTW/OpenMP libraries.  The allocation is four MPI ranks × two CPUs.
+export OMP_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+export FFTW_NUM_THREADS=1
+
+# The tested executable is linked against Intel MPI.  Slurm's PMI2 plugin plus
+# the system PMI2 library is required for a real multi-rank launch on syn01;
+# without this setting each task can silently fall back to a singleton.
+if [[ -z "${I_MPI_PMI_LIBRARY:-}" && -r /usr/lib64/libpmi2.so ]]; then
+  export I_MPI_PMI_LIBRARY=/usr/lib64/libpmi2.so
+fi
+
 repo=${RAMSES_REPO:-/home/kjhan/BACKUP/lagRamses}
 executable=${RAMSES_EXECUTABLE:-${repo}/bin/ramses_final3d}
 run_base=${FDM_WRITER_TEST_ROOT:-/gpfs/kjhan/FDM_WRITER_RUNTIME_TEST}
@@ -36,15 +51,30 @@ sha256sum "${run_dir}/ramses_final3d.tested" > "${run_dir}/executable.sha256.cop
 sha256sum "${repo}/patch/lagRamses/output_amr.kjhan.f90" > "${run_dir}/writer-source.sha256"
 
 cd "${run_dir}"
-# This cluster exposes PMIx v4; PMI2 causes a handshake hang on syn01.
-srun --kill-on-bad-exit=1 --mpi=pmix_v4 -n "${SLURM_NTASKS}" \
+# A PMI2-enabled Intel-MPI launch is required for nproc to equal the Slurm
+# task count.  The post-run check below rejects singleton fallbacks.
+srun --kill-on-bad-exit=1 --mpi=pmi2 -n "${SLURM_NTASKS}" \
   -c "${SLURM_CPUS_PER_TASK}" --cpu-bind=cores \
   "${run_dir}/ramses_final3d.tested" cosmo.nml 2>&1 | tee run.log
 
 grep -Fq 'Run completed' run.log
 test -f output_00001/COMPLETE
-sidecar=$(find output_* -maxdepth 3 -type f -name 'dm_run_provenance_*.txt' | sort | tail -n 1)
-test -n "${sidecar}"
+mapfile -t sidecars < <(find output_* -maxdepth 1 -type f -name 'dm_run_provenance_*.txt' | sort)
+test "${#sidecars[@]}" -eq 1
+sidecar=${sidecars[0]}
+test -f output_00001/fdm_outer_wave_provenance_00001.txt
+
+nproc_values=$(sed -nE 's/.*Working with nproc = *([0-9]+) for ndim = *3.*/\1/p' run.log)
+nproc_count=$(printf '%s\n' "${nproc_values}" | sed '/^$/d' | wc -l)
+nproc_unique=$(printf '%s\n' "${nproc_values}" | sed '/^$/d' | sort -u | wc -l)
+nproc_value=$(printf '%s\n' "${nproc_values}" | sed '/^$/d' | head -n 1)
+test "${nproc_count}" -ge 2
+test "${nproc_unique}" -eq 1
+test "${nproc_value}" -ge 2
+test "${nproc_count}" -eq "${nproc_value}"
+completed_count=$(grep -Ec '^[[:space:]]*Run completed[[:space:]]*$' run.log)
+test "${completed_count}" -eq "${nproc_value}"
+
 printf '%s\n' "${run_dir}/${sidecar#./}" > runtime-sidecar.path
 printf '%s\n' "${run_dir}" > runtime-run.path
 printf 'writer_runtime_test_status = passed\n'

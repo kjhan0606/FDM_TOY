@@ -78,10 +78,55 @@ def _runtime_supporting_files(output_dir: Path) -> None:
         "/\n",
         encoding="utf-8",
     )
+    (output_dir / "namelist.txt").write_text(
+        (output_dir / "namelist.txt").read_text(encoding="utf-8")
+        + "&AMR_PARAMS\nlevelmax=17\n/\n",
+        encoding="utf-8",
+    )
     (output_dir / "compilation.txt").write_text(
         "last commit = " + "a" * 40 + "\n", encoding="utf-8"
     )
-    (output_dir.parent / "run.log").write_text("Run completed\n", encoding="utf-8")
+    (output_dir.parent / "run.log").write_text(
+        "Working with nproc =    2 for ndim = 3\n"
+        "Working with nproc =    2 for ndim = 3\n"
+        "Run completed\n"
+        "Run completed\n",
+        encoding="utf-8",
+    )
+
+
+def _raw_fdm_outer_provenance(output_dir: Path) -> None:
+    label = output_dir.name.removeprefix("output_")
+    (output_dir / f"fdm_outer_wave_provenance_{label}.txt").write_text(
+        f"# fdm_outer_wave_provenance_v3\n"
+        "time_code = 1.0d0\n"
+        "aexp = 5.0d-1\n"
+        "nstep_coarse = 12\n"
+        "mpi_ncpu = 2\n"
+        "restart_parent_output = 0\n"
+        "m_axion_ev = 1.0d-22\n"
+        "hbar_code = 2.0d-3\n"
+        "fdm_use_hjm = F\n"
+        "fdm_first_wave_level = 17\n"
+        "fdm_dual_soliton_ic = F\n"
+        "fdm_dual_soliton_profile_c = 0.0d0\n"
+        "fdm_dual_soliton_rho0 = 0.0d0 0.0d0\n"
+        "fdm_dual_soliton_rc_box = 0.0d0 0.0d0\n"
+        "fdm_dual_soliton_center_box_1 = 0.1d0 0.1d0 0.1d0\n"
+        "fdm_dual_soliton_center_box_2 = 0.9d0 0.9d0 0.9d0\n"
+        "fdm_dual_soliton_velocity_1 = 0.0d0 0.0d0 0.0d0\n"
+        "fdm_dual_soliton_velocity_2 = 0.0d0 0.0d0 0.0d0\n"
+        "fdm_dual_soliton_phase = 0.0d0 0.0d0\n"
+        "analytic_fdm_drag_enabled = .false.\n"
+        "force_accounting = resolved_wave_only\n"
+        "leaf_mass_code = 3.0d0\n"
+        "integrated_current_code = 1.0d-2 -2.0d-2 3.0d-2\n"
+        "leaf_cell_count = 100.0\n"
+        "complete_current_stencil_cell_count = 100.0\n"
+        "complete_current_stencil_fraction = 1.0d0\n"
+        f"psi_snapshot_prefix = fdm_{label}.out\n",
+        encoding="utf-8",
+    )
 
 
 def _runtime_attestation(
@@ -90,8 +135,10 @@ def _runtime_attestation(
     del specification
     executable = tmp_path / "ramses"
     executable.write_bytes(b"compiled writer integration fixture\n")
+    executable.chmod(0o755)
     output_dir = tmp_path / "output_00042"
     _runtime_supporting_files(output_dir)
+    _raw_fdm_outer_provenance(output_dir)
     sidecar = output_dir / "dm_run_provenance_00042.txt"
     _fdm_sidecar(sidecar)
     record = build_fdm_writer_runtime_attestation(
@@ -109,8 +156,10 @@ def test_runtime_attestation_requires_explicit_operator_confirmation(
     del specification
     executable = tmp_path / "ramses"
     executable.write_bytes(b"compiled writer integration fixture\n")
+    executable.chmod(0o755)
     output_dir = tmp_path / "output_00042"
     _runtime_supporting_files(output_dir)
+    _raw_fdm_outer_provenance(output_dir)
     sidecar = output_dir / "dm_run_provenance_00042.txt"
     _fdm_sidecar(sidecar)
     with pytest.raises(ValueError, match="operator_confirmed"):
@@ -228,8 +277,10 @@ def test_runtime_attestation_requires_completed_supporting_files(
     specification, _, _, source = _outer_inputs(tmp_path)
     executable = tmp_path / "ramses"
     executable.write_bytes(b"compiled writer integration fixture\n")
+    executable.chmod(0o755)
     output_dir = tmp_path / "output_00042"
     _runtime_supporting_files(output_dir)
+    _raw_fdm_outer_provenance(output_dir)
     sidecar = output_dir / "dm_run_provenance_00042.txt"
     _fdm_sidecar(sidecar)
     (output_dir / artifact).unlink()
@@ -244,8 +295,10 @@ def test_runtime_attestation_rejects_compilation_build_mismatch(tmp_path: Path) 
     del specification
     executable = tmp_path / "ramses"
     executable.write_bytes(b"compiled writer integration fixture\n")
+    executable.chmod(0o755)
     output_dir = tmp_path / "output_00042"
     _runtime_supporting_files(output_dir)
+    _raw_fdm_outer_provenance(output_dir)
     sidecar = output_dir / "dm_run_provenance_00042.txt"
     _fdm_sidecar(sidecar)
     (output_dir / "compilation.txt").write_text(
@@ -262,12 +315,43 @@ def test_runtime_attestation_rejects_missing_success_log(tmp_path: Path) -> None
     del specification
     executable = tmp_path / "ramses"
     executable.write_bytes(b"compiled writer integration fixture\n")
+    executable.chmod(0o755)
     output_dir = tmp_path / "output_00042"
     _runtime_supporting_files(output_dir)
+    _raw_fdm_outer_provenance(output_dir)
     sidecar = output_dir / "dm_run_provenance_00042.txt"
     _fdm_sidecar(sidecar)
-    (tmp_path / "run.log").write_text("Run stopped\n", encoding="utf-8")
+    (tmp_path / "run.log").write_text(
+        "Working with nproc =    2 for ndim = 3\n"
+        "Working with nproc =    2 for ndim = 3\n"
+        "Run stopped\n",
+        encoding="utf-8",
+    )
     with pytest.raises(ValueError, match="completion marker"):
+        build_fdm_writer_runtime_attestation(
+            source, executable, sidecar, operator_confirmed=True
+        )
+
+
+def test_runtime_attestation_rejects_singleton_mpi_launch(tmp_path: Path) -> None:
+    specification, _, _, source = _outer_inputs(tmp_path)
+    del specification
+    executable = tmp_path / "ramses"
+    executable.write_bytes(b"compiled writer integration fixture\n")
+    executable.chmod(0o755)
+    output_dir = tmp_path / "output_00042"
+    _runtime_supporting_files(output_dir)
+    _raw_fdm_outer_provenance(output_dir)
+    sidecar = output_dir / "dm_run_provenance_00042.txt"
+    _fdm_sidecar(sidecar)
+    (tmp_path / "run.log").write_text(
+        "Working with nproc =    1 for ndim = 3\n"
+        "Working with nproc =    1 for ndim = 3\n"
+        "Run completed\n"
+        "Run completed\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="multi-rank MPI"):
         build_fdm_writer_runtime_attestation(
             source, executable, sidecar, operator_confirmed=True
         )

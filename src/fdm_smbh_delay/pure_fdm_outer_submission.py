@@ -12,11 +12,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import math
+import os
 from pathlib import Path
 import re
 from typing import Any, Mapping
 
 from .dm_run_provenance import read_dark_matter_run_provenance
+from .lagramses_fdm_provenance import read_lagramses_fdm_outer_wave_provenance
 from .lagramses_writer_audit import (
     WriterForceAccountingAudit,
     audit_lagramses_writer_force_accounting,
@@ -26,7 +29,7 @@ from .zoom_calibration import ZoomGrid, load_zoom_grid
 
 
 PURE_FDM_OUTER_SUBMISSION_SCHEMA_VERSION = 1
-WRITER_RUNTIME_ATTESTATION_SCHEMA_VERSION = 2
+WRITER_RUNTIME_ATTESTATION_SCHEMA_VERSION = 4
 _SHA256_RE = re.compile(r"[0-9a-fA-F]{64}")
 _OUTPUT_DIRECTORY_RE = re.compile(r"output_[0-9]{5}")
 
@@ -139,11 +142,29 @@ def _runtime_artifact_context(
     )
     complete_marker = output_directory / "COMPLETE"
     run_log = output_directory.parent / "run.log"
+    output_label = output_directory.name.removeprefix("output_")
+    expected_sidecar_name = f"dm_run_provenance_{output_label}.txt"
+    if sidecar_path.name != expected_sidecar_name:
+        raise ValueError(
+            "FDM writer sidecar filename does not match its output directory"
+        )
+    sidecars = sorted(output_directory.glob("dm_run_provenance_*.txt"))
+    if sidecars != [sidecar_path]:
+        raise ValueError("output directory must contain exactly one DM sidecar")
+    outer_wave_provenance = output_directory / (
+        f"fdm_outer_wave_provenance_{output_label}.txt"
+    )
+    wave_records = sorted(output_directory.glob("fdm_outer_wave_provenance_*.txt"))
+    if wave_records != [outer_wave_provenance]:
+        raise ValueError(
+            "output directory must contain exactly one raw FDM outer-wave provenance record"
+        )
     for path, name in (
         (complete_marker, "COMPLETE marker"),
         (namelist, "copied namelist"),
         (compilation, "copied compilation"),
         (run_log, "runtime log"),
+        (outer_wave_provenance, "raw FDM outer-wave provenance"),
     ):
         if not path.is_file():
             raise ValueError(f"{name} is missing: {path}")
@@ -152,6 +173,7 @@ def _runtime_artifact_context(
         "namelist": namelist,
         "compilation": compilation,
         "run_log": run_log,
+        "outer_wave_provenance": outer_wave_provenance,
         "output_directory": output_directory,
         "run_directory": output_directory.parent,
     }
@@ -159,9 +181,15 @@ def _runtime_artifact_context(
 
 def _validate_runtime_supporting_artifacts(
     context: Mapping[str, Path], provenance: Any
-) -> None:
+) -> tuple[int, int]:
     assignments = _namelist_assignments(context["namelist"])
-    for key in ("use_fdm", "fdm_outer_ledger", "fdm_use_hjm", "fdm_first_wave_level"):
+    for key in (
+        "use_fdm",
+        "fdm_outer_ledger",
+        "fdm_use_hjm",
+        "fdm_first_wave_level",
+        "levelmax",
+    ):
         values = assignments.get(key, [])
         if len(values) != 1:
             raise ValueError(f"copied namelist must contain exactly one {key} assignment")
@@ -180,6 +208,27 @@ def _validate_runtime_supporting_artifacts(
         raise ValueError("copied namelist fdm_first_wave_level must be an integer") from error
     if first_wave_level < 0:
         raise ValueError("copied namelist fdm_first_wave_level must be non-negative")
+    if first_wave_level == 0:
+        raise ValueError(
+            "copied namelist fdm_first_wave_level must be explicit for attestation"
+        )
+    try:
+        levelmax = int(assignments["levelmax"][0])
+    except ValueError as error:
+        raise ValueError("copied namelist levelmax must be an integer") from error
+    if levelmax < 1:
+        raise ValueError("copied namelist levelmax must be positive")
+    effective_first_wave_level = min(first_wave_level, levelmax + 1)
+    try:
+        sidecar_first_wave_level = int(
+            provenance.parameter("fdm_first_wave_level")
+        )
+    except (TypeError, ValueError) as error:
+        raise ValueError("FDM sidecar fdm_first_wave_level is invalid") from error
+    if sidecar_first_wave_level != effective_first_wave_level:
+        raise ValueError(
+            "FDM sidecar fdm_first_wave_level disagrees with the effective namelist value"
+        )
 
     build_hash = provenance.build_git_hash.strip()
     if not build_hash:
@@ -190,8 +239,63 @@ def _validate_runtime_supporting_artifacts(
         raise ValueError(
             "copied compilation last commit does not match the FDM sidecar build_git_hash"
         )
-    if "Run completed" not in _read_text(context["run_log"], "runtime log"):
+    runtime_log = _read_text(context["run_log"], "runtime log")
+    nproc_matches = [
+        int(value)
+        for value in re.findall(
+            r"(?im)^\s*Working\s+with\s+nproc\s*=\s*(\d+)\s+for\s+ndim\s*=\s*3\s*$",
+            runtime_log,
+        )
+    ]
+    if (
+        len(nproc_matches) < 2
+        or len(set(nproc_matches)) != 1
+        or nproc_matches[0] < 2
+        or len(nproc_matches) != nproc_matches[0]
+    ):
+        raise ValueError(
+            "runtime log does not attest one consistent multi-rank MPI execution"
+        )
+    completed = len(re.findall(r"(?im)^\s*Run\s+completed\s*$", runtime_log))
+    if completed != nproc_matches[0]:
         raise ValueError("runtime log does not contain the successful completion marker")
+    try:
+        raw_wave = read_lagramses_fdm_outer_wave_provenance(
+            context["outer_wave_provenance"]
+        )
+    except (OSError, ValueError) as error:
+        raise ValueError(f"raw FDM outer-wave provenance is invalid: {error}") from error
+    if raw_wave.source_schema_version < 3:
+        raise ValueError("raw FDM outer-wave provenance lacks MPI output-set identity")
+    raw_decision = raw_wave.decision()
+    if raw_decision.get("status") != "available_raw_provenance":
+        raise ValueError(
+            "raw FDM outer-wave provenance is not available: "
+            + str(raw_decision.get("reason", "unknown reason"))
+        )
+    if raw_wave.nstep_coarse != provenance.nstep_coarse:
+        raise ValueError("raw FDM and DM sidecars disagree on nstep_coarse")
+    if not math.isclose(raw_wave.time_code, provenance.time_code, rel_tol=1.0e-12, abs_tol=1.0e-12):
+        raise ValueError("raw FDM and DM sidecars disagree on time_code")
+    if not math.isclose(raw_wave.aexp, provenance.scale_factor, rel_tol=1.0e-12, abs_tol=1.0e-12):
+        raise ValueError("raw FDM and DM sidecars disagree on aexp")
+    if not math.isclose(
+        raw_wave.m_axion_ev,
+        float(provenance.parameter("m_axion_ev")),
+        rel_tol=1.0e-12,
+        abs_tol=1.0e-30,
+    ):
+        raise ValueError("raw FDM and DM sidecars disagree on m_axion_ev")
+    if raw_wave.fdm_use_hjm != provenance.parameter("fdm_use_hjm"):
+        raise ValueError("raw FDM and DM sidecars disagree on fdm_use_hjm")
+    if raw_wave.fdm_first_wave_level != effective_first_wave_level:
+        raise ValueError("raw FDM provenance disagrees with the effective namelist value")
+    if raw_wave.analytic_fdm_drag_enabled or raw_wave.force_accounting != "resolved_wave_only":
+        raise ValueError("raw FDM provenance does not attest resolved-wave-only accounting")
+    expected_prefix = f"fdm_{context['output_directory'].name.removeprefix('output_')}.out"
+    if raw_wave.psi_snapshot_prefix != expected_prefix:
+        raise ValueError("raw FDM provenance snapshot prefix does not match its output")
+    return nproc_matches[0], effective_first_wave_level
 
 
 def _validate_manifest(path: Path, grid: ZoomGrid) -> None:
@@ -231,6 +335,7 @@ def _validate_runtime_attestation(
         "namelist",
         "compilation",
         "run_log",
+        "fdm_outer_provenance",
         "execution",
     }
     if set(record) != expected_keys:
@@ -269,15 +374,15 @@ def _build_runtime_attestation_record(
     *,
     source_sha256: str | None = None,
 ) -> dict[str, Any]:
-    """Build a canonical v2 record from one completed output directory."""
+    """Build a canonical v4 record from one completed output directory."""
 
     source_payload = _artifact_payload(source_path)
     if source_sha256 is not None and source_payload["sha256"] != source_sha256:
         raise ValueError("writer source hash does not match the static audit")
     executable_path = executable_path.resolve()
     sidecar_path = sidecar_path.resolve()
-    if not executable_path.is_file():
-        raise ValueError(f"executable is not a regular file: {executable_path}")
+    if not executable_path.is_file() or not os.access(executable_path, os.X_OK):
+        raise ValueError(f"executable is not an executable file: {executable_path}")
     if not sidecar_path.is_file():
         raise ValueError(f"fdm_sidecar is not a regular file: {sidecar_path}")
     try:
@@ -291,7 +396,9 @@ def _build_runtime_attestation_record(
     if provenance.parameter("fdm_outer_ledger_enabled") is not True:
         raise ValueError("FDM sidecar does not enable the outer-wave ledger")
     context = _runtime_artifact_context(sidecar_path, provenance)
-    _validate_runtime_supporting_artifacts(context, provenance)
+    nproc, effective_first_wave_level = _validate_runtime_supporting_artifacts(
+        context, provenance
+    )
     return {
         "schema_version": WRITER_RUNTIME_ATTESTATION_SCHEMA_VERSION,
         "status": "runtime_writer_integration_passed",
@@ -302,10 +409,15 @@ def _build_runtime_attestation_record(
         "namelist": _artifact_payload(context["namelist"]),
         "compilation": _artifact_payload(context["compilation"]),
         "run_log": _artifact_payload(context["run_log"]),
+        "fdm_outer_provenance": _artifact_payload(
+            context["outer_wave_provenance"]
+        ),
         "execution": {
             "run_directory": str(context["run_directory"]),
             "output_directory": str(context["output_directory"]),
             "output_label": context["output_directory"].name,
+            "mpi_nproc": nproc,
+            "effective_fdm_first_wave_level": effective_first_wave_level,
         },
     }
 
