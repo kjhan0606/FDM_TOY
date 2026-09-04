@@ -88,8 +88,6 @@ def _runtime_supporting_files(output_dir: Path) -> None:
     )
     (output_dir.parent / "run.log").write_text(
         "Working with nproc =    2 for ndim = 3\n"
-        "Working with nproc =    2 for ndim = 3\n"
-        "Run completed\n"
         "Run completed\n",
         encoding="utf-8",
     )

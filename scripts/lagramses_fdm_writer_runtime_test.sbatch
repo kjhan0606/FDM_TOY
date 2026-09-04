@@ -44,6 +44,19 @@ if grep -q 'fdm_outer_ledger' "${run_dir}/cosmo.nml"; then
 else
   sed -i '/fdm_use_hjm/a fdm_outer_ledger=.true.' "${run_dir}/cosmo.nml"
 fi
+# The tiny dynamic-FDM fixture starts at aexp much below its production
+# output target (aout=1).  Request one output on the final smoke step so the
+# writer's COMPLETE/sidecar/raw-provenance path is exercised deterministically
+# without changing the tracked input or extending the run.
+sed -i -E 's/^[[:space:]]*foutput[[:space:]]*=.*/foutput=2/' "${run_dir}/cosmo.nml"
+# Full FDM field shards are part of this writer smoke contract.  The current
+# HDF5 path intentionally fails closed until it has an equivalent FDM-field
+# writer, so exercise the original per-rank backup path here.
+sed -i -E "s/^[[:space:]]*outformat[[:space:]]*=.*/outformat='original'/" "${run_dir}/cosmo.nml"
+# The current full lagRamses build includes the separate Phase-0 stellar
+# production gate.  This writer-only test has no hydro or sinks, so keep that
+# unrelated channel out of the smoke path without changing the tracked input.
+sed -i -E "s/^[[:space:]]*feedback_mode[[:space:]]*=.*/feedback_mode='legacy'/" "${run_dir}/cosmo.nml"
 : > "${run_dir}/jobcontrol.txt"
 cp "${executable}" "${run_dir}/ramses_final3d.tested"
 sha256sum "${executable}" > "${run_dir}/executable.sha256.before"
@@ -68,12 +81,16 @@ nproc_values=$(sed -nE 's/.*Working with nproc = *([0-9]+) for ndim = *3.*/\1/p'
 nproc_count=$(printf '%s\n' "${nproc_values}" | sed '/^$/d' | wc -l)
 nproc_unique=$(printf '%s\n' "${nproc_values}" | sed '/^$/d' | sort -u | wc -l)
 nproc_value=$(printf '%s\n' "${nproc_values}" | sed '/^$/d' | head -n 1)
-test "${nproc_count}" -ge 2
+test "${nproc_count}" -ge 1
 test "${nproc_unique}" -eq 1
 test "${nproc_value}" -ge 2
-test "${nproc_count}" -eq "${nproc_value}"
 completed_count=$(grep -Ec '^[[:space:]]*Run completed[[:space:]]*$' run.log)
-test "${completed_count}" -eq "${nproc_value}"
+if [[ "${nproc_count}" -eq 1 && "${completed_count}" -eq 1 ]]; then
+  : # master-only RAMSES transcript
+else
+  test "${nproc_count}" -eq "${nproc_value}"
+  test "${completed_count}" -eq "${nproc_value}"
+fi
 
 printf '%s\n' "${run_dir}/${sidecar#./}" > runtime-sidecar.path
 printf '%s\n' "${run_dir}" > runtime-run.path

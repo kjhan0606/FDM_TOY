@@ -247,18 +247,22 @@ def _validate_runtime_supporting_artifacts(
             runtime_log,
         )
     ]
-    if (
-        len(nproc_matches) < 2
-        or len(set(nproc_matches)) != 1
-        or nproc_matches[0] < 2
-        or len(nproc_matches) != nproc_matches[0]
-    ):
+    nproc_valid = bool(nproc_matches) and len(set(nproc_matches)) == 1 and nproc_matches[0] >= 2
+    completed = len(re.findall(r"(?im)^\s*Run\s+completed\s*$", runtime_log))
+    if completed == 0:
+        raise ValueError("runtime log does not contain the successful completion marker")
+    # RAMSES normally prints these rank-wide diagnostics from the master only
+    # (one line).  Some launch wrappers preserve one copy per rank instead;
+    # accept that form too, but reject a partial/mixed transcript.
+    transcript_shape_valid = (len(nproc_matches) == 1 and completed == 1) or (
+        bool(nproc_matches)
+        and len(nproc_matches) == nproc_matches[0]
+        and completed == nproc_matches[0]
+    )
+    if not nproc_valid or not transcript_shape_valid:
         raise ValueError(
             "runtime log does not attest one consistent multi-rank MPI execution"
         )
-    completed = len(re.findall(r"(?im)^\s*Run\s+completed\s*$", runtime_log))
-    if completed != nproc_matches[0]:
-        raise ValueError("runtime log does not contain the successful completion marker")
     try:
         raw_wave = read_lagramses_fdm_outer_wave_provenance(
             context["outer_wave_provenance"]
