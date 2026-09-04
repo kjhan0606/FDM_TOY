@@ -283,6 +283,23 @@ test has produced an operator-attested FDM sidecar with
 `fdm_force_accounting = resolved_wave_only` and
 `fdm_outer_ledger_enabled = .true.`.  A static source token is only a
 prerequisite; it is not evidence that an executable emitted the sidecar.
+After the operator has run that integration test, the artifact record can be
+constructed without executing the binary again:
+
+```bash
+python scripts/record_fdm_writer_runtime_attestation.py \
+  /path/to/lagRamses/patch/lagRamses/output_amr.kjhan.f90 \
+  /path/to/compiled/ramses \
+  /path/to/test/fdm/dm_run_provenance_00042.txt \
+  results/fdm_writer_runtime_attestation.json \
+  --operator-confirmed
+```
+
+This records hashes and re-parses the FDM sidecar; it is an operator
+attestation of a prior test, not a cryptographic proof that the binary ran.
+Pass the resulting file with `--runtime-attestation` to the submission gate,
+then use `verify_pure_fdm_outer_submission.py` immediately before Slurm
+submission.
 
 `NestedZoomCheckpointContract` enforces the registration gate: the requested
 outer case ID must match exactly, the 1 pc target must retain at least four
@@ -867,7 +884,7 @@ relaxation stage now also has a bounded Lageunha execution wrapper: it binds a
 verified sample ledger, uses a shell-free one-thread child environment, writes
 the result through a private temporary path, and publishes a recheckable
 wrapper-declared attestation only after a successful source-bound result.
-The full toy-repository suite passes (`595 passed` at the latest check).
+The full toy-repository suite passes (`596 passed` at the latest check).
 
 No pure-FDM outer zoom has been submitted, and no actual Lageunha relaxation
 extractor command or end-to-end physical delay has been run or accepted.  The

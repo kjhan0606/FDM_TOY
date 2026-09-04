@@ -135,6 +135,65 @@ def _validate_runtime_attestation(
     }
 
 
+def build_fdm_writer_runtime_attestation(
+    source: str | Path,
+    executable: str | Path,
+    fdm_sidecar: str | Path,
+    *,
+    operator_confirmed: bool = False,
+) -> dict[str, Any]:
+    """Record artifacts from an operator-completed FDM writer integration test.
+
+    This function does not execute the binary.  The explicit confirmation
+    flag documents that the operator has already run the compiled writer test;
+    the function then verifies the current source, executable, and emitted FDM
+    sidecar bytes before returning the attestation record.
+    """
+
+    if operator_confirmed is not True:
+        raise ValueError(
+            "operator_confirmed=True is required after completing the runtime test"
+        )
+    source_path = Path(source).expanduser().resolve()
+    executable_path = Path(executable).expanduser().resolve()
+    sidecar_path = Path(fdm_sidecar).expanduser().resolve()
+    audit = audit_lagramses_writer_force_accounting(
+        source_path, required_models=("fdm",)
+    )
+    if not audit.tokens_present or audit.source_sha256 is None:
+        raise ValueError(
+            "FDM writer source does not pass the static token prerequisite"
+        )
+    attested_source, source_sha = _artifact(
+        {"path": str(source_path), "sha256": audit.source_sha256}, "source"
+    )
+    attested_executable, executable_sha = _artifact(
+        {"path": str(executable_path), "sha256": _file_sha256(executable_path)},
+        "executable",
+    )
+    attested_sidecar, sidecar_sha = _artifact(
+        {"path": str(sidecar_path), "sha256": _file_sha256(sidecar_path)},
+        "fdm_sidecar",
+    )
+    try:
+        provenance = read_dark_matter_run_provenance(attested_sidecar)
+    except (OSError, ValueError) as error:
+        raise ValueError(f"FDM writer sidecar is invalid: {error}") from error
+    if provenance.dark_matter_model != "fdm":
+        raise ValueError("writer runtime attestation sidecar is not an FDM output")
+    if provenance.parameter("fdm_force_accounting") != "resolved_wave_only":
+        raise ValueError("FDM sidecar does not declare resolved_wave_only accounting")
+    if provenance.parameter("fdm_outer_ledger_enabled") is not True:
+        raise ValueError("FDM sidecar does not enable the outer-wave ledger")
+    return {
+        "schema_version": WRITER_RUNTIME_ATTESTATION_SCHEMA_VERSION,
+        "status": "runtime_writer_integration_passed",
+        "source": {"path": str(attested_source), "sha256": source_sha},
+        "executable": {"path": str(attested_executable), "sha256": executable_sha},
+        "fdm_sidecar": {"path": str(attested_sidecar), "sha256": sidecar_sha},
+    }
+
+
 @dataclass(frozen=True)
 class PureFDMOuterSubmissionPreflight:
     """A conservative decision before an operator submits the outer grid."""

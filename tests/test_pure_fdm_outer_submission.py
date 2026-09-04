@@ -8,6 +8,7 @@ import pytest
 
 from fdm_smbh_delay.pure_fdm_outer_submission import (
     assess_pure_fdm_outer_submission,
+    build_fdm_writer_runtime_attestation,
     read_verified_pure_fdm_outer_submission,
 )
 from fdm_smbh_delay.pure_fdm_zoom import preflight_pure_fdm_outer_zoom
@@ -71,16 +72,25 @@ def _runtime_attestation(
     executable.write_bytes(b"compiled writer integration fixture\n")
     sidecar = tmp_path / "dm_run_provenance_00042.txt"
     _fdm_sidecar(sidecar)
-    record = {
-        "schema_version": 1,
-        "status": "runtime_writer_integration_passed",
-        "source": {"path": str(source), "sha256": _sha256(source)},
-        "executable": {"path": str(executable), "sha256": _sha256(executable)},
-        "fdm_sidecar": {"path": str(sidecar), "sha256": _sha256(sidecar)},
-    }
+    record = build_fdm_writer_runtime_attestation(
+        source, executable, sidecar, operator_confirmed=True
+    )
     path = tmp_path / "runtime_attestation.json"
     path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
     return path
+
+
+def test_runtime_attestation_requires_explicit_operator_confirmation(
+    tmp_path: Path,
+) -> None:
+    specification, _, _, source = _outer_inputs(tmp_path)
+    del specification
+    executable = tmp_path / "ramses"
+    executable.write_bytes(b"compiled writer integration fixture\n")
+    sidecar = tmp_path / "dm_run_provenance_00042.txt"
+    _fdm_sidecar(sidecar)
+    with pytest.raises(ValueError, match="operator_confirmed"):
+        build_fdm_writer_runtime_attestation(source, executable, sidecar)
 
 
 def test_outer_submission_requires_compiled_writer_attestation(tmp_path: Path) -> None:
