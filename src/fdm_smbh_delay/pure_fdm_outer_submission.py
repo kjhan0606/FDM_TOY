@@ -26,8 +26,9 @@ from .zoom_calibration import ZoomGrid, load_zoom_grid
 
 
 PURE_FDM_OUTER_SUBMISSION_SCHEMA_VERSION = 1
-WRITER_RUNTIME_ATTESTATION_SCHEMA_VERSION = 1
+WRITER_RUNTIME_ATTESTATION_SCHEMA_VERSION = 2
 _SHA256_RE = re.compile(r"[0-9a-fA-F]{64}")
+_OUTPUT_DIRECTORY_RE = re.compile(r"output_[0-9]{5}")
 
 
 def _file_sha256(path: Path) -> str:
@@ -70,6 +71,129 @@ def _artifact(record: Any, name: str) -> tuple[Path, str]:
     return path, actual
 
 
+def _sidecar_relative_artifact(
+    output_directory: Path, reference: str, name: str
+) -> Path:
+    """Resolve a sidecar-referenced file without permitting path substitution."""
+
+    if not isinstance(reference, str) or not reference.strip():
+        raise ValueError(f"{name} reference is required")
+    relative = Path(reference)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError(f"{name} reference must be relative to the output directory")
+    candidate = (output_directory / relative).resolve()
+    if candidate.parent != output_directory:
+        raise ValueError(f"{name} reference must name a file in the output directory")
+    return candidate
+
+
+def _read_text(path: Path, name: str) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        raise ValueError(f"cannot read {name}: {error}") from error
+
+
+def _namelist_assignments(path: Path) -> dict[str, list[str]]:
+    """Collect simple scalar assignments after removing Fortran comments.
+
+    The integration test only needs scalar FDM switches.  Splitting comma
+    separated assignments also makes duplicate/override lines fail closed.
+    """
+
+    assignments: dict[str, list[str]] = {}
+    for raw_line in _read_text(path, "copied namelist").splitlines():
+        line = raw_line.split("!", 1)[0]
+        for fragment in line.split(","):
+            if "=" not in fragment:
+                continue
+            key, value = fragment.split("=", 1)
+            key = key.strip().lower()
+            value = value.strip().split()[0] if value.strip() else ""
+            if key:
+                assignments.setdefault(key, []).append(value.lower())
+    return assignments
+
+
+def _fortran_logical(value: str, name: str) -> bool:
+    if value in {".true.", "t", "true"}:
+        return True
+    if value in {".false.", "f", "false"}:
+        return False
+    raise ValueError(f"{name} must be a Fortran logical")
+
+
+def _runtime_artifact_context(
+    sidecar_path: Path, provenance: Any
+) -> dict[str, Path]:
+    output_directory = sidecar_path.parent
+    if _OUTPUT_DIRECTORY_RE.fullmatch(output_directory.name) is None:
+        raise ValueError(
+            "FDM writer sidecar must be directly inside an output_NNNNN directory"
+        )
+    namelist = _sidecar_relative_artifact(
+        output_directory, provenance.namelist_copy, "namelist_copy"
+    )
+    compilation = _sidecar_relative_artifact(
+        output_directory, provenance.compilation_copy, "compilation_copy"
+    )
+    complete_marker = output_directory / "COMPLETE"
+    run_log = output_directory.parent / "run.log"
+    for path, name in (
+        (complete_marker, "COMPLETE marker"),
+        (namelist, "copied namelist"),
+        (compilation, "copied compilation"),
+        (run_log, "runtime log"),
+    ):
+        if not path.is_file():
+            raise ValueError(f"{name} is missing: {path}")
+    return {
+        "complete_marker": complete_marker,
+        "namelist": namelist,
+        "compilation": compilation,
+        "run_log": run_log,
+        "output_directory": output_directory,
+        "run_directory": output_directory.parent,
+    }
+
+
+def _validate_runtime_supporting_artifacts(
+    context: Mapping[str, Path], provenance: Any
+) -> None:
+    assignments = _namelist_assignments(context["namelist"])
+    for key in ("use_fdm", "fdm_outer_ledger", "fdm_use_hjm", "fdm_first_wave_level"):
+        values = assignments.get(key, [])
+        if len(values) != 1:
+            raise ValueError(f"copied namelist must contain exactly one {key} assignment")
+    if not _fortran_logical(assignments["use_fdm"][0], "use_fdm"):
+        raise ValueError("copied namelist does not enable use_fdm")
+    if not _fortran_logical(
+        assignments["fdm_outer_ledger"][0], "fdm_outer_ledger"
+    ):
+        raise ValueError("copied namelist does not enable fdm_outer_ledger")
+    nml_hjm = _fortran_logical(assignments["fdm_use_hjm"][0], "fdm_use_hjm")
+    if nml_hjm != provenance.parameter("fdm_use_hjm"):
+        raise ValueError("copied namelist fdm_use_hjm disagrees with the FDM sidecar")
+    try:
+        first_wave_level = int(assignments["fdm_first_wave_level"][0])
+    except ValueError as error:
+        raise ValueError("copied namelist fdm_first_wave_level must be an integer") from error
+    if first_wave_level < 0:
+        raise ValueError("copied namelist fdm_first_wave_level must be non-negative")
+
+    build_hash = provenance.build_git_hash.strip()
+    if not build_hash:
+        raise ValueError("FDM sidecar build_git_hash is required")
+    compilation = _read_text(context["compilation"], "copied compilation")
+    commits = re.findall(r"(?im)^\s*last\s+commit\s*=\s*(\S+)\s*$", compilation)
+    if len(commits) != 1 or commits[0] != build_hash:
+        raise ValueError(
+            "copied compilation last commit does not match the FDM sidecar build_git_hash"
+        )
+    if "Run completed" not in _read_text(context["run_log"], "runtime log"):
+        raise ValueError("runtime log does not contain the successful completion marker")
+
+
 def _validate_manifest(path: Path, grid: ZoomGrid) -> None:
     record = _read_json(path, "outer manifest")
     expected = grid.as_dict()
@@ -94,16 +218,21 @@ def _validate_runtime_attestation(
     source_path: Path,
     source_sha256: str,
 ) -> dict[str, Any]:
-    """Validate a small operator record from a compiled writer integration test.
-
-    The record is intentionally not a cryptographic proof of execution.  It
-    binds the test's source and executable bytes and re-reads the emitted FDM
-    sidecar, which is enough to prevent a stale or model-mismatched fixture
-    from being used as a submission prerequisite.
-    """
+    """Validate the complete operator record from a writer integration test."""
 
     record = _read_json(path, "writer runtime attestation")
-    expected_keys = {"schema_version", "status", "source", "executable", "fdm_sidecar"}
+    expected_keys = {
+        "schema_version",
+        "status",
+        "source",
+        "executable",
+        "fdm_sidecar",
+        "complete_marker",
+        "namelist",
+        "compilation",
+        "run_log",
+        "execution",
+    }
     if set(record) != expected_keys:
         raise ValueError("writer runtime attestation has an unsupported key set")
     if record.get("schema_version") != WRITER_RUNTIME_ATTESTATION_SCHEMA_VERSION:
@@ -116,6 +245,41 @@ def _validate_runtime_attestation(
         raise ValueError("writer runtime attestation source does not match the audit")
     executable_path, executable_sha = _artifact(record.get("executable"), "executable")
     sidecar_path, sidecar_sha = _artifact(record.get("fdm_sidecar"), "fdm_sidecar")
+    expected = _build_runtime_attestation_record(
+        attested_source,
+        executable_path,
+        sidecar_path,
+        source_sha256=attested_source_sha,
+    )
+    if record != expected:
+        raise ValueError(
+            "writer runtime attestation supporting artifacts do not match the current run"
+        )
+    return expected
+
+
+def _artifact_payload(path: Path) -> dict[str, str]:
+    return {"path": str(path), "sha256": _file_sha256(path)}
+
+
+def _build_runtime_attestation_record(
+    source_path: Path,
+    executable_path: Path,
+    sidecar_path: Path,
+    *,
+    source_sha256: str | None = None,
+) -> dict[str, Any]:
+    """Build a canonical v2 record from one completed output directory."""
+
+    source_payload = _artifact_payload(source_path)
+    if source_sha256 is not None and source_payload["sha256"] != source_sha256:
+        raise ValueError("writer source hash does not match the static audit")
+    executable_path = executable_path.resolve()
+    sidecar_path = sidecar_path.resolve()
+    if not executable_path.is_file():
+        raise ValueError(f"executable is not a regular file: {executable_path}")
+    if not sidecar_path.is_file():
+        raise ValueError(f"fdm_sidecar is not a regular file: {sidecar_path}")
     try:
         provenance = read_dark_matter_run_provenance(sidecar_path)
     except (OSError, ValueError) as error:
@@ -126,12 +290,23 @@ def _validate_runtime_attestation(
         raise ValueError("FDM sidecar does not declare resolved_wave_only accounting")
     if provenance.parameter("fdm_outer_ledger_enabled") is not True:
         raise ValueError("FDM sidecar does not enable the outer-wave ledger")
+    context = _runtime_artifact_context(sidecar_path, provenance)
+    _validate_runtime_supporting_artifacts(context, provenance)
     return {
         "schema_version": WRITER_RUNTIME_ATTESTATION_SCHEMA_VERSION,
         "status": "runtime_writer_integration_passed",
-        "source": {"path": str(attested_source), "sha256": attested_source_sha},
-        "executable": {"path": str(executable_path), "sha256": executable_sha},
-        "fdm_sidecar": {"path": str(sidecar_path), "sha256": sidecar_sha},
+        "source": source_payload,
+        "executable": _artifact_payload(executable_path),
+        "fdm_sidecar": _artifact_payload(sidecar_path),
+        "complete_marker": _artifact_payload(context["complete_marker"]),
+        "namelist": _artifact_payload(context["namelist"]),
+        "compilation": _artifact_payload(context["compilation"]),
+        "run_log": _artifact_payload(context["run_log"]),
+        "execution": {
+            "run_directory": str(context["run_directory"]),
+            "output_directory": str(context["output_directory"]),
+            "output_label": context["output_directory"].name,
+        },
     }
 
 
@@ -146,8 +321,9 @@ def build_fdm_writer_runtime_attestation(
 
     This function does not execute the binary.  The explicit confirmation
     flag documents that the operator has already run the compiled writer test;
-    the function then verifies the current source, executable, and emitted FDM
-    sidecar bytes before returning the attestation record.
+    the function then verifies the current source, executable, emitted FDM
+    sidecar, completion marker, copied inputs, compilation identity, and run
+    log before returning the attestation record.
     """
 
     if operator_confirmed is not True:
@@ -164,34 +340,12 @@ def build_fdm_writer_runtime_attestation(
         raise ValueError(
             "FDM writer source does not pass the static token prerequisite"
         )
-    attested_source, source_sha = _artifact(
-        {"path": str(source_path), "sha256": audit.source_sha256}, "source"
+    return _build_runtime_attestation_record(
+        source_path,
+        executable_path,
+        sidecar_path,
+        source_sha256=audit.source_sha256,
     )
-    attested_executable, executable_sha = _artifact(
-        {"path": str(executable_path), "sha256": _file_sha256(executable_path)},
-        "executable",
-    )
-    attested_sidecar, sidecar_sha = _artifact(
-        {"path": str(sidecar_path), "sha256": _file_sha256(sidecar_path)},
-        "fdm_sidecar",
-    )
-    try:
-        provenance = read_dark_matter_run_provenance(attested_sidecar)
-    except (OSError, ValueError) as error:
-        raise ValueError(f"FDM writer sidecar is invalid: {error}") from error
-    if provenance.dark_matter_model != "fdm":
-        raise ValueError("writer runtime attestation sidecar is not an FDM output")
-    if provenance.parameter("fdm_force_accounting") != "resolved_wave_only":
-        raise ValueError("FDM sidecar does not declare resolved_wave_only accounting")
-    if provenance.parameter("fdm_outer_ledger_enabled") is not True:
-        raise ValueError("FDM sidecar does not enable the outer-wave ledger")
-    return {
-        "schema_version": WRITER_RUNTIME_ATTESTATION_SCHEMA_VERSION,
-        "status": "runtime_writer_integration_passed",
-        "source": {"path": str(attested_source), "sha256": source_sha},
-        "executable": {"path": str(attested_executable), "sha256": executable_sha},
-        "fdm_sidecar": {"path": str(attested_sidecar), "sha256": sidecar_sha},
-    }
 
 
 @dataclass(frozen=True)

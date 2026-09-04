@@ -64,13 +64,35 @@ def _fdm_sidecar(path: Path) -> None:
     )
 
 
+def _runtime_supporting_files(output_dir: Path) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "COMPLETE").write_text("", encoding="utf-8")
+    (output_dir / "namelist.txt").write_text(
+        "&RUN_PARAMS\n"
+        "use_fdm=.true.\n"
+        "/\n"
+        "&FDM_PARAMS\n"
+        "fdm_use_hjm=.false.\n"
+        "fdm_outer_ledger=.true.\n"
+        "fdm_first_wave_level=17\n"
+        "/\n",
+        encoding="utf-8",
+    )
+    (output_dir / "compilation.txt").write_text(
+        "last commit = " + "a" * 40 + "\n", encoding="utf-8"
+    )
+    (output_dir.parent / "run.log").write_text("Run completed\n", encoding="utf-8")
+
+
 def _runtime_attestation(
     tmp_path: Path, specification: Path, source: Path
 ) -> Path:
     del specification
     executable = tmp_path / "ramses"
     executable.write_bytes(b"compiled writer integration fixture\n")
-    sidecar = tmp_path / "dm_run_provenance_00042.txt"
+    output_dir = tmp_path / "output_00042"
+    _runtime_supporting_files(output_dir)
+    sidecar = output_dir / "dm_run_provenance_00042.txt"
     _fdm_sidecar(sidecar)
     record = build_fdm_writer_runtime_attestation(
         source, executable, sidecar, operator_confirmed=True
@@ -87,7 +109,9 @@ def test_runtime_attestation_requires_explicit_operator_confirmation(
     del specification
     executable = tmp_path / "ramses"
     executable.write_bytes(b"compiled writer integration fixture\n")
-    sidecar = tmp_path / "dm_run_provenance_00042.txt"
+    output_dir = tmp_path / "output_00042"
+    _runtime_supporting_files(output_dir)
+    sidecar = output_dir / "dm_run_provenance_00042.txt"
     _fdm_sidecar(sidecar)
     with pytest.raises(ValueError, match="operator_confirmed"):
         build_fdm_writer_runtime_attestation(source, executable, sidecar)
@@ -172,7 +196,7 @@ def test_outer_submission_rejects_invalid_runtime_sidecar(
 ) -> None:
     specification, manifest, preflight, source = _outer_inputs(tmp_path)
     attestation = _runtime_attestation(tmp_path, specification, source)
-    sidecar = tmp_path / "dm_run_provenance_00042.txt"
+    sidecar = tmp_path / "output_00042" / "dm_run_provenance_00042.txt"
     text = sidecar.read_text(encoding="utf-8")
     if field == "fdm_force_accounting":
         text = text.replace("fdm_force_accounting = resolved_wave_only", "fdm_force_accounting = analytic_drag")
@@ -189,3 +213,61 @@ def test_outer_submission_rejects_invalid_runtime_sidecar(
     )
     assert decision.status == "not_ready_writer_runtime_attestation"
     assert any("sidecar" in reason or "accounting" in reason for reason in decision.reasons)
+
+
+@pytest.mark.parametrize(
+    ("artifact", "expected"),
+    (
+        ("COMPLETE", "COMPLETE marker"),
+        ("compilation.txt", "copied compilation"),
+    ),
+)
+def test_runtime_attestation_requires_completed_supporting_files(
+    tmp_path: Path, artifact: str, expected: str
+) -> None:
+    specification, _, _, source = _outer_inputs(tmp_path)
+    executable = tmp_path / "ramses"
+    executable.write_bytes(b"compiled writer integration fixture\n")
+    output_dir = tmp_path / "output_00042"
+    _runtime_supporting_files(output_dir)
+    sidecar = output_dir / "dm_run_provenance_00042.txt"
+    _fdm_sidecar(sidecar)
+    (output_dir / artifact).unlink()
+    with pytest.raises(ValueError, match=expected):
+        build_fdm_writer_runtime_attestation(
+            source, executable, sidecar, operator_confirmed=True
+        )
+
+
+def test_runtime_attestation_rejects_compilation_build_mismatch(tmp_path: Path) -> None:
+    specification, _, _, source = _outer_inputs(tmp_path)
+    del specification
+    executable = tmp_path / "ramses"
+    executable.write_bytes(b"compiled writer integration fixture\n")
+    output_dir = tmp_path / "output_00042"
+    _runtime_supporting_files(output_dir)
+    sidecar = output_dir / "dm_run_provenance_00042.txt"
+    _fdm_sidecar(sidecar)
+    (output_dir / "compilation.txt").write_text(
+        "last commit = " + "b" * 40 + "\n", encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="last commit"):
+        build_fdm_writer_runtime_attestation(
+            source, executable, sidecar, operator_confirmed=True
+        )
+
+
+def test_runtime_attestation_rejects_missing_success_log(tmp_path: Path) -> None:
+    specification, _, _, source = _outer_inputs(tmp_path)
+    del specification
+    executable = tmp_path / "ramses"
+    executable.write_bytes(b"compiled writer integration fixture\n")
+    output_dir = tmp_path / "output_00042"
+    _runtime_supporting_files(output_dir)
+    sidecar = output_dir / "dm_run_provenance_00042.txt"
+    _fdm_sidecar(sidecar)
+    (tmp_path / "run.log").write_text("Run stopped\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="completion marker"):
+        build_fdm_writer_runtime_attestation(
+            source, executable, sidecar, operator_confirmed=True
+        )
