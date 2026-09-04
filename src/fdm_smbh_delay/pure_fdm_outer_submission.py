@@ -16,6 +16,7 @@ import math
 import os
 from pathlib import Path
 import re
+import subprocess
 from typing import Any, Mapping
 
 from .dm_run_provenance import read_dark_matter_run_provenance
@@ -105,6 +106,25 @@ def _validate_build_manifest(
     git_commit = git_commit.lower()
     if record.get("git_dirty") is not False:
         raise ValueError("LagRamses build source manifest must attest a clean worktree")
+    if not (repository / ".git").exists():
+        raise ValueError("LagRamses build source manifest repository is not a Git checkout")
+    try:
+        live_commit = subprocess.run(
+            ["git", "-C", str(repository), "rev-parse", "--verify", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip().lower()
+        live_status = subprocess.run(
+            ["git", "-C", str(repository), "status", "--porcelain=v1"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise ValueError(f"cannot revalidate LagRamses Git checkout: {error}") from error
+    if live_commit != git_commit or live_status:
+        raise ValueError("LagRamses build source manifest Git revision is not a clean current checkout")
     if build_hash != git_commit:
         raise ValueError("LagRamses build source manifest commit differs from the sidecar build hash")
     files = record.get("files")
@@ -130,6 +150,13 @@ def _validate_build_manifest(
         expected_sha = _sha256(entry.get("sha256"), f"build manifest {role}.sha256")
         if not file_path.is_file() or _file_sha256(file_path) != expected_sha:
             raise ValueError(f"LagRamses build source manifest file is missing or changed: {role}")
+        expected_path = {
+            "output_amr": repository / "patch" / "lagRamses" / "output_amr.kjhan.f90",
+            "output_fdm": repository / "patch" / "lagRamses" / "output_fdm.f90",
+            "bin_makefile": repository / "bin" / "Makefile",
+        }.get(role)
+        if expected_path is not None and file_path != expected_path.resolve():
+            raise ValueError(f"LagRamses build source manifest role has a non-canonical path: {role}")
         seen_roles.add(role)
         resolved_files[role] = file_path
     if not required_roles.issubset(seen_roles):

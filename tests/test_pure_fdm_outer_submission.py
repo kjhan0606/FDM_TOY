@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -27,7 +28,9 @@ def _outer_inputs(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     preflight = tmp_path / "preflight.json"
     preflight_record = preflight_pure_fdm_outer_zoom(grid).as_dict()
     preflight.write_text(json.dumps(preflight_record, indent=2, sort_keys=True) + "\n")
-    source = tmp_path / "output_amr.kjhan.f90"
+    repository = tmp_path / "lagramses"
+    source = repository / "patch" / "lagRamses" / "output_amr.kjhan.f90"
+    source.parent.mkdir(parents=True)
     source.write_text(
         "if (dark_matter_model == 'fdm') then\n"
         "  fdm_outer_ledger_enabled = .true.\n"
@@ -37,10 +40,40 @@ def _outer_inputs(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
         "endif\n",
         encoding="utf-8",
     )
+    (repository / "patch" / "lagRamses" / "output_fdm.f90").write_text(
+        "subroutine output_fdm_outer_wave_provenance\nend subroutine\n",
+        encoding="utf-8",
+    )
+    (repository / "bin").mkdir(parents=True)
+    (repository / "bin" / "Makefile").write_text(
+        "FDM_OBJ = output_fdm.o\n", encoding="utf-8"
+    )
+    subprocess.run(["git", "-C", str(repository), "init", "-q"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repository), "config", "user.email", "fixture@example.invalid"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repository), "config", "user.name", "fixture"], check=True
+    )
+    subprocess.run(["git", "-C", str(repository), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(repository), "commit", "-qm", "fixture source"], check=True
+    )
     return specification, manifest, preflight, source
 
 
-def _fdm_sidecar(path: Path) -> None:
+def _fixture_build_hash(source: Path) -> str:
+    repository = source.parents[2]
+    return subprocess.run(
+        ["git", "-C", str(repository), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def _fdm_sidecar(path: Path, build_hash: str) -> None:
     path.write_text(
         "# dm_run_provenance_v1\n"
         "dark_matter_model = fdm\n"
@@ -50,7 +83,7 @@ def _fdm_sidecar(path: Path) -> None:
         "nstep_coarse = 12\n"
         "time_code = 1.0d0\n"
         "aexp = 5.0d-1\n"
-        "build_git_hash = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+        f"build_git_hash = {build_hash}\n"
         "namelist_copy = namelist.txt\n"
         "compilation_copy = compilation.txt\n"
         "smbh_capture_ledger_enabled = .true.\n"
@@ -64,7 +97,7 @@ def _fdm_sidecar(path: Path) -> None:
     )
 
 
-def _runtime_supporting_files(output_dir: Path) -> None:
+def _runtime_supporting_files(output_dir: Path, build_hash: str) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     label = output_dir.name.removeprefix("output_")
     (output_dir / "COMPLETE").write_text(f"{label}\n", encoding="utf-8")
@@ -85,7 +118,7 @@ def _runtime_supporting_files(output_dir: Path) -> None:
         encoding="utf-8",
     )
     (output_dir / "compilation.txt").write_text(
-        "last commit = " + "a" * 40 + "\n", encoding="utf-8"
+        "last commit = " + build_hash + "\n", encoding="utf-8"
     )
     (output_dir.parent / "run.log").write_text(
         "Working with nproc =    2 for ndim = 3\n"
@@ -140,16 +173,10 @@ def _runtime_attestation(
     executable.write_bytes(b"compiled writer integration fixture\n")
     executable.chmod(0o755)
     output_dir = tmp_path / "output_00042"
-    _runtime_supporting_files(output_dir)
+    _runtime_supporting_files(output_dir, _fixture_build_hash(source))
     _raw_fdm_outer_provenance(output_dir)
     sidecar = output_dir / "dm_run_provenance_00042.txt"
-    _fdm_sidecar(sidecar)
-    (tmp_path / "output_fdm.f90").write_text(
-        "subroutine output_fdm_outer_wave_provenance\nend subroutine\n",
-        encoding="utf-8",
-    )
-    (tmp_path / "bin").mkdir()
-    (tmp_path / "bin" / "Makefile").write_text("FDM_OBJ = output_fdm.o\n", encoding="utf-8")
+    _fdm_sidecar(sidecar, _fixture_build_hash(source))
     build_manifest = _build_manifest(tmp_path, source)
     record = build_fdm_writer_runtime_attestation(
         source,
@@ -164,14 +191,15 @@ def _runtime_attestation(
 
 
 def _build_manifest(tmp_path: Path, source: Path) -> Path:
-    output_fdm = tmp_path / "output_fdm.f90"
-    makefile = tmp_path / "bin" / "Makefile"
-    output_fdm.write_text(
-        "subroutine output_fdm_outer_wave_provenance\nend subroutine\n",
-        encoding="utf-8",
-    )
-    makefile.parent.mkdir(parents=True, exist_ok=True)
-    makefile.write_text("FDM_OBJ = output_fdm.o\n", encoding="utf-8")
+    repository = source.parents[2]
+    output_fdm = repository / "patch" / "lagRamses" / "output_fdm.f90"
+    makefile = repository / "bin" / "Makefile"
+    commit = subprocess.run(
+        ["git", "-C", str(repository), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
     manifest = tmp_path / "build-manifest.json"
     entries = []
     for role, path in (
@@ -185,8 +213,8 @@ def _build_manifest(tmp_path: Path, source: Path) -> Path:
             {
                 "schema_version": 1,
                 "status": "lagramses_build_source_manifest",
-                "repository": str(tmp_path.resolve()),
-                "git_commit": "a" * 40,
+                "repository": str(repository.resolve()),
+                "git_commit": commit,
                 "git_dirty": False,
                 "files": entries,
             },
@@ -208,10 +236,10 @@ def test_runtime_attestation_requires_explicit_operator_confirmation(
     executable.write_bytes(b"compiled writer integration fixture\n")
     executable.chmod(0o755)
     output_dir = tmp_path / "output_00042"
-    _runtime_supporting_files(output_dir)
+    _runtime_supporting_files(output_dir, _fixture_build_hash(source))
     _raw_fdm_outer_provenance(output_dir)
     sidecar = output_dir / "dm_run_provenance_00042.txt"
-    _fdm_sidecar(sidecar)
+    _fdm_sidecar(sidecar, _fixture_build_hash(source))
     with pytest.raises(ValueError, match="operator_confirmed"):
         build_fdm_writer_runtime_attestation(
             source,
@@ -334,10 +362,10 @@ def test_runtime_attestation_requires_completed_supporting_files(
     executable.write_bytes(b"compiled writer integration fixture\n")
     executable.chmod(0o755)
     output_dir = tmp_path / "output_00042"
-    _runtime_supporting_files(output_dir)
+    _runtime_supporting_files(output_dir, _fixture_build_hash(source))
     _raw_fdm_outer_provenance(output_dir)
     sidecar = output_dir / "dm_run_provenance_00042.txt"
-    _fdm_sidecar(sidecar)
+    _fdm_sidecar(sidecar, _fixture_build_hash(source))
     (output_dir / artifact).unlink()
     with pytest.raises(ValueError, match=expected):
         build_fdm_writer_runtime_attestation(
@@ -356,10 +384,10 @@ def test_runtime_attestation_rejects_compilation_build_mismatch(tmp_path: Path) 
     executable.write_bytes(b"compiled writer integration fixture\n")
     executable.chmod(0o755)
     output_dir = tmp_path / "output_00042"
-    _runtime_supporting_files(output_dir)
+    _runtime_supporting_files(output_dir, _fixture_build_hash(source))
     _raw_fdm_outer_provenance(output_dir)
     sidecar = output_dir / "dm_run_provenance_00042.txt"
-    _fdm_sidecar(sidecar)
+    _fdm_sidecar(sidecar, _fixture_build_hash(source))
     (output_dir / "compilation.txt").write_text(
         "last commit = " + "b" * 40 + "\n", encoding="utf-8"
     )
@@ -380,10 +408,10 @@ def test_runtime_attestation_rejects_missing_success_log(tmp_path: Path) -> None
     executable.write_bytes(b"compiled writer integration fixture\n")
     executable.chmod(0o755)
     output_dir = tmp_path / "output_00042"
-    _runtime_supporting_files(output_dir)
+    _runtime_supporting_files(output_dir, _fixture_build_hash(source))
     _raw_fdm_outer_provenance(output_dir)
     sidecar = output_dir / "dm_run_provenance_00042.txt"
-    _fdm_sidecar(sidecar)
+    _fdm_sidecar(sidecar, _fixture_build_hash(source))
     (tmp_path / "run.log").write_text(
         "Working with nproc =    2 for ndim = 3\n"
         "Working with nproc =    2 for ndim = 3\n"
@@ -407,10 +435,10 @@ def test_runtime_attestation_rejects_singleton_mpi_launch(tmp_path: Path) -> Non
     executable.write_bytes(b"compiled writer integration fixture\n")
     executable.chmod(0o755)
     output_dir = tmp_path / "output_00042"
-    _runtime_supporting_files(output_dir)
+    _runtime_supporting_files(output_dir, _fixture_build_hash(source))
     _raw_fdm_outer_provenance(output_dir)
     sidecar = output_dir / "dm_run_provenance_00042.txt"
-    _fdm_sidecar(sidecar)
+    _fdm_sidecar(sidecar, _fixture_build_hash(source))
     (tmp_path / "run.log").write_text(
         "Working with nproc =    1 for ndim = 3\n"
         "Working with nproc =    1 for ndim = 3\n"
@@ -435,10 +463,10 @@ def test_runtime_attestation_rejects_raw_mpi_count_mismatch(tmp_path: Path) -> N
     executable.write_bytes(b"compiled writer integration fixture\n")
     executable.chmod(0o755)
     output_dir = tmp_path / "output_00042"
-    _runtime_supporting_files(output_dir)
+    _runtime_supporting_files(output_dir, _fixture_build_hash(source))
     _raw_fdm_outer_provenance(output_dir)
     sidecar = output_dir / "dm_run_provenance_00042.txt"
-    _fdm_sidecar(sidecar)
+    _fdm_sidecar(sidecar, _fixture_build_hash(source))
     raw = output_dir / "fdm_outer_wave_provenance_00042.txt"
     raw.write_text(raw.read_text(encoding="utf-8").replace("mpi_ncpu = 2", "mpi_ncpu = 3"), encoding="utf-8")
     with pytest.raises(ValueError, match="mpi_ncpu"):
@@ -458,10 +486,10 @@ def test_runtime_attestation_rejects_wrong_complete_label(tmp_path: Path) -> Non
     executable.write_bytes(b"compiled writer integration fixture\n")
     executable.chmod(0o755)
     output_dir = tmp_path / "output_00042"
-    _runtime_supporting_files(output_dir)
+    _runtime_supporting_files(output_dir, _fixture_build_hash(source))
     _raw_fdm_outer_provenance(output_dir)
     sidecar = output_dir / "dm_run_provenance_00042.txt"
-    _fdm_sidecar(sidecar)
+    _fdm_sidecar(sidecar, _fixture_build_hash(source))
     (output_dir / "COMPLETE").write_text("00041\n", encoding="utf-8")
     with pytest.raises(ValueError, match="COMPLETE marker content"):
         build_fdm_writer_runtime_attestation(
@@ -480,10 +508,10 @@ def test_runtime_attestation_rejects_incomplete_fdm_shards(tmp_path: Path) -> No
     executable.write_bytes(b"compiled writer integration fixture\n")
     executable.chmod(0o755)
     output_dir = tmp_path / "output_00042"
-    _runtime_supporting_files(output_dir)
+    _runtime_supporting_files(output_dir, _fixture_build_hash(source))
     _raw_fdm_outer_provenance(output_dir)
     sidecar = output_dir / "dm_run_provenance_00042.txt"
-    _fdm_sidecar(sidecar)
+    _fdm_sidecar(sidecar, _fixture_build_hash(source))
     (output_dir / "fdm_00042.out00002").unlink()
     with pytest.raises(ValueError, match="shard set"):
         build_fdm_writer_runtime_attestation(
@@ -491,5 +519,32 @@ def test_runtime_attestation_rejects_incomplete_fdm_shards(tmp_path: Path) -> No
             executable,
             sidecar,
             build_manifest=_build_manifest(tmp_path, source),
+            operator_confirmed=True,
+        )
+
+
+def test_runtime_attestation_rejects_manifest_after_source_checkout_changes(
+    tmp_path: Path,
+) -> None:
+    specification, _, _, source = _outer_inputs(tmp_path)
+    del specification
+    executable = tmp_path / "ramses"
+    executable.write_bytes(b"compiled writer integration fixture\n")
+    executable.chmod(0o755)
+    output_dir = tmp_path / "output_00042"
+    build_hash = _fixture_build_hash(source)
+    _runtime_supporting_files(output_dir, build_hash)
+    _raw_fdm_outer_provenance(output_dir)
+    sidecar = output_dir / "dm_run_provenance_00042.txt"
+    _fdm_sidecar(sidecar, build_hash)
+    manifest = _build_manifest(tmp_path, source)
+    output_fdm = source.parent / "output_fdm.f90"
+    output_fdm.write_text(output_fdm.read_text(encoding="utf-8") + "! changed\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="clean current checkout|changed"):
+        build_fdm_writer_runtime_attestation(
+            source,
+            executable,
+            sidecar,
+            build_manifest=manifest,
             operator_confirmed=True,
         )
