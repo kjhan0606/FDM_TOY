@@ -109,6 +109,94 @@ python scripts/generate_wave_calibration_grid.py \
 Every run requires a coupled Schrödinger--Poisson field and moving SMBHs.
 Analytic FDM drag is disabled because the resolved wake supplies the force.
 
+### Sparse q-e and small-separation extension
+
+The production table schema is version 3. Each accepted row now carries the
+SMBH mass ratio and the duration-weighted, orbit-averaged osculating
+eccentricity in addition to profile, binary mass fraction, and separation.
+The manifest's input eccentricity remains separate provenance because the
+extended soliton potential shifts the point-mass osculating diagnostic.
+Runtime lookup interpolates in `q` or `e` only when
+every bracketing plane has accepted mass and separation support at the query.
+Mass interpolation likewise requires accepted separation support on both mass
+planes, and separation interpolation may cross only contiguous accepted bins.
+Missing support, gaps, and all extrapolation stop the bound-binary calculation
+with an uncalibrated result.
+
+The production-candidate sparse extension contains ten physical cases and 28
+resolution runs. It preserves the original 20 pilot run IDs and adds one
+adjacent finer resolution for each of the eight tier-1/2 cases. Six cases
+sample distinct `(q,e)` planes at `a/r_c=0.20`. The circular
+equal-mass plane and the `(q,e)=(0.3,0.3)` plane also reach `a/r_c=0.10` and
+`0.05`, corresponding to `0.22` and `0.11 pc` for the Boey-profile anchor.
+
+```bash
+python scripts/generate_wave_calibration_grid.py \
+  configs/wave_calibration_qe_extension.yaml \
+  --output results/wave_calibration_qe_extension
+```
+
+The tier hierarchy is `128/256/512`, `256/512/768`, and, at the smallest
+axis, `512/768`. These calculations remain candidates rather than accepted
+table rows. The table builder requires at least eight complete orbits, a resolved
+half-density radius, Hamiltonian error below the production limit, agreement
+of power and torque across the resolution pair, an absolute resolution-pair
+mean-eccentricity mismatch no larger than 0.02, and a minimum binary
+separation greater than two Plummer radii. The compact 12-core-radius box also
+requires a doubled-box control before these cases can be promoted to a
+production release.
+
+The eccentricity limit is absolute because eccentricity is an interpolation
+axis and a fractional measure is undefined for circular binaries. The value
+0.02 is one fifteenth of the design's minimum 0.3 spacing between eccentricity
+planes, so a matched-separation bin cannot silently compare different local
+eccentricity states. The eight-orbit moving-block bootstrap caps its block at
+half the available cycles, guaranteeing at least two independent block
+lengths instead of producing a zero-width interval when `N=8`.
+
+No workflow may append `n=1024` automatically. If an adjacent higher-resolution
+pair still fails a production gate, or if the calculations have insufficient
+common `(separation,eccentricity)` support, the affected bin remains
+`unresolved/censored`. A further calculation requires a separately reviewed
+resource and resolution design; absent that evidence the runtime must not
+interpolate or extrapolate through the missing bin.
+
+The guarded q-e queue uses observed device-memory profiles rather than the
+uniform-grid estimate alone. An `n=512` stage requires at least 22 GiB total
+and 21 GiB free: this admits a 23,028 MiB A10 while retaining more than 2 GiB
+above the measured 19,326 MiB solver footprint. An `n=768` stage requires an
+80 GiB-class device and at least 64 GiB free. It is therefore
+`memory_capacity_censored` on an A10 and must be routed to an 80 GiB GPU.
+Insufficient free memory on an otherwise supported GPU is instead the
+retryable status `preflight_memory_busy`.
+
+For a shared 80 GiB GPU, `--wait-until-gpu-empty` polls only the NVML compute
+process list. It neither scans the host process table nor signals a process
+that already owns the GPU. After the device becomes empty, the free-memory
+floor is checked and the normal mid-run collision guard remains active. An
+optional `--gpu-empty-timeout-seconds` converts an overlong wait into the
+retryable `gpu_empty_wait_timeout` status.
+
+```bash
+python scripts/run_guarded_qe_plan.py \
+  --manifest results/wave_calibration_qe_extension/run_manifest.csv \
+  --cases results/wave_calibration_qe_extension/physical_cases.csv \
+  --initial-root /path/to/pyul_initial \
+  --torch-root /path/to/torch \
+  --pyul-path /path/to/PyUL_NBody \
+  --log-root /path/to/logs \
+  --run-id qe_q100_e060_a020_n768 \
+  --gpu-index 0 \
+  --wait-until-gpu-empty \
+  --gpu-empty-timeout-seconds 43200
+```
+
+New live-wave metadata records `mass_ratio_q`, `initial_eccentricity`,
+`semi_major_axis_pc`, and `initial_separation_pc`. The eccentricity must come
+from this provenance because the apocentre initializer includes the soliton's
+differential force; a two-body osculating inversion would not reproduce the
+input eccentricity in that extended potential.
+
 ## Public live-wave solver check
 
 The public moving-particle solver cited by Koo et al. is
@@ -227,7 +315,9 @@ The time-step factor multiplies the solver limit. A value below one increases
 the number of wave steps and should be varied together with the spatial
 resolution when the Hamiltonian error exceeds the adopted tolerance. PyUL
 interprets `--rk-steps 36` as 36 Runge--Kutta stages per wave step, which gives
-nine RK4 substeps for the SMBHs. The run metadata records both quantities.
+nine RK4 substeps for the SMBHs. The run metadata records both quantities. The
+adapter limits FFT and NumExpr threads to the CPUs assigned to the batch task
+and records this thread count with the numerical setup.
 
 ### Immediate convergence sequence
 
@@ -247,6 +337,23 @@ The `256^3` calculation then halves the cell width from 0.3125 to 0.15625 pc.
 The orbital power, torque, Hamiltonian residual, separation history, and local
 wave state must agree before any row enters the physical calibration.
 
+Completed numerical variants are compared over the time interval for which
+every calculation keeps the binary separation above two cell widths:
+
+```bash
+python scripts/summarize_pyul_convergence.py \
+  baseline=/path/to/baseline_run \
+  wave_dt_half=/path/to/wave_step_repeat \
+  particle_rk18=/path/to/particle_step_repeat \
+  spatial_n256=/path/to/spatial_repeat \
+  --output results/pyul_convergence/koo_prefix_convergence_summary.json
+```
+
+The common-interval rates retain reversible orbital-phase and interaction-energy
+variations. They are therefore assessed together with the orbit-averaged power
+and torque. The comparison records numerical differences but does not assign an
+automatic convergence decision.
+
 The completed Koo-anchor smoke calculations give:
 
 | resolution | cell size [pc] | duration [yr] | wave-mass error | total-energy error | error / transferred energy |
@@ -257,6 +364,91 @@ The completed Koo-anchor smoke calculations give:
 
 The 512-cell calculation matches Koo's `0.08 pc` spatial resolution. It is a
 short high-resolution conservation test, not a measurement of the decay time.
+
+### Torch GPU continuation and convergence results
+
+The Torch backend continues a three-dimensional PyUL initial state with the
+same dimensionless Schrödinger--Poisson convention. It retains the resolved
+wave force on the SMBHs and the SMBH force on the wave; analytic FDM drag
+remains disabled. The output layout is compatible with the conservation,
+orbit-averaging, line-density, sparse-wave, and movie diagnostics above.
+
+```bash
+python scripts/launch_torch_wave_case.py /path/to/pyul_initial_run \
+  --output /path/to/torch_run \
+  --duration-myr 1.0 \
+  --save-number 2048 \
+  --movie-frame-number 360 \
+  --save-3d-number 32 \
+  --checkpoint-every-saves 32 \
+  --rk4-substeps 9 \
+  --device cuda:0
+```
+
+The launcher writes `torch_solver_provenance/manifest.json` as soon as the run
+metadata appears. The manifest preserves the uncommitted Torch runner and
+operators, takes committed dependencies from the recorded adapter revision,
+and records SHA-256 hashes. A restart fails before integration if these sources
+do not match the preserved copies. Existing calculations whose uncommitted
+sources predate their metadata can be frozen explicitly with
+
+```bash
+python scripts/snapshot_torch_provenance.py /path/to/torch_run
+```
+
+The long `512^3` Koo-anchor calculation completed `1 Myr` with analytic FDM
+drag disabled. The separation changed from `0.9 pc` to `0.2874 pc`, and the
+maximum Hamiltonian error was `0.2035%` of the transferred energy. Its binary
+remained above two cell widths throughout the calculation. The long `256^3`
+calculation first crossed that numerical boundary at `0.85498 Myr`.
+
+The completed common-window comparisons are:
+
+| comparison and reference | common interval [Myr] | separation difference / initial | mean orbital power | mean orbital torque | final-window orbital power | final-window orbital torque |
+|---|---:|---:|---:|---:|---:|---:|
+| `512^3`, half wave step vs unit step | 0.1000 | `-0.405%` | `-0.661%` | `-0.661%` | `-1.13%` | `-0.744%` |
+| `512^3`, 18 vs 9 SMBH RK4 substeps | 0.1000 | `-0.0516%` | `-0.0093%` | `-0.0360%` | `-0.0215%` | `-0.0464%` |
+| `256^3` vs `512^3`, unit step | 0.1000 | `+2.58%` | `-5.79%` | `-3.59%` | `-3.35%` | `-4.49%` |
+| `384^3` vs `512^3`, unit step | 0.8550 | `-1.52%` | `+2.04%` | `+0.189%` | `-23.9%` | `-50.9%` |
+| `256^3` vs `512^3`, unit step | 0.8550 | `+1.54%` | `+5.44%` | `+0.076%` | `+32.9%` | `+14.5%` |
+| `256^3`, half vs unit wave step | 0.8550 | `-1.52%` | `-0.966%` | `-0.511%` | `-14.3%` | `-16.6%` |
+
+The final-window estimates use complete orbits near the end of the common
+resolved interval. Their broad variations exceed the cumulative separation
+and interval-mean differences. The maximum Hamiltonian errors over transferred
+energy are `0.6829%` for the unit-step `256^3` calculation and `0.2587%` for
+its half-step repeat, both below the adopted one-percent limit. The numerical
+ledger and cumulative inspiral therefore pass. The local common-time rates
+remain sensitive to the orbital and wave phases because the trajectories reach
+slightly different separations at the same time.
+
+The completed `384^3` calculation reached `1 Myr` with a final separation of
+`0.2923 pc`. The binary remained above two cell widths, and the Hamiltonian
+error was `0.3581%` of the transferred energy. A state-matched comparison bins
+complete orbits by physical separation and requires at least eight orbits from
+every calculation in a retained bin. The `384^3` and `512^3` calculations give
+the following absolute fractional differences across seven retained bins:
+
+| matched-separation rate | median difference | maximum difference |
+|---|---:|---:|
+| orbital power | `2.82%` | `13.28%` |
+| orbital torque | `3.66%` | `10.88%` |
+| total wave-energy rate | `5.07%` | `16.97%` |
+
+The corresponding median differences between `256^3` and `512^3` are
+`16.51%`, `15.61%`, and `16.38%`. The high-resolution pair therefore supports
+a provisional secular calibration. Each separation bin retains its measured
+spatial systematic, whose maximum reaches about `17%`. The coarse calculation
+does not set the local transfer coefficient.
+
+The current dimensionless exchange tables retain all 81 Koo rows and all 454
+Boey rows. The binary-separation, measured half-density-radius, and Hamiltonian
+tests admit 81 Koo rows and 433 Boey rows to the provisional secular sample.
+The wave-state timing test admits 48 rows from each family to the
+phase-dependent sample, for 96 rows in total. These flags identify eligible
+measurements rather than final fitted coefficients. The completed Koo
+resolution comparison supplies a measured spatial systematic. The Boey mass
+trend remains provisional until a matching spatial comparison is available.
 
 ## Interaction-energy convention
 

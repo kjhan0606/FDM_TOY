@@ -1,0 +1,40 @@
+schema_version: 1
+replicates: 2
+
+# Controlled CDM baseline for the few-kpc -> 1 pc calibration.  This is a
+# pre-submission manifest, not a job request or a coalescence prediction.
+baseline:
+  host_stellar_mass_msun: 1.0e10
+  host_scale_radius_pc: 500.0
+  host_inner_slope: 1.0
+  binary_total_mass_msun: 2.0e7
+  mass_ratio_q: 0.3
+  gas_fraction: 0.2
+  gas_rotation_fraction: 0.5
+  initial_orbit_eccentricity: 0.4
+  initial_separation_pc: 2000.0
+  nuclear_envelope_to_secondary_bh_mass: 5.0
+  dark_matter_model: cdm
+
+variations: []
+
+# Both resolutions retain >=4 cells at the 1 pc target.  Collisionless mass
+# and softening remain explicit rather than inferred from the DM model label.
+numerics:
+  - levelmax: 21
+    finest_cell_size_pc: 0.25
+    collisionless_particle_mass_msun: 1.25e2
+    minimum_softening_pc: 0.25
+  - levelmax: 22
+    finest_cell_size_pc: 0.125
+    collisionless_particle_mass_msun: 1.5625e1
+    minimum_softening_pc: 0.125
+
+noncompacting:
+  target_separation_pc: 1.0
+  smbh_merge_radius_cells: 0.0
+  maximum_output_cadence_myr: 2.0e-4
+  samples_per_secular_block: 5
+  minimum_secular_blocks: 3
+  position_coordinate: comoving
+  time_coordinate: proper
