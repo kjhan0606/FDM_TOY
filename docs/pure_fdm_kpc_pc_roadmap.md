@@ -830,11 +830,19 @@ python scripts/check_lagramses_fdm_wave_current.py \
 
 Add `--measure-uniform-fft-base --maximum-uniform-cells 1000000
 --maximum-total-base-grids 200000` only when the verified effective namelist
-declares the desired base level.  The optional result is a **candidate**:
+declares the desired base level.  The reader compares the effective `boxlen`
+with every native AMR header and censors a non-unit `boxlen` because the
+FFT and fine/writer spacing conventions then differ by `boxlen²` in the
+Laplacian factor.  The optional result is a **candidate**:
 the copied compilation metadata does not itself prove `USE_FFTW`, and the
 source's FFT spacing and writer volume use different box-length factors.
 The result cannot be promoted to a physical Hamiltonian without both build
-and unit-contract validation.
+and unit-contract validation.  The current `compilation.txt` writer records
+the build date, patch directory, Git remote/branch, and commit, but not
+compiler defines or a hash of the executed binary.  The Makefile default
+`USE_FFTW=1` is therefore not proof of the branch used by a particular
+output.  A future run needs a build-flag/binary identity bound to its output
+before the FFT candidate can be promoted.
 
 The reader checks every rank and level, then compares leaf counts, complete
 stencil counts, mass, and all three current components with the raw writer.

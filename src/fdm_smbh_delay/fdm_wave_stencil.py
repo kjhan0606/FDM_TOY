@@ -103,6 +103,7 @@ class FDMUniformNativeAssembly:
     duplicate_cells: int
     refined_owned_cells: int
     missing_cells: int
+    fft_to_fine_laplacian_spacing_ratio: float
     quadratic: FDMUniformFFTQuadratic | None
     reasons: tuple[str, ...]
 
@@ -273,6 +274,13 @@ def assemble_uniform_fft_base_from_shards(
         reasons.append("owned base lattice has duplicate cells")
     if refined:
         reasons.append("base cells are refined; AMR reflux is not represented")
+    spacing_ratio = first.boxlen_code**2
+    if not math.isfinite(spacing_ratio) or not math.isclose(
+        spacing_ratio, 1.0, rel_tol=1.0e-12, abs_tol=1.0e-12
+    ):
+        reasons.append(
+            "FFT dx_box and fine/writer dx_code have incompatible boxlen factors"
+        )
     quadratic = None
     if not reasons:
         quadratic = measure_uniform_fft_drift_quadratic(
@@ -288,6 +296,7 @@ def assemble_uniform_fft_base_from_shards(
         level=level, ncpu=ncpu, expected_cells=expected,
         assigned_cells=assigned, duplicate_cells=duplicate,
         refined_owned_cells=refined, missing_cells=missing,
+        fft_to_fine_laplacian_spacing_ratio=spacing_ratio,
         quadratic=quadratic, reasons=tuple(reasons),
     )
 

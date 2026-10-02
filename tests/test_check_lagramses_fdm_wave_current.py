@@ -104,10 +104,9 @@ def test_wave_current_cli_rejects_changed_ledger_before_publication(
     assert not output.exists()
 
 
-def test_wave_current_cli_keeps_uniform_fft_candidate_pending_build_evidence(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def _enable_uniform_fft(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ledger: SimpleNamespace
 ) -> None:
-    ledger, output = _inputs(tmp_path, monkeypatch)
     sample = ledger.samples[0]
     monkeypatch.setattr(
         cli, "inspect_fdm_shard",
@@ -134,8 +133,29 @@ def test_wave_current_cli_keeps_uniform_fft_candidate_pending_build_evidence(
     )
     monkeypatch.setattr(cli, "read_fdm_shard_level_fields", lambda *args, **kwargs: fields)
     monkeypatch.setattr(sys, "argv", [*sys.argv[:-2], "--measure-uniform-fft-base", *sys.argv[-2:]])
+
+
+def test_wave_current_cli_keeps_uniform_fft_candidate_pending_build_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ledger, output = _inputs(tmp_path, monkeypatch)
+    _enable_uniform_fft(tmp_path, monkeypatch, ledger)
     assert cli.main() == 0
     record = json.loads(output.read_text())
     assert record["uniform_fft_base_status"] == "candidate_pending_use_fftw_build_and_units_verification"
     assert record["uniform_fft_base"]["quadratic"]["wave_mass_code"] == 5.0
     assert record["uniform_fft_base"]["quadratic"]["drift_generator_quadratic_code"] == 0.0
+
+
+def test_wave_current_cli_rejects_effective_boxlen_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ledger, output = _inputs(tmp_path, monkeypatch)
+    _enable_uniform_fft(tmp_path, monkeypatch, ledger)
+    monkeypatch.setattr(
+        cli, "read_lagramses_namelist_assignment",
+        lambda *args, **kwargs: "2.0" if kwargs["name"] == "boxlen" else "1",
+    )
+    with pytest.raises(ValueError, match="boxlen disagrees"):
+        cli.main()
+    assert not output.exists()

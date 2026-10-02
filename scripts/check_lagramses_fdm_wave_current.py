@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict
 import json
+import math
 import os
 from pathlib import Path
 import socket
@@ -136,6 +137,15 @@ def main() -> int:
             levelmin = int(level_token)
         except ValueError as error:
             raise ValueError("effective levelmin is not an integer") from error
+        box_token = read_lagramses_namelist_assignment(
+            namelist, group="AMR_PARAMS", name="boxlen"
+        )
+        try:
+            effective_boxlen = float(box_token.replace("D", "E").replace("d", "e"))
+        except ValueError as error:
+            raise ValueError("effective boxlen is not numeric") from error
+        if not math.isfinite(effective_boxlen) or effective_boxlen <= 0.0:
+            raise ValueError("effective boxlen must be finite and positive")
         if levelmin < 1 or any(levelmin > item.nlevelmax for item in structures):
             raise ValueError("effective levelmin lies outside the wave shards")
         if sum(
@@ -157,6 +167,10 @@ def main() -> int:
                 start=1,
             )
         ]
+        if any(not math.isclose(
+            item.boxlen_code, effective_boxlen, rel_tol=1.0e-12, abs_tol=1.0e-12
+        ) for item in base_fields):
+            raise ValueError("effective boxlen disagrees with native AMR shard headers")
         uniform_base = assemble_uniform_fft_base_from_shards(
             base_fields, declared_levelmin=levelmin,
             hbar_code=provenance.hbar_code,

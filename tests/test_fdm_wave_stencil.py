@@ -274,6 +274,7 @@ def test_native_owner_lattice_assembles_uniform_fft_quadratic(tmp_path: Path) ->
     assert result.status == "uniform_native_fft_quadratic_pending_ledger_binding"
     assert result.assigned_cells == result.expected_cells == 64
     assert result.duplicate_cells == result.refined_owned_cells == result.missing_cells == 0
+    assert result.fft_to_fine_laplacian_spacing_ratio == pytest.approx(1.0)
     assert result.quadratic is not None
     assert result.quadratic.wave_mass_code == pytest.approx(1.0)
     assert result.quadratic.drift_generator_quadratic_code == pytest.approx(16.0)
@@ -308,6 +309,14 @@ def test_native_uniform_assembly_censors_missing_duplicate_and_refined_cells(
     )
     assert refined.refined_owned_cells == 1
     assert refined.quadratic is None
+    unit_mismatch = assemble_uniform_fft_base_from_shards(
+        (replace(first, boxlen_code=2.0), replace(second, boxlen_code=2.0)),
+        declared_levelmin=2, hbar_code=1.0,
+    )
+    assert unit_mismatch.status.startswith("censored_")
+    assert unit_mismatch.fft_to_fine_laplacian_spacing_ratio == pytest.approx(4.0)
+    assert unit_mismatch.quadratic is None
+    assert any("boxlen" in reason for reason in unit_mismatch.reasons)
     with pytest.raises(ValueError, match="every MPI rank"):
         assemble_uniform_fft_base_from_shards(
             (first,), declared_levelmin=2, hbar_code=1.0,
