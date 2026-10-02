@@ -13,6 +13,7 @@ import math
 import numpy as np
 
 from .fdm_outer_response import FDMOuterResponseTable
+from .fdm_outer_response_family import FDMOuterResponseFamily
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,47 @@ class FDMProjectedOrbitalResponse:
     drift_acceleration_pc_myr2: np.ndarray | None
     diffusion_tensor_pc2_myr3: np.ndarray | None
     reason: str
+    source_sha256: tuple[str, ...] = ()
+
+
+def _orbital_basis(
+    position: np.ndarray, velocity: np.ndarray, minimum_orbital_sine: float
+) -> np.ndarray | None:
+    radius = float(np.linalg.norm(position))
+    speed = float(np.linalg.norm(velocity))
+    angular = np.cross(position, velocity)
+    angular_norm = float(np.linalg.norm(angular))
+    if (
+        not math.isfinite(radius) or not math.isfinite(speed)
+        or not math.isfinite(angular_norm) or radius == 0.0 or speed == 0.0
+        or angular_norm / (radius * speed) < minimum_orbital_sine
+    ):
+        return None
+    radial = position / radius
+    normal = angular / angular_norm
+    tangential = np.cross(normal, radial)
+    return np.column_stack((radial, tangential, normal))
+
+
+def _project_values(
+    position: np.ndarray,
+    velocity: np.ndarray,
+    minimum_orbital_sine: float,
+    drift_rtn: np.ndarray,
+    diffusion_rtn: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    basis = _orbital_basis(position, velocity, minimum_orbital_sine)
+    if basis is None:
+        return None
+    drift = basis @ drift_rtn
+    diffusion = basis @ diffusion_rtn @ basis.T
+    diffusion = 0.5 * (diffusion + diffusion.T)
+    if (
+        np.any(~np.isfinite(drift)) or np.any(~np.isfinite(diffusion))
+        or np.min(np.linalg.eigvalsh(diffusion)) < -1.0e-12
+    ):
+        return None
+    return drift, diffusion
 
 
 def project_fdm_outer_response_to_orbit(
@@ -94,30 +136,69 @@ def project_fdm_outer_response_to_orbit(
     decision = table.decision(radius)
     if decision["status"] != "available":
         return censored(str(decision["reason"]))
-    speed = float(np.linalg.norm(velocity))
-    angular = np.cross(position, velocity)
-    angular_norm = float(np.linalg.norm(angular))
-    if (
-        radius == 0.0 or speed == 0.0
-        or angular_norm / (radius * speed) < minimum_orbital_sine
-    ):
-        return censored("FDM response orbital RTN frame is undefined for a radial state")
-    radial = position / radius
-    normal = angular / angular_norm
-    tangential = np.cross(normal, radial)
-    basis = np.column_stack((radial, tangential, normal))
-    drift = basis @ decision["drift_acceleration_pc_myr2"]
-    diffusion = basis @ decision["diffusion_tensor_pc2_myr3"] @ basis.T
-    diffusion = 0.5 * (diffusion + diffusion.T)
-    if (
-        np.any(~np.isfinite(drift)) or np.any(~np.isfinite(diffusion))
-        or np.min(np.linalg.eigvalsh(diffusion)) < -1.0e-12
-    ):
-        return censored("FDM response projection violated finite/PSD contract")
+    projected = _project_values(
+        position, velocity, minimum_orbital_sine,
+        decision["drift_acceleration_pc_myr2"],
+        decision["diffusion_tensor_pc2_myr3"],
+    )
+    if projected is None:
+        return censored("FDM response orbital frame or finite/PSD projection is invalid")
+    drift, diffusion = projected
     return FDMProjectedOrbitalResponse(
         status="projected_candidate_pending_source_calibration",
         radius_pc=radius, mass_ratio_q=mass_ratio_q, eccentricity=eccentricity,
         drift_acceleration_pc_myr2=drift,
         diffusion_tensor_pc2_myr3=diffusion,
         reason="frame and q/e/r support only; no physical delay inferred",
+    )
+
+
+def project_fdm_response_family_to_orbit(
+    family: FDMOuterResponseFamily,
+    *,
+    position_pc: np.ndarray,
+    velocity_pc_myr: np.ndarray,
+    mass_ratio_q: float,
+    eccentricity: float,
+    minimum_orbital_sine: float = 1.0e-8,
+) -> FDMProjectedOrbitalResponse:
+    """Project a source-bound q/e response candidate into Cartesian space."""
+
+    position = np.asarray(position_pc, dtype=float)
+    velocity = np.asarray(velocity_pc_myr, dtype=float)
+    if (
+        position.shape != (3,) or velocity.shape != (3,)
+        or np.any(~np.isfinite(position)) or np.any(~np.isfinite(velocity))
+        or not math.isfinite(minimum_orbital_sine)
+        or not 0.0 < minimum_orbital_sine < 1.0
+    ):
+        raise ValueError("FDM orbital response state or frame control is invalid")
+    radius = float(np.linalg.norm(position))
+    decision = family.decision(mass_ratio_q, eccentricity, radius)
+
+    def censored(reason: str) -> FDMProjectedOrbitalResponse:
+        return FDMProjectedOrbitalResponse(
+            status="censored", radius_pc=radius,
+            mass_ratio_q=mass_ratio_q, eccentricity=eccentricity,
+            drift_acceleration_pc_myr2=None,
+            diffusion_tensor_pc2_myr3=None, reason=reason,
+        )
+
+    if decision["status"] == "censored":
+        return censored(str(decision["reason"]))
+    projected = _project_values(
+        position, velocity, minimum_orbital_sine,
+        decision["drift_acceleration_pc_myr2"],
+        decision["diffusion_tensor_pc2_myr3"],
+    )
+    if projected is None:
+        return censored("FDM response orbital frame or finite/PSD projection is invalid")
+    drift, diffusion = projected
+    return FDMProjectedOrbitalResponse(
+        status="projected_candidate_pending_physical_validation",
+        radius_pc=radius, mass_ratio_q=mass_ratio_q, eccentricity=eccentricity,
+        drift_acceleration_pc_myr2=drift,
+        diffusion_tensor_pc2_myr3=diffusion,
+        reason="q/e/r mixture and orbital projection only; no physical delay inferred",
+        source_sha256=decision["source_sha256"],
     )

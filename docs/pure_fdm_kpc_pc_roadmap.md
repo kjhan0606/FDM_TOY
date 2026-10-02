@@ -238,9 +238,18 @@ radial–tangential–normal (RTN) frame and q/e support gate.  It rotates both
 the vector drift and PSD diffusion tensor covariantly, and censors a missing
 frame, nearly radial orbit, uncalibrated table, or q/e/r query outside
 declared support.  The support rectangle is an applicability contract, **not**
-an interpolation across measured q/e cases.  Its output remains a candidate
-until a source-verified q/e response family and restartable stochastic orbit
-evolution are available; the static kpc integrator does not consume it.
+an interpolation across measured q/e cases.  `FDMOuterResponseFamily` now
+accepts a rectangular grid of measured q/e response tables with a SHA-256
+source identity at every node.  A query evaluates only its exact node or the
+four enclosing measured nodes, uses convex q/e weights for both drift and
+diffusion, and censors missing/uncalibrated/radially unsupported corners or
+queries outside the measured grid.  The corresponding orbital projector
+rotates the interpolated RTN vector/tensor into Cartesian coordinates.
+These are **numerical candidates**, not source verification: a digest alone
+does not establish that a run is physically converged or that q/e interpolation
+is accurate.  Paired resolution, phase replication, independent source audit,
+and restartable stochastic orbit evolution are still required before any
+physical delay is inferred.  The static kpc integrator does not consume them.
 
 `validate_outer_inner_handoff` requires:
 

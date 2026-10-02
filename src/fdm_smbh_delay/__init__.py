@@ -169,10 +169,12 @@ from .backreaction import (
     read_verified_backreaction_decision,
 )
 from .fdm_outer_response import FDMOuterResponseTable
+from .fdm_outer_response_family import FDMOuterResponseFamily
 from .fdm_orbital_response import (
     FDMOrbitalResponseSupport,
     FDMProjectedOrbitalResponse,
     project_fdm_outer_response_to_orbit,
+    project_fdm_response_family_to_orbit,
 )
 from .pure_fdm_zoom import (
     DeferredNestedZoomRequest,
@@ -265,9 +267,11 @@ __all__ = [
     "PureFDMDualSolitonSeed",
     "RelaxationConservationThresholds",
     "FDMOuterResponseTable",
+    "FDMOuterResponseFamily",
     "FDMOrbitalResponseSupport",
     "FDMProjectedOrbitalResponse",
     "project_fdm_outer_response_to_orbit",
+    "project_fdm_response_family_to_orbit",
     "DeferredNestedZoomRequest",
     "NestedZoomCheckpointContract",
     "HandoffDecision",
