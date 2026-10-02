@@ -701,7 +701,8 @@ mass in radial shells around the two **initial** seed centres:
 python scripts/check_lagramses_fdm_mass_series.py \
   --sample-ledger results/dual_soliton_relaxation_sample_ledger.json \
   --coarse-cells-per-box 256 --simple-boundary false \
-  --coarse-origin 0 0 0 --radial-edges-box 0 0.005 0.01 0.02 0.04 \
+  --coarse-origin 0 0 0 \
+  --radial-edges-box 0 0.0025 0.005 0.0075 0.01 0.015 0.02 0.025 0.03 0.04 \
   --aperture-radius-box 0.01 \
   --output results/dual_soliton_relaxation_mass_radial_series.json
 ```
@@ -720,8 +721,25 @@ non-censored candidate status does **not** identify soliton peaks: background
 wave mass, interference granules, and possible core motion beyond the fixed
 seed apertures remain unseparated.  Moving-core confirmation requires
 background subtraction, fitted core profiles, temporal continuity, and
-resolution comparisons.  Bind the eventual complete diagnostic series to both the exact sample
-ledger and immutable extractor bytes before assessment:
+resolution comparisons.
+
+For an initially well-separated, resolved two-core seed, the same command
+may add `--fit-seed-solitons`.  The optional fit integrates the lagRamses
+seed shape `rho0 / [1 + c (r/rc)^2]^8` over every saved radial shell and fits
+two central densities, two radii, and local constant backgrounds separately.
+It requires at least eight shells, a four-cell core scale using the **widest
+contributing** aperture cell, at least sixteen effective cells in the inner
+shell, 80–120% AMR leaf-volume coverage in each shell, low centroid
+displacement, radial coverage beyond `2.5 rc`, and shell radii safely short of
+the companion.  Fits reaching the
+declared `0.5–2` times seed-radius interval edge, exceeding 10% relative
+density RMSE, or dominated by background are censored.  A non-censored fit
+remains a seed-centred profile **candidate**, not proof of two independent
+solitons, wave relaxation, or a calibrated kpc-to-pc delay.  Do not apply this
+fit after the cores overlap.
+
+Bind the eventual complete diagnostic series to both the exact sample ledger
+and immutable extractor bytes before assessment:
 
 ```bash
 python scripts/materialize_dual_soliton_relaxation_diagnostic_provenance.py \

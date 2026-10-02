@@ -187,12 +187,20 @@ def test_two_centre_radial_mass_requires_verified_all_rank_leaf_identity(tmp_pat
                 ((10.0, 30.0), (0.0, 0.0)),
                 ((20.0, 20.0), (0.0, 0.0)),
             ),
+            radial_leaf_cells_by_centre_level_bin=(
+                ((2, 6), (0, 0)),
+                ((4, 4), (0, 0)),
+            ),
         ),
         replace(
             summaries[1], radial_centres_box=centres, radial_edges_box=edges,
             radial_density_sum_by_centre_level_bin=(
                 ((0.0, 0.0), (10.0, 30.0)),
                 ((0.0, 0.0), (20.0, 20.0)),
+            ),
+            radial_leaf_cells_by_centre_level_bin=(
+                ((0, 0), (2, 6)),
+                ((0, 0), (4, 4)),
             ),
         ),
     )
@@ -201,6 +209,7 @@ def test_two_centre_radial_mass_requires_verified_all_rank_leaf_identity(tmp_pat
     assert profile.status == "radial_wave_mass_measured_pending_core_decomposition"
     assert profile.shell_mass_code_by_centre[0] == pytest.approx((1.40625, 4.21875))
     assert profile.enclosed_mass_code_by_centre[0] == pytest.approx((1.40625, 5.625))
+    assert profile.shell_sampled_volume_code_by_centre[0] == pytest.approx((0.28125, 0.84375))
     with pytest.raises(ValueError, match="passing leaf-mass"):
         reconstruct_fdm_radial_mass_profile(
             radial, replace(identity, status="censored_raw_leaf_mass_or_count_mismatch")

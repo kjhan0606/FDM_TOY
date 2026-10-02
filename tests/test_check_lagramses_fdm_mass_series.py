@@ -12,6 +12,7 @@ from fdm_smbh_delay.fdm_leaf_mass import (
     FDMLeafMassIdentity,
     FDMRadialMassProfile,
 )
+from fdm_smbh_delay.fdm_soliton_profile import FDMSolitonProfileCandidates
 from scripts import check_lagramses_fdm_mass_series as cli
 
 
@@ -58,6 +59,8 @@ def _mock_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, changed_aft
             fdm_first_wave_level=1,
             fdm_dual_soliton_ic=True,
             fdm_dual_soliton_centres_box=((0.25, 0.25, 0.25), (0.75, 0.75, 0.75)),
+            fdm_dual_soliton_profile_c=0.091,
+            fdm_dual_soliton_rc_box=(0.02, 0.02),
         ),
     )
     monkeypatch.setattr(cli, "summarize_owned_leaf_amplitudes", lambda *args, **kwargs: object())
@@ -136,6 +139,14 @@ def test_optional_two_centre_profile_is_explicit_and_remains_conditional(
 
     monkeypatch.setattr(cli, "reconstruct_fdm_radial_mass_profile", radial)
     monkeypatch.setattr(
+        cli, "summarize_owned_leaf_amplitudes",
+        lambda *args, **kwargs: SimpleNamespace(
+            leaf_cells_by_level=(8,),
+            aperture_density_sum_by_centre_level=((1.0,), (1.0,)),
+            boxlen_code=1.0,
+        ),
+    )
+    monkeypatch.setattr(
         cli, "reconstruct_fdm_aperture_centroids",
         lambda _summaries, identity: FDMApertureCentroids(
             status="aperture_centroid_candidates_pending_core_validation",
@@ -150,11 +161,26 @@ def test_optional_two_centre_profile_is_explicit_and_remains_conditional(
             reasons=(),
         ),
     )
+    monkeypatch.setattr(
+        cli, "fit_disjoint_seed_soliton_profiles",
+        lambda _radial, _aperture, **kwargs: FDMSolitonProfileCandidates(
+            status="seed_soliton_profile_candidates_pending_wave_validation",
+            provenance_path=target.parent / "raw_0.txt",
+            profile_c=kwargs["profile_c"],
+            seed_core_radii_box=kwargs["seed_core_radii_box"],
+            fitted_core_radii_box=(0.02, 0.02),
+            fitted_central_density_code=(1.0, 1.0),
+            fitted_background_density_code=(0.0, 0.0),
+            relative_density_rmse=(0.0, 0.0),
+            reasons=(),
+        ),
+    )
     argv = list(sys.argv)
     argv[1:1] = [
         "--coarse-origin", "0", "0", "0",
         "--radial-edges-box", "0", "0.1", "0.5",
         "--aperture-radius-box", "0.1",
+        "--fit-seed-solitons",
     ]
     monkeypatch.setattr(sys, "argv", argv)
     assert cli.main() == 0
@@ -162,4 +188,5 @@ def test_optional_two_centre_profile_is_explicit_and_remains_conditional(
     assert len(seen) == 3
     assert len(record["two_centre_total_wave_radial_profiles"]) == 3
     assert len(record["two_centre_wave_aperture_centroids"]) == 3
+    assert len(record["seed_soliton_profile_candidates"]) == 3
     assert record["status"] == "mass_series_within_limit_pending_other_conservation"

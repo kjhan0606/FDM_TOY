@@ -36,6 +36,7 @@ from fdm_smbh_delay.fdm_leaf_mass import (
     reconstruct_fdm_radial_mass_profile,
 )
 from fdm_smbh_delay.fdm_shard_format import summarize_owned_leaf_amplitudes
+from fdm_smbh_delay.fdm_soliton_profile import fit_disjoint_seed_soliton_profiles
 from fdm_smbh_delay.lagramses_fdm_provenance import (
     read_lagramses_fdm_outer_wave_provenance,
 )
@@ -74,6 +75,7 @@ def main() -> int:
     parser.add_argument("--coarse-origin", nargs=3, type=int)
     parser.add_argument("--radial-edges-box", nargs="+", type=float)
     parser.add_argument("--aperture-radius-box", type=float)
+    parser.add_argument("--fit-seed-solitons", action="store_true")
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     if "lageunha" not in socket.gethostname().lower():
@@ -87,12 +89,15 @@ def main() -> int:
         parser.error("radial profiles require both --coarse-origin and --radial-edges-box")
     if args.aperture_radius_box is not None and not radial_requested:
         parser.error("aperture centroids require radial geometry")
+    if args.fit_seed_solitons and args.aperture_radius_box is None:
+        parser.error("seed soliton fits require radial and aperture measurements")
     if args.output.expanduser().resolve().exists():
         parser.error("mass-series output already exists")
     ledger = read_verified_dual_soliton_relaxation_sample_ledger(args.sample_ledger)
     identities = []
     radial_profiles = []
     aperture_centroids = []
+    soliton_fits = []
     for sample in ledger.samples:
         provenance = read_lagramses_fdm_outer_wave_provenance(
             sample.raw_provenance_path
@@ -107,6 +112,12 @@ def main() -> int:
             or provenance.fdm_dual_soliton_centres_box is None
         ):
             raise ValueError("radial profile requires declared dual-soliton seed centres")
+        if args.fit_seed_solitons and (
+            provenance.fdm_dual_soliton_profile_c is None
+            or provenance.fdm_dual_soliton_rc_box is None
+            or (provenance.fdm_use_hjm and provenance.fdm_first_wave_level > 1)
+        ):
+            raise ValueError("seed soliton fit requires a declared all-wave two-core profile")
         summaries = [
             summarize_owned_leaf_amplitudes(
                 wave.path,
@@ -152,6 +163,27 @@ def main() -> int:
                 if identity.status == "raw_leaf_mass_reconstruction_matches_writer"
                 else None
             )
+        if args.fit_seed_solitons:
+            widths = [
+                0.5**level / args.coarse_cells_per_box
+                for level in range(1, len(summaries[0].leaf_cells_by_level) + 1)
+                if any(
+                    summary.aperture_density_sum_by_centre_level[centre][level - 1] > 0.0
+                    for summary in summaries for centre in range(2)
+                )
+            ]
+            maximum_width = max(widths, default=0.5 / args.coarse_cells_per_box)
+            soliton_fits.append(
+                fit_disjoint_seed_soliton_profiles(
+                    radial_profiles[-1], aperture_centroids[-1],
+                    profile_c=provenance.fdm_dual_soliton_profile_c,
+                    seed_core_radii_box=provenance.fdm_dual_soliton_rc_box,
+                    maximum_contributing_cell_width_box=maximum_width,
+                    boxlen_code=summaries[0].boxlen_code,
+                )
+                if identity.status == "raw_leaf_mass_reconstruction_matches_writer"
+                else None
+            )
     after = read_verified_dual_soliton_relaxation_sample_ledger(args.sample_ledger)
     if after.as_dict() != ledger.as_dict() or after.source_sha256 != ledger.source_sha256:
         raise ValueError("FDM sample ledger changed during mass-series extraction")
@@ -173,6 +205,10 @@ def main() -> int:
     if args.aperture_radius_box is not None:
         record["two_centre_wave_aperture_centroids"] = [
             None if item is None else asdict(item) for item in aperture_centroids
+        ]
+    if args.fit_seed_solitons:
+        record["seed_soliton_profile_candidates"] = [
+            None if item is None else asdict(item) for item in soliton_fits
         ]
     _publish_json_without_overwrite(args.output, record)
     print(json.dumps({"status": series.status, "output": str(args.output.resolve())}))

@@ -66,6 +66,7 @@ class OwnedLeafAmplitudeSummary:
     radial_centres_box: tuple[tuple[float, ...], ...] | None = None
     radial_edges_box: tuple[float, ...] | None = None
     radial_density_sum_by_centre_level_bin: tuple[tuple[tuple[float, ...], ...], ...] | None = None
+    radial_leaf_cells_by_centre_level_bin: tuple[tuple[tuple[int, ...], ...], ...] | None = None
     aperture_radius_box: float | None = None
     aperture_density_sum_by_centre_level: tuple[tuple[float, ...], ...] | None = None
     aperture_first_moment_by_centre_level_dim: tuple[tuple[tuple[float, ...], ...], ...] | None = None
@@ -476,6 +477,10 @@ def summarize_owned_leaf_amplitudes(
         np.zeros((2, wave.nlevelmax, len(radial_edges_box) - 1), dtype=np.float64)
         if radial and radial_edges_box is not None else None
     )
+    radial_counts = (
+        np.zeros((2, wave.nlevelmax, len(radial_edges_box) - 1), dtype=np.int64)
+        if radial and radial_edges_box is not None else None
+    )
     aperture_sums = (
         np.zeros((2, wave.nlevelmax), dtype=np.float64)
         if aperture_radius_box is not None else None
@@ -577,6 +582,10 @@ def summarize_owned_leaf_amplitudes(
                                 radial_sums[centre_index, level - 1] += np.histogram(
                                     distance, bins=radial_edges_box, weights=density_chunk
                                 )[0]
+                                assert radial_counts is not None
+                                radial_counts[centre_index, level - 1] += np.histogram(
+                                    distance, bins=radial_edges_box
+                                )[0]
                                 if aperture_radius_box is not None:
                                     assert aperture_sums is not None
                                     assert aperture_first is not None
@@ -613,6 +622,12 @@ def summarize_owned_leaf_amplitudes(
             None if radial_sums is None else tuple(
                 tuple(tuple(float(value) for value in bins) for bins in levels)
                 for levels in radial_sums
+            )
+        ),
+        radial_leaf_cells_by_centre_level_bin=(
+            None if radial_counts is None else tuple(
+                tuple(tuple(int(value) for value in bins) for bins in levels)
+                for levels in radial_counts
             )
         ),
         aperture_radius_box=aperture_radius_box,

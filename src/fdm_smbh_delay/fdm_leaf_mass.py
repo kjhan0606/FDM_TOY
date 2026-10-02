@@ -59,6 +59,7 @@ class FDMRadialMassProfile:
     shell_mass_code_by_centre: tuple[tuple[float, ...], ...]
     enclosed_mass_code_by_centre: tuple[tuple[float, ...], ...]
     total_wave_mass_code: float
+    shell_sampled_volume_code_by_centre: tuple[tuple[float, ...], ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -231,8 +232,10 @@ def reconstruct_fdm_radial_mass_profile(
     if centres is None or edges is None or len(centres) != 2 or len(edges) < 2:
         raise ValueError("FDM radial profile geometry is missing")
     nlevelmax = len(identity.mass_code_by_level)
+    count_available = first.radial_leaf_cells_by_centre_level_bin is not None
     for item in ordered:
         radial = item.radial_density_sum_by_centre_level_bin
+        radial_counts = item.radial_leaf_cells_by_centre_level_bin
         if (
             item.radial_centres_box != centres
             or item.radial_edges_box != edges
@@ -252,6 +255,15 @@ def reconstruct_fdm_radial_mass_profile(
             or any(len(levels) != nlevelmax for levels in radial)
             or any(len(bins) != len(edges) - 1 for levels in radial for bins in levels)
             or any(not math.isfinite(value) or value < 0.0 for levels in radial for bins in levels for value in bins)
+            or (radial_counts is None) != (not count_available)
+            or (
+                radial_counts is not None and (
+                    len(radial_counts) != 2
+                    or any(len(levels) != nlevelmax for levels in radial_counts)
+                    or any(len(bins) != len(edges) - 1 for levels in radial_counts for bins in levels)
+                    or any(value < 0 for levels in radial_counts for bins in levels for value in bins)
+                )
+            )
         ):
             raise ValueError("FDM radial profile summaries disagree")
     for level in range(1, nlevelmax + 1):
@@ -270,12 +282,22 @@ def reconstruct_fdm_radial_mass_profile(
             )
             if binned_density > level_density * (1.0 + 1.0e-10):
                 raise ValueError("FDM radial shells exceed their level's wave density")
+            if count_available:
+                binned_count = sum(
+                    item.radial_leaf_cells_by_centre_level_bin[centre_index][level - 1][bin_index]  # type: ignore[index]
+                    for item in ordered for bin_index in range(len(edges) - 1)
+                )
+                if binned_count > identity.leaf_cells_by_level[level - 1]:
+                    raise ValueError("FDM radial shell count exceeds verified leaf count")
     shells = []
+    sampled_volumes = []
     enclosed = []
     for centre_index in range(2):
         centre_shells = []
+        centre_volumes = []
         for bin_index in range(len(edges) - 1):
             level_masses = []
+            level_volumes = []
             for level in range(1, nlevelmax + 1):
                 density_sum = math.fsum(
                     item.radial_density_sum_by_centre_level_bin[centre_index][level - 1][bin_index]  # type: ignore[index]
@@ -283,12 +305,21 @@ def reconstruct_fdm_radial_mass_profile(
                 )
                 dx = 0.5**level * first.boxlen_code / identity.coarse_cells_per_box
                 level_masses.append(density_sum * dx**first.ndim)
+                if count_available:
+                    cell_count = sum(
+                        item.radial_leaf_cells_by_centre_level_bin[centre_index][level - 1][bin_index]  # type: ignore[index]
+                        for item in ordered
+                    )
+                    level_volumes.append(cell_count * dx**first.ndim)
             centre_shells.append(math.fsum(level_masses))
+            if count_available:
+                centre_volumes.append(math.fsum(level_volumes))
         if not all(math.isfinite(value) and value >= 0.0 for value in centre_shells):
             raise ValueError("FDM radial shell mass is invalid")
         if math.fsum(centre_shells) > identity.reconstructed_mass_code * (1.0 + 1.0e-10):
             raise ValueError("FDM radial shells exceed the reconstructed wave mass")
         shells.append(tuple(centre_shells))
+        sampled_volumes.append(tuple(centre_volumes))
         enclosed.append(tuple(math.fsum(centre_shells[:index + 1]) for index in range(len(centre_shells))))
     return FDMRadialMassProfile(
         status="radial_wave_mass_measured_pending_core_decomposition",
@@ -298,6 +329,9 @@ def reconstruct_fdm_radial_mass_profile(
         shell_mass_code_by_centre=tuple(shells),
         enclosed_mass_code_by_centre=tuple(enclosed),
         total_wave_mass_code=identity.reconstructed_mass_code,
+        shell_sampled_volume_code_by_centre=(
+            tuple(sampled_volumes) if count_available else None
+        ),
     )
 
 

@@ -306,6 +306,10 @@ def test_owned_leaf_radial_density_uses_amr_centres_and_leaf_mask(
     assert bins[0][0] == pytest.approx((0.0, 35.0, 0.0))
     assert bins[1][0] == pytest.approx((5.0, 15.0, 15.0))
     assert bins[0][1] == pytest.approx((0.0, 0.0, 0.0))
+    counts = summary.radial_leaf_cells_by_centre_level_bin
+    assert counts is not None
+    assert counts[0][0] == (0, 7, 0)
+    assert counts[1][0] == (1, 3, 3)
 
 
 def test_owned_leaf_radial_geometry_requires_explicit_valid_contract(
