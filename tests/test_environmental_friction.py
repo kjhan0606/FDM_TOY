@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from math import erf
+
 import numpy as np
 import pytest
 
@@ -17,6 +19,58 @@ from fdm_smbh_delay.galaxy_environment import (
     StellarBackground,
 )
 from fdm_smbh_delay.soliton import SchiveSoliton
+
+
+def test_low_speed_expansions_match_full_formulas_at_switch() -> None:
+    x = np.nextafter(0.05, 0.0)
+    assert maxwellian_slow_fraction(np.sqrt(2.0) * x, 1.0) == pytest.approx(
+        erf(x) - 2.0 * x * np.exp(-x * x) / np.sqrt(np.pi),
+        rel=1.0e-10, abs=0.0,
+    )
+    mach = np.nextafter(0.05, 0.0)
+    assert ostriker_gas_coefficient(mach, 3.0) == pytest.approx(
+        np.arctanh(mach) - mach, rel=1.0e-10, abs=0.0,
+    )
+    assert maxwellian_slow_fraction(0.0, 1.0) == 0.0
+
+
+@pytest.mark.parametrize("ratio", [1.0e-10, 1.0e-8, 1.0e-6])
+def test_friction_coefficients_retain_the_low_speed_cubic_limit(ratio: float) -> None:
+    x = ratio / np.sqrt(2.0)
+    assert maxwellian_slow_fraction(ratio, 1.0) == pytest.approx(
+        4.0 * x**3 / (3.0 * np.sqrt(np.pi)), rel=1.0e-11, abs=0.0
+    )
+    assert ostriker_gas_coefficient(ratio, 3.0) == pytest.approx(
+        ratio**3 / 3.0, rel=1.0e-11, abs=0.0
+    )
+
+
+@pytest.mark.parametrize("channel", ["stars", "gas"])
+def test_low_speed_friction_has_nonzero_linear_acceleration(channel: str) -> None:
+    profile = DehnenProfile(1.0e10, 500.0, 1.0)
+    common = dict(
+        perturber_mass_msun=1.0e4,
+        position_pc=np.array([100.0, 0.0, 0.0]),
+    )
+    accelerations = []
+    for speed in (1.0e-6, 2.0e-6):
+        velocity = np.array([0.0, speed, 0.0])
+        if channel == "stars":
+            result = stellar_dynamical_friction(
+                **common, velocity_pc_myr=velocity,
+                background=StellarBackground(profile, 100.0, np.zeros(3)),
+                minimum_impact_parameter_pc=1.0,
+            )
+        else:
+            result = gaseous_dynamical_friction(
+                **common, velocity_pc_myr=velocity,
+                total_enclosed_mass_msun=1.0e10,
+                background=GasBackground(profile, sound_speed_pc_myr=100.0),
+                coulomb_logarithm=3.0,
+            )
+        assert result.acceleration_pc_myr2 @ velocity < 0.0
+        accelerations.append(result.acceleration_pc_myr2[1])
+    assert accelerations[1] / accelerations[0] == pytest.approx(2.0, rel=1.0e-12)
 
 
 def test_stellar_friction_opposes_relative_motion() -> None:

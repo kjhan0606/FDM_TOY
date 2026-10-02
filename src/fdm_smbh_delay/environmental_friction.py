@@ -42,6 +42,14 @@ def maxwellian_slow_fraction(speed_pc_myr: float, sigma_pc_myr: float) -> float:
     ):
         raise ValueError("speed and velocity dispersion are invalid")
     x = speed_pc_myr / (np.sqrt(2.0) * sigma_pc_myr)
+    if x < 0.05:
+        # Integrating 4/sqrt(pi) * t**2 * exp(-t**2) avoids cancellation
+        # between the two O(x) terms; the physical bracket is O(x**3).
+        x2 = x * x
+        return float(
+            4.0 / np.sqrt(np.pi) * x**3
+            * (1.0 / 3.0 + x2 * (-1.0 / 5.0 + x2 * (1.0 / 14.0 - x2 / 54.0)))
+        )
     return float(erf(x) - 2.0 * x * np.exp(-x * x) / np.sqrt(np.pi))
 
 
@@ -173,9 +181,12 @@ def ostriker_gas_coefficient(
         raise ValueError("gaseous-drag controls are invalid")
 
     def subsonic(mach: float) -> float:
-        if mach == 0.0:
-            return 0.0
-        return 0.5 * np.log((1.0 + mach) / (1.0 - mach)) - mach
+        if mach < 0.05:
+            mach2 = mach * mach
+            return mach**3 * (
+                1.0 / 3.0 + mach2 * (1.0 / 5.0 + mach2 * (1.0 / 7.0 + mach2 / 9.0))
+            )
+        return np.arctanh(mach) - mach
 
     def supersonic(mach: float) -> float:
         return 0.5 * np.log(1.0 - mach**-2) + coulomb_logarithm
