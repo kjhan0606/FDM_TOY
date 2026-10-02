@@ -631,14 +631,23 @@ identity only: the core properties and the wave mass, Hamiltonian, and
 angular-momentum series must still be measured from those sources by a
 declared extractor.  A bounded structural reader now checks one native
 `backup_psi` shard's Fortran record framing, level order, MPI-rank count, and
-real/imaginary array lengths without loading the wave fields:
+real/imaginary array lengths without loading the wave fields.  The paired
+mode also reads the corresponding AMR header, requires the configured
+`simple_boundary` value, aligns per-level grid counts, and checks every AMR
+fine-record frame:
 
 ```bash
 python scripts/inspect_lagramses_fdm_shard.py \
-  output_00042/fdm_00042.out00001 --expected-ncpu <mpi_ncpu>
+  output_00042/fdm_00042.out00001 \
+  --amr output_00042/amr_00042.out00001 \
+  --simple-boundary false --expected-ncpu 1
 ```
 
-This is a format preflight only.  It has synthetic-format regression tests but
+The paths, MPI-rank count, and boundary setting above are illustrative; the
+operator must use the verified output's actual values.  If boundary counts
+were not written and `nboundary>0`, the pair fails closed instead of guessing
+the FDM/AMR alignment.  This is a format preflight only.  It has
+synthetic-format regression tests but
 no measured galaxy-zoom snapshot yet; it neither reconstructs AMR leaf cells
 nor computes core mass, wave Hamiltonian, or angular momentum.  Bind the
 eventual measured diagnostic series to both the exact sample
