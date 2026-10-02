@@ -668,12 +668,12 @@ mass with the same output's raw provenance:
 ```bash
 python scripts/check_lagramses_fdm_output_mass.py \
   --provenance output_00042/fdm_outer_wave_provenance_00042.txt \
-  --coarse-cells-per-box 256 --simple-boundary false \
+  --coarse-cells-per-box 1 --simple-boundary false \
   --pair output_00042/fdm_00042.out00001 output_00042/amr_00042.out00001
 ```
 
-The example paths, rank count, boundary setting, and coarse-cell width are
-illustrative; the operator must supply the effective solver values and one
+The example paths, rank count, and boundary setting are illustrative; the
+operator must supply the effective solver values and one
 explicit pair for **every** MPI rank.  A missing rank or a mass/count mismatch
 fails closed.  Agreement tests the reader against the writer's own compact
 ledger, not time-series conservation, relaxation, or a physical delay by
@@ -683,7 +683,7 @@ manually on Lageunha with the effective coarse-cell width and boundary mode:
 ```bash
 python scripts/check_lagramses_fdm_mass_series.py \
   --sample-ledger results/dual_soliton_relaxation_sample_ledger.json \
-  --coarse-cells-per-box 256 --simple-boundary false \
+  --coarse-cells-per-box 1 --simple-boundary false \
   --output results/dual_soliton_relaxation_mass_series.json
 ```
 
@@ -700,15 +700,19 @@ mass in radial shells around the two **initial** seed centres:
 ```bash
 python scripts/check_lagramses_fdm_mass_series.py \
   --sample-ledger results/dual_soliton_relaxation_sample_ledger.json \
-  --coarse-cells-per-box 256 --simple-boundary false \
+  --coarse-cells-per-box 1 --simple-boundary false \
   --coarse-origin 0 0 0 \
   --radial-edges-box 0 0.0025 0.005 0.0075 0.01 0.015 0.02 0.025 0.03 0.04 \
   --aperture-radius-box 0.01 \
   --output results/dual_soliton_relaxation_mass_radial_series.json
 ```
 
-The origin and width must come from the effective lagRamses coarse geometry;
-the numbers above are illustrative.  Coordinates use the saved AMR grid
+The current lagRamses dual-soliton initializer applies seed centres directly
+to `xg+child_offset` in unit-box coordinates.  Consequently its radial
+analysis requires `nx=ny=nz=1`, `icoarse_max-icoarse_min+1=1`, and a zero
+coarse origin; the reader checks both the declared origin/width and the raw
+AMR header shape.  Other coarse geometries must be censored until the
+initializer and analysis coordinate conventions are reconciled.  Coordinates use the saved AMR grid
 centres, RAMSES child offsets, and periodic minimum-image radii.  Each
 centred shell includes the **total** FDM field, so overlapping shells are not
 two separately conserved soliton masses.  Seed-centred profiles neither track
@@ -767,7 +771,7 @@ the raw FDM density–potential moment on the same owned AMR leaf cells:
 ```bash
 python scripts/check_lagramses_fdm_potential_coupling.py \
   --gravity-binding results/dual_soliton_gravity_source_binding.json \
-  --coarse-cells-per-box 256 --simple-boundary false \
+  --coarse-cells-per-box 1 --simple-boundary false \
   --output results/dual_soliton_potential_coupling.json
 ```
 

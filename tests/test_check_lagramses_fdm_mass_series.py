@@ -139,6 +139,10 @@ def test_optional_two_centre_profile_is_explicit_and_remains_conditional(
 
     monkeypatch.setattr(cli, "reconstruct_fdm_radial_mass_profile", radial)
     monkeypatch.setattr(
+        cli, "read_amr_shard_header",
+        lambda *args, **kwargs: SimpleNamespace(nx_ny_nz=(1, 1, 1)),
+    )
+    monkeypatch.setattr(
         cli, "summarize_owned_leaf_amplitudes",
         lambda *args, **kwargs: SimpleNamespace(
             leaf_cells_by_level=(8,),
@@ -190,3 +194,46 @@ def test_optional_two_centre_profile_is_explicit_and_remains_conditional(
     assert len(record["two_centre_wave_aperture_centroids"]) == 3
     assert len(record["seed_soliton_profile_candidates"]) == 3
     assert record["status"] == "mass_series_within_limit_pending_other_conservation"
+
+
+def test_dual_seed_radial_reader_rejects_scaled_or_shifted_coarse_geometry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = _mock_inputs(tmp_path, monkeypatch, changed_after=False)
+    argv = list(sys.argv)
+    argv[1:1] = [
+        "--coarse-origin", "0", "0", "0",
+        "--radial-edges-box", "0", "0.1", "0.5",
+    ]
+    argv[argv.index("--coarse-cells-per-box") + 1] = "256"
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(SystemExit) as stopped:
+        cli.main()
+    assert stopped.value.code == 2
+    assert not target.exists()
+    argv[argv.index("--coarse-cells-per-box") + 1] = "1"
+    argv[argv.index("--coarse-origin") + 1] = "1"
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(SystemExit) as stopped:
+        cli.main()
+    assert stopped.value.code == 2
+    assert not target.exists()
+
+
+def test_dual_seed_radial_reader_checks_raw_amr_coarse_shape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = _mock_inputs(tmp_path, monkeypatch, changed_after=False)
+    monkeypatch.setattr(
+        cli, "read_amr_shard_header",
+        lambda *args, **kwargs: SimpleNamespace(nx_ny_nz=(8, 8, 8)),
+    )
+    argv = list(sys.argv)
+    argv[1:1] = [
+        "--coarse-origin", "0", "0", "0",
+        "--radial-edges-box", "0", "0.1", "0.5",
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(ValueError, match="nx=ny=nz=1"):
+        cli.main()
+    assert not target.exists()

@@ -35,7 +35,10 @@ from fdm_smbh_delay.fdm_leaf_mass import (
     reconstruct_fdm_aperture_centroids,
     reconstruct_fdm_radial_mass_profile,
 )
-from fdm_smbh_delay.fdm_shard_format import summarize_owned_leaf_amplitudes
+from fdm_smbh_delay.fdm_shard_format import (
+    read_amr_shard_header,
+    summarize_owned_leaf_amplitudes,
+)
 from fdm_smbh_delay.fdm_soliton_profile import fit_disjoint_seed_soliton_profiles
 from fdm_smbh_delay.lagramses_fdm_provenance import (
     read_lagramses_fdm_outer_wave_provenance,
@@ -87,6 +90,13 @@ def main() -> int:
     radial_requested = args.coarse_origin is not None or args.radial_edges_box is not None
     if radial_requested and (args.coarse_origin is None or args.radial_edges_box is None):
         parser.error("radial profiles require both --coarse-origin and --radial-edges-box")
+    if radial_requested and (
+        args.coarse_cells_per_box != 1 or args.coarse_origin != [0, 0, 0]
+    ):
+        parser.error(
+            "current dual-soliton seed coordinates require one coarse cell per box "
+            "and --coarse-origin 0 0 0"
+        )
     if args.aperture_radius_box is not None and not radial_requested:
         parser.error("aperture centroids require radial geometry")
     if args.fit_seed_solitons and args.aperture_radius_box is None:
@@ -112,6 +122,16 @@ def main() -> int:
             or provenance.fdm_dual_soliton_centres_box is None
         ):
             raise ValueError("radial profile requires declared dual-soliton seed centres")
+        if radial_requested:
+            amr_header = read_amr_shard_header(
+                sample.amr_topology_files[0].path,
+                simple_boundary=args.simple_boundary == "true",
+                expected_ncpu=provenance.mpi_ncpu,
+            )
+            if amr_header.nx_ny_nz != (1, 1, 1):
+                raise ValueError(
+                    "dual-soliton seed coordinates require nx=ny=nz=1 in the raw AMR output"
+                )
         if args.fit_seed_solitons and (
             provenance.fdm_dual_soliton_profile_c is None
             or provenance.fdm_dual_soliton_rc_box is None
