@@ -761,6 +761,27 @@ binding is **source identity only**: no kinetic term, potential-energy
 convention, sink interaction energy, Hamiltonian drift, or angular momentum
 has yet been measured.
 
+After that binding exists, a separate bounded Lageunha reader can measure
+the raw FDM density–potential moment on the same owned AMR leaf cells:
+
+```bash
+python scripts/check_lagramses_fdm_potential_coupling.py \
+  --gravity-binding results/dual_soliton_gravity_source_binding.json \
+  --coarse-cells-per-box 256 --simple-boundary false \
+  --output results/dual_soliton_potential_coupling.json
+```
+
+It rechecks the gravity binding before and after extraction, uses the same
+HJM/wave density rule as the lagRamses leaf-mass writer, and censors any
+snapshot whose mass/count reconstruction disagrees with raw provenance.
+The reported `integral rho*phi dV` is **gauge dependent**: the Poisson
+potential has an arbitrary zero point and may include sink or other external
+components.  No factor of one-half is applied.  It is neither FDM
+self-gravitational energy nor a conserved Hamiltonian, and its drift must
+not be used as a relaxation pass.  The wave-gradient kinetic term, sink
+interaction convention, and angular momentum remain to be derived and
+validated separately.
+
 Bind the eventual complete diagnostic series to both the exact sample ledger
 and immutable extractor bytes before assessment:
 

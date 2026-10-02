@@ -23,7 +23,8 @@ def _integer(value: int) -> bytes:
 
 
 def _gravity(
-    *, particle_density: bool = False, wrong_level_two_count: bool = False
+    *, particle_density: bool = False, wrong_level_two_count: bool = False,
+    density_value: float = 1.0, phi_value: float = 1.0, force_value: float = 1.0,
 ) -> bytes:
     nvar = 5 if particle_density else 4
     data = b"".join(_integer(value) for value in (2, nvar, 2, 1))
@@ -35,8 +36,14 @@ def _gravity(
             )
             data += _integer(level) + _integer(ncache)
             if ncache:
-                payload = _record(struct.pack("<" + "d" * ncache, *([1.0] * ncache)))
-                data += payload * (8 * nvar)
+                def array(value: float) -> bytes:
+                    return _record(struct.pack("<" + "d" * ncache, *([value] * ncache)))
+
+                for _ in range(8):
+                    if particle_density:
+                        data += array(density_value)
+                    data += array(phi_value)
+                    data += array(force_value) * 3
     return data
 
 
