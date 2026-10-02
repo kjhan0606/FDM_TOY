@@ -236,6 +236,28 @@ of every resolution pair, and include a doubled-box control. Until those gates
 pass, the runtime must report these q-e-small-separation domains as
 uncalibrated/censored.
 
+The corresponding resource-design calculation (which launches no solver) is
+
+```bash
+python scripts/plan_qe_followup_resources.py \
+  --manifest results/wave_calibration_qe_extension/run_manifest.csv \
+  --cases results/wave_calibration_qe_extension/physical_cases.csv
+```
+
+At the initial Kepler period, the **necessary** 64-orbit duration for complete
+coverage of eight bins is 0.1749 Myr at `a/r_c=0.20`, 0.0618 Myr at 0.10, and
+0.0219 Myr at 0.05. These are not sufficient durations: the smallest
+eccentric case already has about 29 nominal periods in its 0.01 Myr pilot but
+zero initially resolved coarse-grid orbits. Doubling the box while preserving
+cell size raises the finest members of the present pairs from `n=512` to
+`n=1024` or from `n=768` to `n=1536`. The existing 16-array uniform-grid model
+estimates 128 and 432 GiB, respectively, above an 80 GiB reference device.
+These estimates are planning warnings, not measured peak GPU footprints. A
+new release therefore needs an independently reviewed solver/resource design
+for its doubled-box controls; merely extending the current run duration or
+submitting the same grids on an 80 GiB card cannot establish the required
+calibration.
+
 The guarded q-e queue uses observed device-memory profiles rather than the
 uniform-grid estimate alone. An `n=512` stage requires at least 22 GiB total
 and 21 GiB free: this admits a 23,028 MiB A10 while retaining more than 2 GiB
