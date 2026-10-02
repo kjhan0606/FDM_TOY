@@ -21,7 +21,18 @@ from fdm_smbh_delay.binary_evolution import (
     orbital_invariants,
 )
 from fdm_smbh_delay.constants import KM_S_TO_PC_MYR
+from fdm_smbh_delay.exchange_scaling import schrodinger_poisson_similarity_parameter
 from fdm_smbh_delay.subgrid_calibration import InterpolatedSubgridRates
+
+
+def _particle_mass_for_similarity(similarity: float, core_radius_pc: float) -> float:
+    reference_mass_ev = 1.0e-21
+    reference_similarity = schrodinger_poisson_similarity_parameter(
+        particle_mass_ev=reference_mass_ev,
+        soliton_mass_msun=1.0e9,
+        core_radius_pc=core_radius_pc,
+    )
+    return reference_mass_ev * np.sqrt(reference_similarity / similarity)
 
 
 def _stellar_model() -> BoundBinaryModel:
@@ -207,6 +218,7 @@ def test_legacy_fdm_adapter_rejects_unmeasured_q_and_e() -> None:
         mass2_msun=5.0e7,
         soliton_mass_msun=1.0e9,
         core_radius_pc=5.0,
+        particle_mass_ev=_particle_mass_for_similarity(1.0, 5.0),
     )
     with pytest.raises(UncalibratedBinaryState, match="mass ratio"):
         unequal(1.0, 0.0)
@@ -218,6 +230,7 @@ def test_legacy_fdm_adapter_rejects_unmeasured_q_and_e() -> None:
         mass2_msun=1.0e8,
         soliton_mass_msun=1.0e9,
         core_radius_pc=5.0,
+        particle_mass_ev=_particle_mass_for_similarity(1.0, 5.0),
     )
     assert circular(1.0, 0.0).calibration_id == "legacy-v2:koo"
     with pytest.raises(UncalibratedBinaryState, match="eccentricity"):
@@ -255,10 +268,22 @@ def test_qe_fdm_adapter_passes_runtime_e_and_censors_missing_plane() -> None:
         mass2_msun=3.0e7,
         soliton_mass_msun=1.0e9,
         core_radius_pc=5.0,
+        particle_mass_ev=_particle_mass_for_similarity(1.0, 5.0),
     )
     rates = provider(1.0, 0.3)
-    assert rates.calibration_id == "v3:boey2025:q=0.3:e=0.3"
+    assert rates.calibration_id == "v4:boey2025:eta=1:q=0.3:e=0.3"
     with pytest.raises(UncalibratedBinaryState, match="plane is absent"):
         provider(1.0, 0.2)
     with pytest.raises(UncalibratedBinaryState, match="outside"):
         provider(0.5, 0.3)
+    unsupported_similarity = calibrated_qe_fdm_rate_provider(
+        ExactPlaneTable(),
+        profile_id="boey2025",
+        mass1_msun=1.0e8,
+        mass2_msun=3.0e7,
+        soliton_mass_msun=1.0e9,
+        core_radius_pc=5.0,
+        particle_mass_ev=2.0 * _particle_mass_for_similarity(1.0, 5.0),
+    )
+    with pytest.raises(UncalibratedBinaryState, match="similarity parameter"):
+        unsupported_similarity(1.0, 0.3)

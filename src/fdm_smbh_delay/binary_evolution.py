@@ -99,6 +99,7 @@ def legacy_circular_fdm_rate_provider(
     mass2_msun: float,
     soliton_mass_msun: float,
     core_radius_pc: float,
+    particle_mass_ev: float,
     calibrated_mass_ratio: float = 1.0,
     mass_ratio_tolerance: float = 1.0e-12,
     maximum_eccentricity: float = 1.0e-3,
@@ -117,6 +118,7 @@ def legacy_circular_fdm_rate_provider(
             mass2_msun,
             soliton_mass_msun,
             core_radius_pc,
+            particle_mass_ev,
             calibrated_mass_ratio,
             mass_ratio_tolerance,
             maximum_eccentricity,
@@ -125,7 +127,7 @@ def legacy_circular_fdm_rate_provider(
     )
     if (
         np.any(~np.isfinite(controls))
-        or np.any(controls[:5] <= 0.0)
+        or np.any(controls[:6] <= 0.0)
         or mass_ratio_tolerance < 0.0
         or not 0.0 <= maximum_eccentricity < 1.0
     ):
@@ -156,6 +158,7 @@ def legacy_circular_fdm_rate_provider(
                 mass2_msun=mass2_msun,
                 soliton_mass_msun=soliton_mass_msun,
                 core_radius_pc=core_radius_pc,
+                particle_mass_ev=particle_mass_ev,
                 separation_pc=semimajor_axis_pc,
             )
         except ValueError as error:
@@ -177,6 +180,7 @@ def calibrated_qe_fdm_rate_provider(
     mass2_msun: float,
     soliton_mass_msun: float,
     core_radius_pc: float,
+    particle_mass_ev: float,
 ) -> FDMRateProvider:
     """Adapt an accepted schema-v4 table without q, e, or a extrapolation.
 
@@ -187,7 +191,7 @@ def calibrated_qe_fdm_rate_provider(
     """
 
     controls = np.asarray(
-        [mass1_msun, mass2_msun, soliton_mass_msun, core_radius_pc],
+        [mass1_msun, mass2_msun, soliton_mass_msun, core_radius_pc, particle_mass_ev],
         dtype=float,
     )
     if np.any(~np.isfinite(controls)) or np.any(controls <= 0.0):
@@ -204,6 +208,7 @@ def calibrated_qe_fdm_rate_provider(
                 mass2_msun=mass2_msun,
                 soliton_mass_msun=soliton_mass_msun,
                 core_radius_pc=core_radius_pc,
+                particle_mass_ev=particle_mass_ev,
                 separation_pc=semimajor_axis_pc,
                 eccentricity=eccentricity,
             )
@@ -211,7 +216,9 @@ def calibrated_qe_fdm_rate_provider(
             raise UncalibratedBinaryState(str(error)) from error
         dimensionless = rates.dimensionless
         calibration_id = (
-            f"v3:{profile_id}:q={dimensionless.mass_ratio_q:.12g}:"
+            f"v4:{profile_id}:"
+            f"eta={dimensionless.schrodinger_poisson_similarity_parameter:.12g}:"
+            f"q={dimensionless.mass_ratio_q:.12g}:"
             f"e={dimensionless.reference_eccentricity:.12g}"
         )
         return FDMExchangeRates(

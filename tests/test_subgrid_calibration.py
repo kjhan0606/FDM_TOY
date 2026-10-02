@@ -3,8 +3,10 @@ from __future__ import annotations
 from dataclasses import fields
 from pathlib import Path
 
+import numpy as np
 import pytest
 
+from fdm_smbh_delay.exchange_scaling import schrodinger_poisson_similarity_parameter
 from fdm_smbh_delay.subgrid_calibration import (
     ACCEPTED_STATUS,
     SubgridCalibrationRow,
@@ -87,6 +89,16 @@ def _table() -> SubgridCalibrationTable:
             )
         )
     return SubgridCalibrationTable(rows)
+
+
+def _matching_particle_mass_ev(soliton_mass_msun: float, core_radius_pc: float) -> float:
+    reference_mass_ev = 1.0e-21
+    reference_similarity = schrodinger_poisson_similarity_parameter(
+        particle_mass_ev=reference_mass_ev,
+        soliton_mass_msun=soliton_mass_msun,
+        core_radius_pc=core_radius_pc,
+    )
+    return reference_mass_ev * np.sqrt(reference_similarity / 0.388)
 
 
 def test_interpolation_is_linear_and_systematic_is_conservative() -> None:
@@ -381,6 +393,7 @@ def test_physical_update_closes_energy_and_angular_momentum() -> None:
         mass2_msun=2.0e7,
         soliton_mass_msun=1.0e9,
         core_radius_pc=2.0,
+        particle_mass_ev=_matching_particle_mass_ev(1.0e9, 2.0),
         separation_pc=0.8,
     )
     assert rates.dimensionless.binary_to_soliton_mass == pytest.approx(0.04)
@@ -408,6 +421,7 @@ def test_physical_rates_follow_the_internal_unit_scaling() -> None:
         mass2_msun=2.0e7,
         soliton_mass_msun=1.0e9,
         core_radius_pc=2.0,
+        particle_mass_ev=_matching_particle_mass_ev(1.0e9, 2.0),
         separation_pc=0.8,
     )
     mass_scale = 3.0
@@ -419,6 +433,9 @@ def test_physical_rates_follow_the_internal_unit_scaling() -> None:
         mass2_msun=mass_scale * 2.0e7,
         soliton_mass_msun=mass_scale * 1.0e9,
         core_radius_pc=length_scale * 2.0,
+        particle_mass_ev=_matching_particle_mass_ev(
+            mass_scale * 1.0e9, length_scale * 2.0
+        ),
         separation_pc=length_scale * 0.8,
     )
     power_scale = mass_scale**2.5 / length_scale**2.5
@@ -437,6 +454,32 @@ def test_physical_rates_follow_the_internal_unit_scaling() -> None:
     )
 
 
+def test_physical_rates_censor_unmatched_fdm_similarity_class() -> None:
+    matched_mass = _matching_particle_mass_ev(1.0e9, 2.0)
+    with pytest.raises(ValueError, match="similarity parameter"):
+        physical_subgrid_rates(
+            _table(),
+            profile_id="boey2025",
+            mass1_msun=2.0e7,
+            mass2_msun=2.0e7,
+            soliton_mass_msun=1.0e9,
+            core_radius_pc=2.0,
+            particle_mass_ev=2.0 * matched_mass,
+            separation_pc=0.8,
+        )
+    with pytest.raises(ValueError, match="particle mass"):
+        physical_subgrid_rates(
+            _table(),
+            profile_id="boey2025",
+            mass1_msun=2.0e7,
+            mass2_msun=2.0e7,
+            soliton_mass_msun=1.0e9,
+            core_radius_pc=2.0,
+            particle_mass_ev=np.nan,
+            separation_pc=0.8,
+        )
+
+
 def test_repeated_finite_updates_close_cumulative_exchange() -> None:
     rates = physical_subgrid_rates(
         _table(),
@@ -445,6 +488,7 @@ def test_repeated_finite_updates_close_cumulative_exchange() -> None:
         mass2_msun=2.0e7,
         soliton_mass_msun=1.0e9,
         core_radius_pc=2.0,
+        particle_mass_ev=_matching_particle_mass_ev(1.0e9, 2.0),
         separation_pc=0.8,
     )
     semimajor_axis = 0.8
@@ -496,6 +540,7 @@ def test_residual_rates_remove_resolved_work_without_double_counting() -> None:
         mass2_msun=2.0e7,
         soliton_mass_msun=1.0e9,
         core_radius_pc=2.0,
+        particle_mass_ev=_matching_particle_mass_ev(1.0e9, 2.0),
         separation_pc=0.8,
     )
     residual = residual_orbital_rates(
@@ -520,6 +565,7 @@ def test_finite_update_applies_only_exchange_absent_from_the_resolved_wake() -> 
         mass2_msun=2.0e7,
         soliton_mass_msun=1.0e9,
         core_radius_pc=2.0,
+        particle_mass_ev=_matching_particle_mass_ev(1.0e9, 2.0),
         separation_pc=0.8,
     )
     time_step = 1.0e-8

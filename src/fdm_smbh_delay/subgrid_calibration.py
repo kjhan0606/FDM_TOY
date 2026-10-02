@@ -11,7 +11,11 @@ from typing import Iterable
 
 import numpy as np
 
-from .exchange_scaling import ExchangeScales, exchange_scales
+from .exchange_scaling import (
+    ExchangeScales,
+    exchange_scales,
+    schrodinger_poisson_similarity_parameter,
+)
 from .orbital_exchange import (
     FiniteOrbitalExchangeStep,
     advance_keplerian_exchange,
@@ -1187,9 +1191,14 @@ def physical_subgrid_rates(
     mass2_msun: float,
     soliton_mass_msun: float,
     core_radius_pc: float,
+    particle_mass_ev: float,
     separation_pc: float,
     eccentricity: float = 0.0,
 ) -> PhysicalSubgridRates:
+    """Apply a measured row only within its physical FDM similarity class."""
+
+    if not np.isfinite(particle_mass_ev) or particle_mass_ev <= 0.0:
+        raise ValueError("FDM particle mass must be finite and positive")
     mass_ratio_q = min(mass1_msun, mass2_msun) / max(mass1_msun, mass2_msun)
     dimensionless = table.interpolate(
         profile_id=profile_id,
@@ -1199,6 +1208,20 @@ def physical_subgrid_rates(
         / soliton_mass_msun,
         separation_over_core_radius=separation_pc / core_radius_pc,
     )
+    physical_similarity = schrodinger_poisson_similarity_parameter(
+        particle_mass_ev=particle_mass_ev,
+        soliton_mass_msun=soliton_mass_msun,
+        core_radius_pc=core_radius_pc,
+    )
+    if not np.isclose(
+        physical_similarity,
+        dimensionless.schrodinger_poisson_similarity_parameter,
+        rtol=1.0e-6,
+        atol=0.0,
+    ):
+        raise ValueError(
+            "physical FDM similarity parameter lies outside calibrated support"
+        )
     scales = exchange_scales(
         mass1_msun=mass1_msun,
         mass2_msun=mass2_msun,
@@ -1405,6 +1428,17 @@ def verify_subgrid_runtime(
             mass2_msun=secondary_mass,
             soliton_mass_msun=soliton_mass,
             core_radius_pc=core_radius,
+            particle_mass_ev=(
+                1.0e-21
+                * np.sqrt(
+                    schrodinger_poisson_similarity_parameter(
+                        particle_mass_ev=1.0e-21,
+                        soliton_mass_msun=soliton_mass,
+                        core_radius_pc=core_radius,
+                    )
+                    / row.schrodinger_poisson_similarity_parameter
+                )
+            ),
             separation_pc=separation,
             eccentricity=row.reference_eccentricity,
         )

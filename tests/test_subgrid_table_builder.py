@@ -392,9 +392,22 @@ def test_generated_release_drives_a_conservative_residual_update(
         mass2_msun=2.0e7,
         soliton_mass_msun=1.0e9,
         core_radius_pc=2.0,
+        particle_mass_ev=1.0e-21,
         separation_pc=0.6,
         eccentricity=0.23,
     )
+    with pytest.raises(ValueError, match="similarity parameter"):
+        physical_subgrid_rates(
+            table,
+            profile_id="boey2025",
+            mass1_msun=2.0e7,
+            mass2_msun=2.0e7,
+            soliton_mass_msun=1.0e9,
+            core_radius_pc=2.0,
+            particle_mass_ev=2.0e-21,
+            separation_pc=0.6,
+            eccentricity=0.23,
+        )
     assert rates.dimensionless.dimensionless_orbital_power == pytest.approx(-1.0)
     assert rates.dimensionless.dimensionless_orbital_torque == pytest.approx(-2.0)
     step = advance_calibrated_exchange(

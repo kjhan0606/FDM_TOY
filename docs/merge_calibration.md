@@ -111,13 +111,21 @@ Analytic FDM drag is disabled because the resolved wake supplies the force.
 
 ### Sparse q-e and small-separation extension
 
-The production table schema is version 3. Each accepted row now carries the
+The production table schema is version 4. Each accepted row now carries the
 SMBH mass ratio and the duration-weighted, orbit-averaged osculating
 eccentricity in addition to profile, binary mass fraction, and separation.
 The manifest's input eccentricity remains separate provenance because the
 extended soliton potential shifts the point-mass osculating diagnostic.
 Runtime lookup interpolates in `q` or `e` only when
 every bracketing plane has accepted mass and separation support at the query.
+Physical-rate evaluation also requires the FDM particle mass. It recomputes
+`hbar^2/(G m^2 M_s r_c)` from that mass, soliton mass, and core radius, and
+rejects a mismatch with the table's similarity class beyond relative `1e-6`.
+The bound-binary consumer treats that mismatch as uncalibrated/censored rather
+than applying a rate from another boson-mass regime.
+The soliton mass and core radius must use the same profile definitions as the
+calibration row; a catalogue fit with different normalization is not silently
+treated as the same similarity class.
 Mass interpolation likewise requires accepted separation support on both mass
 planes, and separation interpolation may cross only contiguous accepted bins.
 Missing support, gaps, and all extrapolation stop the bound-binary calculation
