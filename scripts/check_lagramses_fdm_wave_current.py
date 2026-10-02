@@ -2,7 +2,7 @@
 """Compare one source-verified pure-FDM snapshot with writer current.
 
 Run manually on Lageunha, one sample and one process at a time.  This does
-not measure the spectral/AMR kinetic Hamiltonian or certify relaxation.
+not measure the composite AMR kinetic Hamiltonian or certify relaxation.
 """
 
 from __future__ import annotations
@@ -24,10 +24,16 @@ for _thread_variable in (
 from fdm_smbh_delay.dual_soliton_relaxation import (
     read_verified_dual_soliton_relaxation_sample_ledger,
 )
+from fdm_smbh_delay.dual_soliton_preflight import read_lagramses_namelist_assignment
 from fdm_smbh_delay.fdm_shard_format import inspect_fdm_shard
 from fdm_smbh_delay.fdm_wave_stencil import (
+    assemble_uniform_fft_base_from_shards,
     check_fdm_wave_writer_identity,
     measure_fdm_shard_same_level_stencil,
+    read_fdm_shard_level_fields,
+)
+from fdm_smbh_delay.fdm_zoom_runtime_identity import (
+    read_verified_fdm_declared_zoom_runtime_outputs,
 )
 from fdm_smbh_delay.lagramses_fdm_provenance import (
     read_lagramses_fdm_outer_wave_provenance,
@@ -65,11 +71,18 @@ def main() -> int:
     parser.add_argument("--simple-boundary", choices=("true", "false"), required=True)
     parser.add_argument("--maximum-grids-per-level", type=int, default=100_000)
     parser.add_argument("--maximum-array-mib", type=int, default=16)
+    parser.add_argument("--measure-uniform-fft-base", action="store_true")
+    parser.add_argument("--maximum-uniform-cells", type=int, default=1_000_000)
+    parser.add_argument("--maximum-total-base-grids", type=int, default=200_000)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     if "lageunha" not in socket.gethostname().lower():
         parser.error("FDM wave-current shard reading is permitted only on Lageunha")
-    if args.sample_index < 0 or args.maximum_grids_per_level < 1 or args.maximum_array_mib < 1:
+    if (
+        args.sample_index < 0 or args.maximum_grids_per_level < 1
+        or args.maximum_array_mib < 1 or args.maximum_uniform_cells < 8
+        or args.maximum_total_base_grids < 1
+    ):
         parser.error("sample index and memory bounds are invalid")
     if args.output.expanduser().resolve().exists():
         parser.error("wave-current output already exists")
@@ -85,10 +98,12 @@ def main() -> int:
     ):
         raise ValueError("FDM wave-current shard count differs from raw provenance")
     results = []
+    structures = []
     for rank, (wave, amr) in enumerate(
         zip(sample.wave_snapshot_files, sample.amr_topology_files, strict=True), start=1
     ):
         structure = inspect_fdm_shard(wave.path, expected_ncpu=provenance.mpi_ncpu)
+        structures.append(structure)
         for level in range(1, structure.nlevelmax + 1):
             results.append(measure_fdm_shard_same_level_stencil(
                 wave.path, amr.path, owner_rank=rank, level=level,
@@ -101,6 +116,52 @@ def main() -> int:
                 maximum_array_bytes=args.maximum_array_mib * 1024 * 1024,
             ))
     identity = check_fdm_wave_writer_identity(results, provenance)
+    uniform_base = None
+    if args.measure_uniform_fft_base:
+        outputs = read_verified_fdm_declared_zoom_runtime_outputs(
+            ledger.runtime_output_identity_path
+        )
+        matches = [
+            record for record in outputs.outputs
+            if Path(record["raw_fdm_provenance"]["path"]).resolve()
+            == sample.raw_provenance_path
+        ]
+        if len(matches) != 1:
+            raise ValueError("sample does not identify one verified effective namelist")
+        namelist = Path(matches[0]["namelist_copy"]["path"])
+        level_token = read_lagramses_namelist_assignment(
+            namelist, group="AMR_PARAMS", name="levelmin"
+        )
+        try:
+            levelmin = int(level_token)
+        except ValueError as error:
+            raise ValueError("effective levelmin is not an integer") from error
+        if levelmin < 1 or any(levelmin > item.nlevelmax for item in structures):
+            raise ValueError("effective levelmin lies outside the wave shards")
+        if sum(
+            item.grid_counts_per_level[levelmin - 1] for item in structures
+        ) > args.maximum_total_base_grids:
+            raise ValueError("uniform FFT base exceeds the total-grid memory bound")
+        base_fields = [
+            read_fdm_shard_level_fields(
+                wave.path, amr.path, owner_rank=rank, level=levelmin,
+                simple_boundary=args.simple_boundary == "true",
+                fdm_use_hjm=False,
+                fdm_first_wave_level=provenance.fdm_first_wave_level,
+                expected_ncpu=provenance.mpi_ncpu,
+                maximum_grids=args.maximum_grids_per_level,
+                maximum_array_bytes=args.maximum_array_mib * 1024 * 1024,
+            )
+            for rank, (wave, amr) in enumerate(
+                zip(sample.wave_snapshot_files, sample.amr_topology_files, strict=True),
+                start=1,
+            )
+        ]
+        uniform_base = assemble_uniform_fft_base_from_shards(
+            base_fields, declared_levelmin=levelmin,
+            hbar_code=provenance.hbar_code,
+            maximum_cells=args.maximum_uniform_cells,
+        )
     # Re-read all hashes after extraction so in-place output mutation cannot
     # silently turn a measured result into an unbound one.
     after = read_verified_dual_soliton_relaxation_sample_ledger(args.sample_ledger)
@@ -121,6 +182,14 @@ def main() -> int:
         },
         "identity": asdict(identity),
         "owner_level_results": [asdict(item) for item in results],
+        "uniform_fft_base": None if uniform_base is None else asdict(uniform_base),
+        "uniform_fft_base_status": (
+            "not_requested" if uniform_base is None
+            else "censored_incomplete_or_writer_mismatch"
+            if uniform_base.quadratic is None
+            or identity.status != "saved_wave_writer_current_identity_matches"
+            else "candidate_pending_use_fftw_build_and_units_verification"
+        ),
     }
     _publish_json_without_overwrite(args.output, payload)
     return 0

@@ -11,7 +11,11 @@ from fdm_smbh_delay.fdm_shard_format import (
     read_amr_shard_header,
     summarize_owned_leaf_amplitudes,
 )
-from fdm_smbh_delay.fdm_wave_stencil import measure_fdm_shard_same_level_stencil
+from fdm_smbh_delay.fdm_wave_stencil import (
+    assemble_uniform_fft_base_from_shards,
+    measure_fdm_shard_same_level_stencil,
+    read_fdm_shard_level_fields,
+)
 
 
 def _record(payload: bytes, *, byte_order: str = "<") -> bytes:
@@ -445,3 +449,31 @@ def test_native_shard_stencil_rejects_wrong_geometry_and_missing_grid(
     )
     with pytest.raises(ValueError, match="wave-level unit-box"):
         measure_fdm_shard_same_level_stencil(wave, amr, **kwargs)
+
+
+def test_native_shard_owner_fields_assemble_only_one_complete_fft_base(
+    tmp_path: Path,
+) -> None:
+    fields = []
+    for rank in (1, 2):
+        wave = tmp_path / f"fdm_00001.out{rank:05d}"
+        amr = tmp_path / f"amr_00001.out{rank:05d}"
+        wave.write_bytes(_shard(nboundary=0))
+        amr.write_bytes(
+            _amr_header(simple_boundary=False, nboundary=0, coarse_shape=(1, 1, 1))
+            + _amr_fine_payload(nboundary=0, grid_centre=(0.5, 0.5, 0.5))
+        )
+        fields.append(read_fdm_shard_level_fields(
+            wave, amr, owner_rank=rank, level=1, simple_boundary=False,
+            fdm_use_hjm=False, fdm_first_wave_level=1,
+        ))
+    assert fields[0].owned_grid.tolist() == [True]
+    assert fields[1].owned_grid.tolist() == [False]
+    result = assemble_uniform_fft_base_from_shards(
+        fields, declared_levelmin=1, hbar_code=1.0,
+    )
+    assert result.status == "uniform_native_fft_quadratic_pending_ledger_binding"
+    assert result.expected_cells == result.assigned_cells == 8
+    assert result.quadratic is not None
+    assert result.quadratic.wave_mass_code == pytest.approx(5.0)
+    assert result.quadratic.drift_generator_quadratic_code == pytest.approx(0.0)

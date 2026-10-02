@@ -10,7 +10,9 @@ import pytest
 
 from fdm_smbh_delay.fdm_wave_stencil import (
     FDMSameLevelStencil,
+    FDMShardLevelFields,
     FDMShardStencilResult,
+    assemble_uniform_fft_base_from_shards,
     check_fdm_wave_writer_identity,
     measure_fdm_same_level_stencil,
     measure_uniform_fft_drift_quadratic,
@@ -242,4 +244,71 @@ def test_uniform_fft_quadratic_refuses_incomplete_or_nonfinite_fields() -> None:
         measure_uniform_fft_drift_quadratic(
             level=2, boxlen_code=1.0, hbar_code=1.0,
             wave_real=bad, wave_imag=zeros,
+        )
+
+
+def _split_uniform_native_fields(tmp_path: Path) -> tuple[FDMShardLevelFields, ...]:
+    source = _level_two_wave()
+    fields = []
+    for rank in (1, 2):
+        owned = np.zeros(8, dtype=bool)
+        owned[(rank - 1) * 4:rank * 4] = True
+        fields.append(FDMShardLevelFields(
+            wave_path=tmp_path / f"fdm_00001.out{rank:05d}",
+            amr_path=tmp_path / f"amr_00001.out{rank:05d}",
+            owner_rank=rank, ncpu=2, nlevelmax=2, boxlen_code=1.0,
+            level=2, grid_centres=source["grid_centres"].copy(),
+            wave_real=source["wave_real"].copy(),
+            wave_imag=source["wave_imag"].copy(),
+            son_grid_index=source["son_grid_index"].copy(),
+            owned_grid=owned,
+        ))
+    return tuple(fields)
+
+
+def test_native_owner_lattice_assembles_uniform_fft_quadratic(tmp_path: Path) -> None:
+    fields = _split_uniform_native_fields(tmp_path)
+    result = assemble_uniform_fft_base_from_shards(
+        fields[::-1], declared_levelmin=2, hbar_code=1.0,
+    )
+    assert result.status == "uniform_native_fft_quadratic_pending_ledger_binding"
+    assert result.assigned_cells == result.expected_cells == 64
+    assert result.duplicate_cells == result.refined_owned_cells == result.missing_cells == 0
+    assert result.quadratic is not None
+    assert result.quadratic.wave_mass_code == pytest.approx(1.0)
+    assert result.quadratic.drift_generator_quadratic_code == pytest.approx(16.0)
+    with pytest.raises(ValueError, match="base level"):
+        assemble_uniform_fft_base_from_shards(
+            fields, declared_levelmin=1, hbar_code=1.0,
+        )
+
+
+def test_native_uniform_assembly_censors_missing_duplicate_and_refined_cells(
+    tmp_path: Path,
+) -> None:
+    first, second = _split_uniform_native_fields(tmp_path)
+    missing = assemble_uniform_fft_base_from_shards(
+        (first, replace(second, owned_grid=np.zeros(8, dtype=bool))),
+        declared_levelmin=2, hbar_code=1.0,
+    )
+    assert missing.status.startswith("censored_")
+    assert missing.missing_cells == 32
+    assert missing.quadratic is None
+    duplicate = assemble_uniform_fft_base_from_shards(
+        (replace(first, owned_grid=np.ones(8, dtype=bool)), second),
+        declared_levelmin=2, hbar_code=1.0,
+    )
+    assert duplicate.duplicate_cells == 32
+    assert duplicate.status.startswith("censored_")
+    sons = first.son_grid_index.copy()
+    sons[0, 0] = 1
+    refined = assemble_uniform_fft_base_from_shards(
+        (replace(first, son_grid_index=sons), second),
+        declared_levelmin=2, hbar_code=1.0,
+    )
+    assert refined.refined_owned_cells == 1
+    assert refined.quadratic is None
+    with pytest.raises(ValueError, match="every MPI rank"):
+        assemble_uniform_fft_base_from_shards(
+            (first,), declared_levelmin=2, hbar_code=1.0,
         )

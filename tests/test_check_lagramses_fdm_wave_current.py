@@ -5,9 +5,14 @@ from pathlib import Path
 from types import SimpleNamespace
 import sys
 
+import numpy as np
 import pytest
 
-from fdm_smbh_delay.fdm_wave_stencil import FDMSameLevelStencil, FDMShardStencilResult
+from fdm_smbh_delay.fdm_wave_stencil import (
+    FDMSameLevelStencil,
+    FDMShardLevelFields,
+    FDMShardStencilResult,
+)
 from scripts import check_lagramses_fdm_wave_current as cli
 
 
@@ -25,6 +30,7 @@ def _inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     )
     ledger = SimpleNamespace(
         source_path=ledger_path, source_sha256="b" * 64,
+        runtime_output_identity_path=tmp_path / "runtime-outputs.json",
         samples=(sample,),
     )
     provenance = SimpleNamespace(
@@ -96,3 +102,40 @@ def test_wave_current_cli_rejects_changed_ledger_before_publication(
     with pytest.raises(ValueError, match="changed during"):
         cli.main()
     assert not output.exists()
+
+
+def test_wave_current_cli_keeps_uniform_fft_candidate_pending_build_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ledger, output = _inputs(tmp_path, monkeypatch)
+    sample = ledger.samples[0]
+    monkeypatch.setattr(
+        cli, "inspect_fdm_shard",
+        lambda *args, **kwargs: SimpleNamespace(nlevelmax=1, grid_counts_per_level=(1,)),
+    )
+    monkeypatch.setattr(
+        cli, "read_verified_fdm_declared_zoom_runtime_outputs",
+        lambda path: SimpleNamespace(outputs=(
+            {
+                "raw_fdm_provenance": {"path": str(sample.raw_provenance_path)},
+                "namelist_copy": {"path": str(tmp_path / "effective.nml")},
+            },
+        )),
+    )
+    monkeypatch.setattr(cli, "read_lagramses_namelist_assignment", lambda *args, **kwargs: "1")
+    fields = FDMShardLevelFields(
+        wave_path=sample.wave_snapshot_files[0].path,
+        amr_path=sample.amr_topology_files[0].path,
+        owner_rank=1, ncpu=1, nlevelmax=1, boxlen_code=1.0, level=1,
+        grid_centres=np.array([[0.5, 0.5, 0.5]]),
+        wave_real=np.ones((1, 8)), wave_imag=np.full((1, 8), 2.0),
+        son_grid_index=np.zeros((1, 8), dtype=np.int32),
+        owned_grid=np.array([True]),
+    )
+    monkeypatch.setattr(cli, "read_fdm_shard_level_fields", lambda *args, **kwargs: fields)
+    monkeypatch.setattr(sys, "argv", [*sys.argv[:-2], "--measure-uniform-fft-base", *sys.argv[-2:]])
+    assert cli.main() == 0
+    record = json.loads(output.read_text())
+    assert record["uniform_fft_base_status"] == "candidate_pending_use_fftw_build_and_units_verification"
+    assert record["uniform_fft_base"]["quadratic"]["wave_mass_code"] == 5.0
+    assert record["uniform_fft_base"]["quadratic"]["drift_generator_quadratic_code"] == 0.0

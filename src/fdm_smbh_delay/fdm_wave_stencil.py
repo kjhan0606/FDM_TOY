@@ -46,6 +46,22 @@ class FDMShardStencilResult:
 
 
 @dataclass(frozen=True)
+class FDMShardLevelFields:
+    wave_path: Path
+    amr_path: Path
+    owner_rank: int
+    ncpu: int
+    nlevelmax: int
+    boxlen_code: float
+    level: int
+    grid_centres: np.ndarray
+    wave_real: np.ndarray
+    wave_imag: np.ndarray
+    son_grid_index: np.ndarray
+    owned_grid: np.ndarray
+
+
+@dataclass(frozen=True)
 class FDMWaveWriterIdentity:
     status: str
     provenance_path: Path
@@ -75,6 +91,20 @@ class FDMUniformFFTQuadratic:
     drift_generator_quadratic_code: float
     axis_quadratic_code: tuple[float, float, float]
     interpretation: str
+
+
+@dataclass(frozen=True)
+class FDMUniformNativeAssembly:
+    status: str
+    level: int
+    ncpu: int
+    expected_cells: int
+    assigned_cells: int
+    duplicate_cells: int
+    refined_owned_cells: int
+    missing_cells: int
+    quadratic: FDMUniformFFTQuadratic | None
+    reasons: tuple[str, ...]
 
 
 def measure_uniform_fft_drift_quadratic(
@@ -143,6 +173,122 @@ def measure_uniform_fft_drift_quadratic(
             "on an assembled uniform periodic field; not an AMR-composite "
             "Hamiltonian or conservation pass"
         ),
+    )
+
+
+def assemble_uniform_fft_base_from_shards(
+    fields: Sequence[FDMShardLevelFields],
+    *,
+    declared_levelmin: int,
+    hbar_code: float,
+    maximum_cells: int = 1_000_000,
+) -> FDMUniformNativeAssembly:
+    """Assemble owned native grids only; censor any nonuniform FFT base.
+
+    Input fields must come from independently verified same-output native
+    shards.  A complete owner lattice and zero refined parents are required;
+    virtual grids never contribute to the quadratic.
+    """
+
+    if (
+        not fields or isinstance(declared_levelmin, bool)
+        or not isinstance(declared_levelmin, int) or declared_levelmin < 1
+        or isinstance(maximum_cells, bool) or not isinstance(maximum_cells, int)
+        or maximum_cells < 8
+        or not math.isfinite(hbar_code) or hbar_code <= 0.0
+    ):
+        raise ValueError("FDM uniform native assembly controls are invalid")
+    first = fields[0]
+    level = first.level
+    ncpu = first.ncpu
+    if level < 1 or level > 30 or first.nlevelmax < level:
+        raise ValueError("FDM selected FFT base level is invalid")
+    side = 1 << level
+    expected = side**3
+    if level != declared_levelmin or expected > maximum_cells:
+        raise ValueError("FDM selected FFT base level or memory bound is invalid")
+    if ncpu < 1 or len(fields) != ncpu:
+        raise ValueError("FDM uniform native assembly requires every MPI rank")
+    if not math.isfinite(first.boxlen_code) or first.boxlen_code <= 0.0:
+        raise ValueError("FDM uniform native box length is invalid")
+    by_rank = {}
+    for item in fields:
+        if (
+            item.owner_rank in by_rank
+            or item.owner_rank < 1 or item.owner_rank > ncpu
+            or item.ncpu != ncpu or item.nlevelmax != first.nlevelmax
+            or item.level != level or item.boxlen_code != first.boxlen_code
+            or not item.wave_path.name.endswith(f"{item.owner_rank:05d}")
+            or not item.amr_path.name.endswith(f"{item.owner_rank:05d}")
+            or item.grid_centres.ndim != 2 or item.grid_centres.shape[1] != 3
+            or item.wave_real.shape != (len(item.grid_centres), 8)
+            or item.wave_imag.shape != item.wave_real.shape
+            or item.son_grid_index.shape != item.wave_real.shape
+            or item.owned_grid.shape != (len(item.grid_centres),)
+            or item.owned_grid.dtype != np.dtype(bool)
+        ):
+            raise ValueError("FDM uniform native owner shard contract is invalid")
+        by_rank[item.owner_rank] = item
+    if set(by_rank) != set(range(1, ncpu + 1)):
+        raise ValueError("FDM uniform native assembly is missing an MPI rank")
+    real = np.zeros((side, side, side), dtype=np.float64)
+    imaginary = np.zeros_like(real)
+    occupancy = np.zeros((side, side, side), dtype=bool)
+    duplicate = 0
+    refined = 0
+    grid_width = 2.0 / side
+    for rank in range(1, ncpu + 1):
+        item = by_rank[rank]
+        for row in np.flatnonzero(item.owned_grid):
+            centre = np.asarray(item.grid_centres[row], dtype=np.float64)
+            if np.any(~np.isfinite(centre)):
+                raise ValueError("FDM uniform native owner grid centre is non-finite")
+            coordinate = np.rint(centre / grid_width - 0.5).astype(np.int64)
+            if (
+                np.any(coordinate < 0)
+                or np.any(coordinate >= side // 2)
+                or np.any(np.abs(centre - (coordinate + 0.5) * grid_width)
+                          > 1.0e-8 / side)
+                or np.any(~np.isfinite(item.wave_real[row]))
+                or np.any(~np.isfinite(item.wave_imag[row]))
+                or np.any(item.son_grid_index[row] < 0)
+            ):
+                raise ValueError("FDM uniform native owner grid geometry or field is invalid")
+            for child in range(8):
+                index = tuple(int(2 * coordinate[dimension] + ((child >> dimension) & 1))
+                              for dimension in range(3))
+                if occupancy[index]:
+                    duplicate += 1
+                    continue
+                occupancy[index] = True
+                refined += int(item.son_grid_index[row, child] != 0)
+                real[index] = item.wave_real[row, child]
+                imaginary[index] = item.wave_imag[row, child]
+    assigned = int(np.count_nonzero(occupancy))
+    missing = expected - assigned
+    reasons = []
+    if missing:
+        reasons.append("owned base lattice has missing cells")
+    if duplicate:
+        reasons.append("owned base lattice has duplicate cells")
+    if refined:
+        reasons.append("base cells are refined; AMR reflux is not represented")
+    quadratic = None
+    if not reasons:
+        quadratic = measure_uniform_fft_drift_quadratic(
+            level=level, boxlen_code=first.boxlen_code, hbar_code=hbar_code,
+            wave_real=real, wave_imag=imaginary, maximum_cells=maximum_cells,
+        )
+        if quadratic.status.startswith("censored_"):
+            reasons.append("assembled wave is empty")
+            quadratic = None
+    return FDMUniformNativeAssembly(
+        status=("uniform_native_fft_quadratic_pending_ledger_binding" if not reasons
+                else "censored_nonuniform_native_fft_base"),
+        level=level, ncpu=ncpu, expected_cells=expected,
+        assigned_cells=assigned, duplicate_cells=duplicate,
+        refined_owned_cells=refined, missing_cells=missing,
+        quadratic=quadratic, reasons=tuple(reasons),
     )
 
 
@@ -296,7 +442,7 @@ def measure_fdm_same_level_stencil(
     )
 
 
-def measure_fdm_shard_same_level_stencil(
+def read_fdm_shard_level_fields(
     wave_path: str | Path,
     amr_path: str | Path,
     *,
@@ -305,16 +451,15 @@ def measure_fdm_shard_same_level_stencil(
     simple_boundary: bool,
     fdm_use_hjm: bool,
     fdm_first_wave_level: int,
-    hbar_code: float,
     expected_ncpu: int | None = None,
     byte_order: str = "<",
     maximum_grids: int = 100_000,
     maximum_array_bytes: int = 16 * 1024 * 1024,
-) -> FDMShardStencilResult:
-    """Read one bounded native wave/AMR level and reconstruct its owner current.
+) -> FDMShardLevelFields:
+    """Read one bounded native wave/AMR level, including virtual grids.
 
-    Other levels are frame-checked and skipped.  No source-writer current
-    identity, cross-rank conservation, or true kinetic energy is asserted.
+    Other levels are frame-checked and skipped.  Only the declared owner's
+    grids are physical contributors; virtual grids are neighbour support.
     """
 
     if (
@@ -405,7 +550,48 @@ def measure_fdm_shard_same_level_stencil(
                     owner_blocks.append(np.full(ncache, domain == owner_rank, dtype=bool))
         if wave_stream.read(1) or amr_stream.read(1):
             raise ValueError("FDM/AMR shard changed during stencil extraction")
-    if not centres_blocks:
+    return FDMShardLevelFields(
+        wave_path=wave.path, amr_path=amr.path, owner_rank=owner_rank,
+        ncpu=wave.ncpu, nlevelmax=wave.nlevelmax,
+        boxlen_code=amr.boxlen_code, level=level,
+        grid_centres=(np.concatenate(centres_blocks) if centres_blocks
+                      else np.empty((0, 3), dtype=np.float64)),
+        wave_real=(np.concatenate(real_blocks) if real_blocks
+                   else np.empty((0, 8), dtype=np.float64)),
+        wave_imag=(np.concatenate(imaginary_blocks) if imaginary_blocks
+                   else np.empty((0, 8), dtype=np.float64)),
+        son_grid_index=(np.concatenate(son_blocks) if son_blocks
+                        else np.empty((0, 8), dtype=np.int32)),
+        owned_grid=(np.concatenate(owner_blocks) if owner_blocks
+                    else np.empty((0,), dtype=bool)),
+    )
+
+
+def measure_fdm_shard_same_level_stencil(
+    wave_path: str | Path,
+    amr_path: str | Path,
+    *,
+    owner_rank: int,
+    level: int,
+    simple_boundary: bool,
+    fdm_use_hjm: bool,
+    fdm_first_wave_level: int,
+    hbar_code: float,
+    expected_ncpu: int | None = None,
+    byte_order: str = "<",
+    maximum_grids: int = 100_000,
+    maximum_array_bytes: int = 16 * 1024 * 1024,
+) -> FDMShardStencilResult:
+    """Read one native level and reconstruct its bounded owner current."""
+
+    fields = read_fdm_shard_level_fields(
+        wave_path, amr_path, owner_rank=owner_rank, level=level,
+        simple_boundary=simple_boundary, fdm_use_hjm=fdm_use_hjm,
+        fdm_first_wave_level=fdm_first_wave_level,
+        expected_ncpu=expected_ncpu, byte_order=byte_order,
+        maximum_grids=maximum_grids, maximum_array_bytes=maximum_array_bytes,
+    )
+    if len(fields.grid_centres) == 0:
         measurement = FDMSameLevelStencil(
             status="censored_no_same_level_wave_grids", level=level,
             owner_leaf_cells=0, complete_leaf_stencil_cells=0,
@@ -416,18 +602,17 @@ def measure_fdm_shard_same_level_stencil(
         )
     else:
         measurement = measure_fdm_same_level_stencil(
-            level=level, coarse_grid_shape=amr.nx_ny_nz,
-            boxlen_code=amr.boxlen_code, coarse_cells_per_box=1,
-            hbar_code=hbar_code, grid_centres=np.concatenate(centres_blocks),
-            wave_real=np.concatenate(real_blocks),
-            wave_imag=np.concatenate(imaginary_blocks),
-            son_grid_index=np.concatenate(son_blocks),
-            owned_grid=np.concatenate(owner_blocks), maximum_grids=maximum_grids,
+            level=level, coarse_grid_shape=(1, 1, 1),
+            boxlen_code=fields.boxlen_code, coarse_cells_per_box=1,
+            hbar_code=hbar_code, grid_centres=fields.grid_centres,
+            wave_real=fields.wave_real, wave_imag=fields.wave_imag,
+            son_grid_index=fields.son_grid_index,
+            owned_grid=fields.owned_grid, maximum_grids=maximum_grids,
         )
     return FDMShardStencilResult(
-        wave_path=wave.path, amr_path=amr.path, owner_rank=owner_rank,
-        ncpu=wave.ncpu, nlevelmax=wave.nlevelmax,
-        boxlen_code=amr.boxlen_code, measurement=measurement,
+        wave_path=fields.wave_path, amr_path=fields.amr_path,
+        owner_rank=owner_rank, ncpu=fields.ncpu, nlevelmax=fields.nlevelmax,
+        boxlen_code=fields.boxlen_code, measurement=measurement,
     )
 
 

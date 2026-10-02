@@ -795,10 +795,13 @@ in the eigenvalue and uses the writer's code-volume factor separately;
 these conventions still need an independent physical-unit audit.
 `fdm_wave_stencil.measure_uniform_fft_drift_quadratic`
 implements that discrete quadratic for an already assembled, complete
-uniform field, with a small-grid Fourier-eigenvalue regression.  It is not
-yet bound to native all-rank fields; once AMR refinement is present, base
-reflux and fine-level operators prevent treating this uniform result as the
-composite wave Hamiltonian.  The central-difference gradient-square reported
+uniform field, with a small-grid Fourier-eigenvalue regression.  The native
+assembly now reads all owner ranks at the declared base level and rejects
+missing, duplicated, or refined cells before evaluating the quadratic.
+Once AMR refinement is present, base reflux and fine-level operators prevent
+treating this uniform result as the composite wave Hamiltonian.  The build's
+`USE_FFTW` branch and the physical-unit normalization have not yet been
+verified against an executed case.  The central-difference gradient-square reported
 by the shard reader is a distinct proxy and must not replace the drift
 generator quadratic.
 
@@ -824,6 +827,14 @@ python scripts/check_lagramses_fdm_wave_current.py \
   --maximum-grids-per-level 100000 --maximum-array-mib 16 \
   --output results/dual_soliton_wave_current_sample_0.json
 ```
+
+Add `--measure-uniform-fft-base --maximum-uniform-cells 1000000
+--maximum-total-base-grids 200000` only when the verified effective namelist
+declares the desired base level.  The optional result is a **candidate**:
+the copied compilation metadata does not itself prove `USE_FFTW`, and the
+source's FFT spacing and writer volume use different box-length factors.
+The result cannot be promoted to a physical Hamiltonian without both build
+and unit-contract validation.
 
 The reader checks every rank and level, then compares leaf counts, complete
 stencil counts, mass, and all three current components with the raw writer.
