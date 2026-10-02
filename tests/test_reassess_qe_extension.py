@@ -107,6 +107,7 @@ def test_numerical_candidate_is_not_promoted_without_box_control(
     assert saved["candidate_case_count"] == 1
     assert saved["production_calibration_row_admitted"] is False
     assert saved["cases"][0]["status"] == "candidate_needs_doubled_box_control"
+    assert list(tmp_path.glob(".assessment.partial-*")) == []
     with pytest.raises(FileExistsError):
         reassessment.reassess(
             manifest, torch_root, output, profile_id="boey2025"
@@ -145,6 +146,7 @@ def test_failed_comparison_does_not_publish_partial_assessment(
             manifest, torch_root, output, profile_id="boey2025"
         )
     assert not output.exists()
+    assert list(tmp_path.glob(".assessment.partial-*")) == []
 
 
 def test_no_shared_resolved_interval_is_censored(
@@ -216,3 +218,25 @@ def test_no_common_resolved_separation_is_censored(
     assert record["cases"][0]["matched_bins"] == 0
     assert record["candidate_case_count"] == 0
     assert (output / "assessment.json").is_file()
+
+
+def test_racing_output_is_preserved_and_owned_staging_is_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest = tmp_path / "manifest.csv"
+    _manifest(manifest)
+    output = tmp_path / "assessment"
+    monkeypatch.setattr(reassessment, "_require_complete", lambda *args, **kwargs: {})
+
+    def concurrent_publication(**kwargs):
+        kwargs["output_dir"].mkdir()
+        (kwargs["output_dir"] / "other-owner.txt").write_text("preserve me")
+        raise FileExistsError("q-e assessment appeared during computation")
+
+    monkeypatch.setattr(reassessment, "_finish_reassessment", concurrent_publication)
+    with pytest.raises(FileExistsError, match="appeared"):
+        reassessment.reassess(
+            manifest, tmp_path / "torch", output, profile_id="boey2025"
+        )
+    assert (output / "other-owner.txt").read_text() == "preserve me"
+    assert list(tmp_path.glob(".assessment.partial-*")) == []

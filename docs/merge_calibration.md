@@ -185,6 +185,13 @@ python scripts/reassess_qe_extension.py \
   --profile-id boey2025
 ```
 
+The reassessment first writes into a unique sibling staging directory and
+publishes the complete assessment by rename. A caught failure removes only
+that owned staging directory, while an already published or concurrently
+created output directory is preserved. This makes a failed assessment safe to
+retry under a new output name; it does not make interrupted wave integrations
+restartable by itself.
+
 The completed 2026-10-03 assessment at
 `/gpfs/kjhan/FDM_TOY_RESULTS/qe_extension/reassessment_20261003_finest_v1/assessment.json`
 used source revision `a8a875d` and has SHA-256

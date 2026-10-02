@@ -132,9 +132,36 @@ def reassess(
     if output_dir.exists():
         raise FileExistsError(f"q-e assessment already exists: {output_dir}")
     output_dir.parent.mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(
+    with tempfile.TemporaryDirectory(
         prefix=f".{output_dir.name}.partial-", dir=output_dir.parent
-    ))
+    ) as staging_name:
+        return _finish_reassessment(
+            manifest=manifest,
+            manifest_sha256=manifest_sha256,
+            pairs=pairs,
+            input_hashes=input_hashes,
+            torch_root=torch_root,
+            output_dir=output_dir,
+            staging=Path(staging_name),
+            profile_id=profile_id,
+            source_revision=source_revision,
+        )
+
+
+def _finish_reassessment(
+    *,
+    manifest: Path,
+    manifest_sha256: str,
+    pairs: list[tuple[str, tuple[int, str], tuple[int, str]]],
+    input_hashes: dict[str, dict[str, str]],
+    torch_root: Path,
+    output_dir: Path,
+    staging: Path,
+    profile_id: str,
+    source_revision: str | None,
+) -> dict:
+    """Build inside an owned temporary directory and publish atomically."""
+
     cases = []
     for case_id, fine, coarse in pairs:
         fine_run = torch_root / fine[1]
