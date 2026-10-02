@@ -60,6 +60,7 @@ class CaptureEvent:
     source_path: Path
     first_line: int
     last_line: int
+    multiple_members_preserved: bool | None = None
 
     @property
     def binary_orbital_state(self) -> PairOrbitalState | None:
@@ -165,6 +166,12 @@ def _build_event(
         raise CaptureLedgerError(
             f"{uid}: classification must be {expected_classification}"
         )
+    multiple_preserved = begin.get("multiple_members_preserved")
+    if "multiple_members_preserved" in begin:
+        if not isinstance(multiple_preserved, bool):
+            raise CaptureLedgerError(f"{uid}: multiple_members_preserved must be boolean")
+        if multiple_preserved and classification != "MULTIPLE":
+            raise CaptureLedgerError(f"{uid}: multiple_members_preserved requires a MULTIPLE event")
 
     length_per_code, velocity_per_code, mass_per_code = _unit_scales(begin)
     member_rows = sorted(block.members, key=lambda row: int(row["member_index"]))
@@ -250,6 +257,7 @@ def _build_event(
         source_path=source_path,
         first_line=block.first_line,
         last_line=last_line,
+        multiple_members_preserved=multiple_preserved,
     )
 
 

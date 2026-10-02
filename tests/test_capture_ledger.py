@@ -131,3 +131,49 @@ def test_incomplete_tail_is_never_promoted(tmp_path) -> None:
     ledger = read_capture_ledger(path, allow_incomplete_tail=True)
     assert ledger.events == ()
     assert ledger.incomplete_event_uids == ("10-1-7-9-2",)
+
+
+def test_preserved_multiple_is_ingested_without_selecting_a_binary(tmp_path) -> None:
+    from fdm_smbh_delay.kpc_to_pc import InspiralPhase, classify_capture_state
+
+    rows = _binary_rows("10-1-7-11-3-3FF0000000000000")
+    begin, first, second, pair, end = rows
+    begin.update(classification="MULTIPLE", nmember=3, expected_pairs=3,
+                 multiple_members_preserved=True)
+    third = copy.deepcopy(second)
+    third.update(member_index=3, sink_id=11, position_code=[0.0, 0.5, 0.0])
+    pairs = []
+    for index, ids in enumerate(((7, 9), (7, 11), (9, 11)), start=1):
+        item = copy.deepcopy(pair)
+        item.update(pair_index=index, sink_id_1=ids[0], sink_id_2=ids[1])
+        pairs.append(item)
+    end.update(nmember=3, npair=3)
+    rows = [begin, first, second, third, *pairs, end]
+    path = tmp_path / "ledger.jsonl"
+    _write_rows(path, rows + rows)
+    ledger = read_capture_ledger(path)
+    event = ledger.events[0]
+    assert ledger.duplicate_events == 1
+    assert event.multiple_members_preserved is True
+    assert [member.sink_id for member in event.members] == [7, 9, 11]
+    assert len(event.pairs) == 3
+    assert event.binary_orbital_state is None
+    assert classify_capture_state(
+        event, common_nucleus_radius_pc=10.0, sigma_pc_myr=100.0
+    ).phase == InspiralPhase.MULTIPLE
+
+
+@pytest.mark.parametrize("flag", [True, "true", 1, None])
+def test_invalid_multiple_preservation_claim_is_rejected(tmp_path, flag) -> None:
+    rows = _binary_rows()
+    rows[0]["multiple_members_preserved"] = flag
+    path = tmp_path / "ledger.jsonl"
+    _write_rows(path, rows)
+    with pytest.raises(CaptureLedgerError, match="multiple_members"):
+        read_capture_ledger(path)
+
+
+def test_legacy_event_has_unknown_multiple_preservation_policy(tmp_path) -> None:
+    path = tmp_path / "ledger.jsonl"
+    _write_rows(path, _binary_rows())
+    assert read_capture_ledger(path).events[0].multiple_members_preserved is None
