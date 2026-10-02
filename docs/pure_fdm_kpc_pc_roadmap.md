@@ -646,10 +646,24 @@ python scripts/inspect_lagramses_fdm_shard.py \
 The paths, MPI-rank count, and boundary setting above are illustrative; the
 operator must use the verified output's actual values.  If boundary counts
 were not written and `nboundary>0`, the pair fails closed instead of guessing
-the FDM/AMR alignment.  This is a format preflight only.  It has
-synthetic-format regression tests but
+the FDM/AMR alignment.  With the verified raw-provenance HJM controls, an
+optional one-block-at-a-time mode selects only owned AMR leaf cells and sums
+their stored density values by level:
+
+```bash
+python scripts/inspect_lagramses_fdm_shard.py \
+  output_00042/fdm_00042.out00001 \
+  --amr output_00042/amr_00042.out00001 \
+  --simple-boundary false --expected-ncpu 1 --owner-rank 1 \
+  --fdm-use-hjm false --first-wave-level 1 --maximum-array-mib 64
+```
+
+This raw sum omits cell volume and is **not** a wave-mass or conservation
+measurement; the HJM/wave controls and owner rank must come from verified
+output provenance.  The format reader has synthetic regression tests but
 no measured galaxy-zoom snapshot yet; it neither reconstructs AMR leaf cells
-nor computes core mass, wave Hamiltonian, or angular momentum.  Bind the
+across a complete output set nor computes core mass, wave Hamiltonian, or
+angular momentum.  Bind the
 eventual measured diagnostic series to both the exact sample
 ledger and immutable extractor bytes before assessment:
 

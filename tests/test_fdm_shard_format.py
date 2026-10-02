@@ -9,6 +9,7 @@ from fdm_smbh_delay.fdm_shard_format import (
     inspect_fdm_amr_shard_pair,
     inspect_fdm_shard,
     read_amr_shard_header,
+    summarize_owned_leaf_amplitudes,
 )
 
 
@@ -33,9 +34,11 @@ def _shard(*, byte_order: str = "<", nboundary: int = 1) -> bytes:
             data += _integer(level, byte_order=byte_order)
             data += _integer(ncache, byte_order=byte_order)
             if ncache:
-                values = struct.pack(byte_order + "d" * ncache, *range(ncache))
-                for _ in range(16):
-                    data += _record(values, byte_order=byte_order)
+                real = struct.pack(byte_order + "d" * ncache, *([1.0] * ncache))
+                imag = struct.pack(byte_order + "d" * ncache, *([2.0] * ncache))
+                for _ in range(8):
+                    data += _record(real, byte_order=byte_order)
+                    data += _record(imag, byte_order=byte_order)
     return data
 
 
@@ -76,20 +79,33 @@ def _amr_header(
     return data
 
 
-def _amr_fine_payload(*, boundary_level1: int = 2, nboundary: int = 1) -> bytes:
+def _amr_fine_payload(
+    *, boundary_level1: int = 2, nboundary: int = 1, refine_first_owned: bool = False
+) -> bytes:
     data = b""
-    for counts in (
-        (1, 0, boundary_level1) if nboundary else (1, 0),
-        (0, 1, 0) if nboundary else (0, 1),
+    for level, counts in enumerate(
+        (
+            (1, 0, boundary_level1) if nboundary else (1, 0),
+            (0, 1, 0) if nboundary else (0, 1),
+        ),
+        start=1,
     ):
-        for ncache in counts:
+        for domain, ncache in enumerate(counts, start=1):
             if not ncache:
                 continue
             integers = _record(struct.pack("<" + "i" * ncache, *([0] * ncache)))
             reals = _record(struct.pack("<" + "d" * ncache, *([0.0] * ncache)))
             data += integers * 3
             data += reals * 3
-            data += integers * 31
+            data += integers * 7  # father and six neighbours
+            for child in range(8):
+                son = (
+                    _record(struct.pack("<" + "i" * ncache, *([1] * ncache)))
+                    if refine_first_owned and level == 1 and domain == 1 and child == 0
+                    else integers
+                )
+                data += son
+            data += integers * 16  # cpu and refinement maps
     return data
 
 
@@ -214,3 +230,54 @@ def test_zero_boundary_pair_works_without_boundary_header_records(
     pair = inspect_fdm_amr_shard_pair(wave, amr, simple_boundary=False)
     assert pair.wave.grid_counts_per_level == (1, 1)
     assert pair.amr_fine_array_records == 2 * 37
+
+
+def test_owned_leaf_density_excludes_boundary_and_refined_cells(
+    tmp_path: Path,
+) -> None:
+    wave = tmp_path / "fdm_00001.out00001"
+    amr = tmp_path / "amr_00001.out00001"
+    wave.write_bytes(_shard())
+    amr.write_bytes(
+        _amr_header(simple_boundary=True)
+        + _amr_fine_payload(refine_first_owned=True)
+    )
+    summary = summarize_owned_leaf_amplitudes(
+        wave,
+        amr,
+        owner_rank=1,
+        simple_boundary=True,
+        fdm_use_hjm=False,
+        fdm_first_wave_level=1,
+        expected_ncpu=2,
+        maximum_array_bytes=8,
+    )
+    assert summary.leaf_cells_by_level == (7, 0)
+    assert summary.density_sum_by_level == pytest.approx((35.0, 0.0))
+    hjm = summarize_owned_leaf_amplitudes(
+        wave,
+        amr,
+        owner_rank=1,
+        simple_boundary=True,
+        fdm_use_hjm=True,
+        fdm_first_wave_level=2,
+        expected_ncpu=2,
+        maximum_array_bytes=8,
+    )
+    assert hjm.density_sum_by_level == pytest.approx((7.0, 0.0))
+
+
+def test_owned_leaf_extraction_rejects_wrong_rank_identity(tmp_path: Path) -> None:
+    wave = tmp_path / "fdm_00001.out00001"
+    amr = tmp_path / "amr_00001.out00001"
+    wave.write_bytes(_shard())
+    amr.write_bytes(_amr_header(simple_boundary=True) + _amr_fine_payload())
+    with pytest.raises(ValueError, match="rank identity"):
+        summarize_owned_leaf_amplitudes(
+            wave,
+            amr,
+            owner_rank=2,
+            simple_boundary=True,
+            fdm_use_hjm=False,
+            fdm_first_wave_level=1,
+        )

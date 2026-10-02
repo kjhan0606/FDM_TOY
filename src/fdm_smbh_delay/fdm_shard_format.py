@@ -13,6 +13,8 @@ from pathlib import Path
 import struct
 from typing import BinaryIO
 
+import numpy as np
+
 
 @dataclass(frozen=True)
 class FDMShardStructure:
@@ -47,6 +49,15 @@ class FDMAMRShardPair:
     wave: FDMShardStructure
     amr: AMRShardHeader
     amr_fine_array_records: int
+
+
+@dataclass(frozen=True)
+class OwnedLeafAmplitudeSummary:
+    wave_path: Path
+    amr_path: Path
+    owner_rank: int
+    leaf_cells_by_level: tuple[int, ...]
+    density_sum_by_level: tuple[float, ...]
 
 
 class _RecordReader:
@@ -354,4 +365,123 @@ def inspect_fdm_amr_shard_pair(
             raise ValueError("AMR shard has unexpected trailing bytes")
     return FDMAMRShardPair(
         wave=wave, amr=amr, amr_fine_array_records=records
+    )
+
+
+def summarize_owned_leaf_amplitudes(
+    wave_path: str | Path,
+    amr_path: str | Path,
+    *,
+    owner_rank: int,
+    simple_boundary: bool,
+    fdm_use_hjm: bool,
+    fdm_first_wave_level: int,
+    expected_ncpu: int | None = None,
+    byte_order: str = "<",
+    maximum_array_bytes: int = 64 * 1024 * 1024,
+) -> OwnedLeafAmplitudeSummary:
+    """Sum raw density values on owned AMR leaf cells, one block at a time.
+
+    This sum has **no cell-volume factor** and is not a wave mass or a
+    relaxation measurement.  The run's raw FDM provenance must supply the
+    HJM/wave controls; no mode is inferred from the array contents.
+    """
+
+    if (
+        not isinstance(owner_rank, int)
+        or not isinstance(fdm_use_hjm, bool)
+        or not isinstance(fdm_first_wave_level, int)
+        or fdm_first_wave_level < 1
+        or maximum_array_bytes < 8
+    ):
+        raise ValueError("owned FDM leaf extraction parameters are invalid")
+    pair = inspect_fdm_amr_shard_pair(
+        wave_path,
+        amr_path,
+        simple_boundary=simple_boundary,
+        expected_ncpu=expected_ncpu,
+        byte_order=byte_order,
+    )
+    wave = pair.wave
+    amr = pair.amr
+    if (
+        owner_rank < 1
+        or owner_rank > wave.ncpu
+        or not wave.path.name.endswith(f"{owner_rank:05d}")
+        or not amr.path.name.endswith(f"{owner_rank:05d}")
+    ):
+        raise ValueError("owned FDM/AMR shard rank identity is invalid")
+    leaf_counts: list[int] = []
+    density_sums: list[float] = []
+    integer_dtype = np.dtype(byte_order + "i4")
+    real_dtype = np.dtype(byte_order + "f8")
+    with wave.path.open("rb") as wave_stream, amr.path.open("rb") as amr_stream:
+        wave_reader = _RecordReader(wave_stream, byte_order=byte_order)
+        amr_reader = _RecordReader(amr_stream, byte_order=byte_order)
+        for _ in range(4):
+            wave_reader.scalar()
+        amr_stream.seek(amr.fine_payload_offset)
+        for level in range(1, wave.nlevelmax + 1):
+            level_count = 0
+            level_density = 0.0
+            for domain, ncache in enumerate(
+                wave.grid_counts_by_level_and_domain[level - 1], start=1
+            ):
+                if wave_reader.scalar() != level or wave_reader.scalar() != ncache:
+                    raise ValueError("FDM block identity changed during leaf extraction")
+                if not ncache:
+                    continue
+                owned = domain == owner_rank
+                if owned and 8 * ncache > maximum_array_bytes:
+                    raise ValueError("FDM/AMR block exceeds the declared array memory bound")
+                for _ in range(3):
+                    amr_reader.record(4 * ncache)
+                for _ in range(amr.ndim):
+                    amr_reader.record(8 * ncache)
+                for _ in range(1 + 2 * amr.ndim):
+                    amr_reader.record(4 * ncache)
+                leaf_masks: list[np.ndarray] = []
+                for _ in range(1 << amr.ndim):
+                    payload = amr_reader.record(
+                        4 * ncache, read_payload=owned
+                    )
+                    if owned:
+                        sons = np.frombuffer(payload, dtype=integer_dtype)
+                        if np.any(sons < 0):
+                            raise ValueError("AMR son index must be non-negative")
+                        leaf_masks.append(sons == 0)
+                for _ in range(2 * (1 << amr.ndim)):
+                    amr_reader.record(4 * ncache)
+                for child in range(1 << wave.ndim):
+                    real_payload = wave_reader.record(
+                        8 * ncache, read_payload=owned
+                    )
+                    imag_payload = wave_reader.record(
+                        8 * ncache, read_payload=owned
+                    )
+                    if not owned:
+                        continue
+                    real = np.frombuffer(real_payload, dtype=real_dtype)
+                    imaginary = np.frombuffer(imag_payload, dtype=real_dtype)
+                    if np.any(~np.isfinite(real)) or np.any(~np.isfinite(imaginary)):
+                        raise ValueError("FDM owned leaf amplitudes must be finite")
+                    mask = leaf_masks[child]
+                    level_count += int(np.count_nonzero(mask))
+                    if fdm_use_hjm and level < fdm_first_wave_level:
+                        density = np.maximum(real[mask], 0.0)
+                    else:
+                        density = real[mask] ** 2 + imaginary[mask] ** 2
+                    level_density += float(np.sum(density, dtype=np.float64))
+            if not math.isfinite(level_density):
+                raise ValueError("FDM owned leaf density sum is non-finite")
+            leaf_counts.append(level_count)
+            density_sums.append(level_density)
+        if wave_stream.read(1) or amr_stream.read(1):
+            raise ValueError("FDM/AMR shard changed during leaf extraction")
+    return OwnedLeafAmplitudeSummary(
+        wave_path=wave.path,
+        amr_path=amr.path,
+        owner_rank=owner_rank,
+        leaf_cells_by_level=tuple(leaf_counts),
+        density_sum_by_level=tuple(density_sums),
     )
