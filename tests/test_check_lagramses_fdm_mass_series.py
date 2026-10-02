@@ -7,7 +7,7 @@ import sys
 
 import pytest
 
-from fdm_smbh_delay.fdm_leaf_mass import FDMLeafMassIdentity
+from fdm_smbh_delay.fdm_leaf_mass import FDMLeafMassIdentity, FDMRadialMassProfile
 from scripts import check_lagramses_fdm_mass_series as cli
 
 
@@ -52,6 +52,8 @@ def _mock_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, changed_aft
             mpi_ncpu=1,
             fdm_use_hjm=False,
             fdm_first_wave_level=1,
+            fdm_dual_soliton_ic=True,
+            fdm_dual_soliton_centres_box=((0.25, 0.25, 0.25), (0.75, 0.75, 0.75)),
         ),
     )
     monkeypatch.setattr(cli, "summarize_owned_leaf_amplitudes", lambda *args, **kwargs: object())
@@ -108,3 +110,35 @@ def test_changed_ledger_prevents_mass_series_publication(
     with pytest.raises(ValueError, match="changed during"):
         cli.main()
     assert not target.exists()
+
+
+def test_optional_two_centre_profile_is_explicit_and_remains_conditional(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = _mock_inputs(tmp_path, monkeypatch, changed_after=False)
+    seen = []
+
+    def radial(_summaries, identity):
+        seen.append(identity.provenance_path)
+        return FDMRadialMassProfile(
+            status="radial_wave_mass_measured_pending_core_decomposition",
+            provenance_path=identity.provenance_path,
+            centres_box=((0.25, 0.25, 0.25), (0.75, 0.75, 0.75)),
+            edges_box=(0.0, 0.1, 0.5),
+            shell_mass_code_by_centre=((1.0, 4.0), (1.0, 4.0)),
+            enclosed_mass_code_by_centre=((1.0, 5.0), (1.0, 5.0)),
+            total_wave_mass_code=5.0,
+        )
+
+    monkeypatch.setattr(cli, "reconstruct_fdm_radial_mass_profile", radial)
+    argv = list(sys.argv)
+    argv[1:1] = [
+        "--coarse-origin", "0", "0", "0",
+        "--radial-edges-box", "0", "0.1", "0.5",
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+    assert cli.main() == 0
+    record = json.loads(target.read_text())
+    assert len(seen) == 3
+    assert len(record["two_centre_total_wave_radial_profiles"]) == 3
+    assert record["status"] == "mass_series_within_limit_pending_other_conservation"

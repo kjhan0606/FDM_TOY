@@ -63,6 +63,9 @@ class OwnedLeafAmplitudeSummary:
     fdm_first_wave_level: int
     leaf_cells_by_level: tuple[int, ...]
     density_sum_by_level: tuple[float, ...]
+    radial_centres_box: tuple[tuple[float, ...], ...] | None = None
+    radial_edges_box: tuple[float, ...] | None = None
+    radial_density_sum_by_centre_level_bin: tuple[tuple[tuple[float, ...], ...], ...] | None = None
 
 
 class _RecordReader:
@@ -384,6 +387,10 @@ def summarize_owned_leaf_amplitudes(
     expected_ncpu: int | None = None,
     byte_order: str = "<",
     maximum_array_bytes: int = 64 * 1024 * 1024,
+    radial_centres_box: tuple[tuple[float, ...], ...] | None = None,
+    radial_edges_box: tuple[float, ...] | None = None,
+    coarse_origin: tuple[int, ...] | None = None,
+    coarse_cells_per_box: int | None = None,
 ) -> OwnedLeafAmplitudeSummary:
     """Sum raw density values on owned AMR leaf cells, one block at a time.
 
@@ -400,6 +407,19 @@ def summarize_owned_leaf_amplitudes(
         or maximum_array_bytes < 8
     ):
         raise ValueError("owned FDM leaf extraction parameters are invalid")
+    radial = radial_centres_box is not None
+    if radial:
+        if (
+            radial_edges_box is None
+            or coarse_origin is None
+            or isinstance(coarse_cells_per_box, bool)
+            or not isinstance(coarse_cells_per_box, int)
+            or coarse_cells_per_box < 1
+            or len(radial_centres_box) != 2
+        ):
+            raise ValueError("FDM radial geometry must declare two centres, edges, and coarse origin")
+    elif any(value is not None for value in (radial_edges_box, coarse_origin, coarse_cells_per_box)):
+        raise ValueError("FDM radial geometry is incomplete")
     pair = inspect_fdm_amr_shard_pair(
         wave_path,
         amr_path,
@@ -409,6 +429,21 @@ def summarize_owned_leaf_amplitudes(
     )
     wave = pair.wave
     amr = pair.amr
+    if radial:
+        assert radial_centres_box is not None
+        assert radial_edges_box is not None
+        assert coarse_origin is not None
+        assert coarse_cells_per_box is not None
+        if (
+            len(coarse_origin) != wave.ndim
+            or any(isinstance(value, bool) or not isinstance(value, int) for value in coarse_origin)
+            or any(len(centre) != wave.ndim or any(not math.isfinite(x) or not 0.0 <= x < 1.0 for x in centre) for centre in radial_centres_box)
+            or len(radial_edges_box) < 2
+            or radial_edges_box[0] != 0.0
+            or any(not math.isfinite(x) or x < 0.0 for x in radial_edges_box)
+            or any(right <= left for left, right in zip(radial_edges_box, radial_edges_box[1:]))
+        ):
+            raise ValueError("FDM radial geometry is invalid")
     if (
         owner_rank < 1
         or owner_rank > wave.ncpu
@@ -418,6 +453,10 @@ def summarize_owned_leaf_amplitudes(
         raise ValueError("owned FDM/AMR shard rank identity is invalid")
     leaf_counts: list[int] = []
     density_sums: list[float] = []
+    radial_sums = (
+        np.zeros((2, wave.nlevelmax, len(radial_edges_box) - 1), dtype=np.float64)
+        if radial and radial_edges_box is not None else None
+    )
     integer_dtype = np.dtype(byte_order + "i4")
     real_dtype = np.dtype(byte_order + "f8")
     with wave.path.open("rb") as wave_stream, amr.path.open("rb") as amr_stream:
@@ -441,8 +480,14 @@ def summarize_owned_leaf_amplitudes(
                     raise ValueError("FDM/AMR block exceeds the declared array memory bound")
                 for _ in range(3):
                     amr_reader.record(4 * ncache)
+                grid_centres = []
                 for _ in range(amr.ndim):
-                    amr_reader.record(8 * ncache)
+                    payload = amr_reader.record(8 * ncache, read_payload=owned and radial)
+                    if owned and radial:
+                        centre_values = np.frombuffer(payload, dtype=real_dtype)
+                        if np.any(~np.isfinite(centre_values)):
+                            raise ValueError("AMR grid centres must be finite")
+                        grid_centres.append(centre_values)
                 for _ in range(1 + 2 * amr.ndim):
                     amr_reader.record(4 * ncache)
                 leaf_masks: list[np.ndarray] = []
@@ -477,6 +522,30 @@ def summarize_owned_leaf_amplitudes(
                     else:
                         density = real[mask] ** 2 + imaginary[mask] ** 2
                     level_density += float(np.sum(density, dtype=np.float64))
+                    if radial and radial_sums is not None and np.any(mask):
+                        assert coarse_origin is not None
+                        assert coarse_cells_per_box is not None
+                        assert radial_centres_box is not None
+                        assert radial_edges_box is not None
+                        dx = 0.5 ** level
+                        selected = np.flatnonzero(mask)
+                        for start in range(0, len(selected), 65536):
+                            selected_chunk = selected[start : start + 65536]
+                            density_chunk = density[start : start + len(selected_chunk)]
+                            positions = np.stack(
+                                [
+                                    ((grid_centres[dimension][selected_chunk]
+                                      + (((child >> dimension) & 1) - 0.5) * dx
+                                      - coarse_origin[dimension]) / coarse_cells_per_box) % 1.0
+                                    for dimension in range(wave.ndim)
+                                ], axis=1
+                            )
+                            for centre_index, centre in enumerate(radial_centres_box):
+                                delta = np.abs(positions - np.asarray(centre))
+                                distance = np.sqrt(np.sum(np.minimum(delta, 1.0 - delta) ** 2, axis=1))
+                                radial_sums[centre_index, level - 1] += np.histogram(
+                                    distance, bins=radial_edges_box, weights=density_chunk
+                                )[0]
             if not math.isfinite(level_density):
                 raise ValueError("FDM owned leaf density sum is non-finite")
             leaf_counts.append(level_count)
@@ -494,4 +563,12 @@ def summarize_owned_leaf_amplitudes(
         fdm_first_wave_level=fdm_first_wave_level,
         leaf_cells_by_level=tuple(leaf_counts),
         density_sum_by_level=tuple(density_sums),
+        radial_centres_box=radial_centres_box,
+        radial_edges_box=radial_edges_box,
+        radial_density_sum_by_centre_level_bin=(
+            None if radial_sums is None else tuple(
+                tuple(tuple(float(value) for value in bins) for bins in levels)
+                for levels in radial_sums
+            )
+        ),
     )

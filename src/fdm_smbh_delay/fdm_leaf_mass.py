@@ -48,6 +48,111 @@ class FDMLeafMassSeries:
     reasons: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class FDMRadialMassProfile:
+    """Two-centre total-wave mass shells, not a two-component core decomposition."""
+
+    status: str
+    provenance_path: Path
+    centres_box: tuple[tuple[float, ...], ...]
+    edges_box: tuple[float, ...]
+    shell_mass_code_by_centre: tuple[tuple[float, ...], ...]
+    enclosed_mass_code_by_centre: tuple[tuple[float, ...], ...]
+    total_wave_mass_code: float
+
+
+def reconstruct_fdm_radial_mass_profile(
+    summaries: Sequence[OwnedLeafAmplitudeSummary],
+    identity: FDMLeafMassIdentity,
+) -> FDMRadialMassProfile:
+    """Combine all owner leaf shells with the same cell volumes as the writer.
+
+    The two centred profiles each include *all* wave mass in their shells;
+    overlapping shells must never be added as if they were distinct cores.
+    """
+
+    if identity.status != "raw_leaf_mass_reconstruction_matches_writer":
+        raise ValueError("FDM radial profile requires a passing leaf-mass identity")
+    by_rank = {item.owner_rank: item for item in summaries}
+    if len(by_rank) != len(summaries) or set(by_rank) != set(identity.owner_ranks):
+        raise ValueError("FDM radial profile owner set disagrees with mass identity")
+    ordered = tuple(by_rank[rank] for rank in identity.owner_ranks)
+    first = ordered[0]
+    centres = first.radial_centres_box
+    edges = first.radial_edges_box
+    if centres is None or edges is None or len(centres) != 2 or len(edges) < 2:
+        raise ValueError("FDM radial profile geometry is missing")
+    nlevelmax = len(identity.mass_code_by_level)
+    for item in ordered:
+        radial = item.radial_density_sum_by_centre_level_bin
+        if (
+            item.radial_centres_box != centres
+            or item.radial_edges_box != edges
+            or item.ndim != first.ndim
+            or item.boxlen_code != first.boxlen_code
+            or item.wave_path.parent != item.amr_path.parent
+            or not (
+                item.wave_path.parent == identity.provenance_path.parent
+                or (
+                    item.wave_path.parent.parent == identity.provenance_path.parent
+                    and item.wave_path.parent.name.startswith("group_")
+                )
+            )
+            or len(item.density_sum_by_level) != nlevelmax
+            or radial is None
+            or len(radial) != 2
+            or any(len(levels) != nlevelmax for levels in radial)
+            or any(len(bins) != len(edges) - 1 for levels in radial for bins in levels)
+            or any(not math.isfinite(value) or value < 0.0 for levels in radial for bins in levels for value in bins)
+        ):
+            raise ValueError("FDM radial profile summaries disagree")
+    for level in range(1, nlevelmax + 1):
+        dx = 0.5**level * first.boxlen_code / identity.coarse_cells_per_box
+        level_density = math.fsum(item.density_sum_by_level[level - 1] for item in ordered)
+        level_mass = level_density * dx**first.ndim
+        if (
+            not math.isclose(level_mass, identity.mass_code_by_level[level - 1], rel_tol=1.0e-10, abs_tol=1.0e-14)
+            or sum(item.leaf_cells_by_level[level - 1] for item in ordered) != identity.leaf_cells_by_level[level - 1]
+        ):
+            raise ValueError("FDM radial profile does not match its leaf-mass identity")
+        for centre_index in range(2):
+            binned_density = math.fsum(
+                item.radial_density_sum_by_centre_level_bin[centre_index][level - 1][bin_index]  # type: ignore[index]
+                for item in ordered for bin_index in range(len(edges) - 1)
+            )
+            if binned_density > level_density * (1.0 + 1.0e-10):
+                raise ValueError("FDM radial shells exceed their level's wave density")
+    shells = []
+    enclosed = []
+    for centre_index in range(2):
+        centre_shells = []
+        for bin_index in range(len(edges) - 1):
+            level_masses = []
+            for level in range(1, nlevelmax + 1):
+                density_sum = math.fsum(
+                    item.radial_density_sum_by_centre_level_bin[centre_index][level - 1][bin_index]  # type: ignore[index]
+                    for item in ordered
+                )
+                dx = 0.5**level * first.boxlen_code / identity.coarse_cells_per_box
+                level_masses.append(density_sum * dx**first.ndim)
+            centre_shells.append(math.fsum(level_masses))
+        if not all(math.isfinite(value) and value >= 0.0 for value in centre_shells):
+            raise ValueError("FDM radial shell mass is invalid")
+        if math.fsum(centre_shells) > identity.reconstructed_mass_code * (1.0 + 1.0e-10):
+            raise ValueError("FDM radial shells exceed the reconstructed wave mass")
+        shells.append(tuple(centre_shells))
+        enclosed.append(tuple(math.fsum(centre_shells[:index + 1]) for index in range(len(centre_shells))))
+    return FDMRadialMassProfile(
+        status="radial_wave_mass_measured_pending_core_decomposition",
+        provenance_path=identity.provenance_path,
+        centres_box=centres,
+        edges_box=edges,
+        shell_mass_code_by_centre=tuple(shells),
+        enclosed_mass_code_by_centre=tuple(enclosed),
+        total_wave_mass_code=identity.reconstructed_mass_code,
+    )
+
+
 def check_fdm_leaf_mass_identity(
     summaries: Sequence[OwnedLeafAmplitudeSummary],
     provenance: LagRamsesFDMOuterWaveProvenance,

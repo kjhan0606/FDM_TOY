@@ -281,3 +281,45 @@ def test_owned_leaf_extraction_rejects_wrong_rank_identity(tmp_path: Path) -> No
             fdm_use_hjm=False,
             fdm_first_wave_level=1,
         )
+
+
+def test_owned_leaf_radial_density_uses_amr_centres_and_leaf_mask(
+    tmp_path: Path,
+) -> None:
+    wave = tmp_path / "fdm_00001.out00001"
+    amr = tmp_path / "amr_00001.out00001"
+    wave.write_bytes(_shard())
+    amr.write_bytes(
+        _amr_header(simple_boundary=True)
+        + _amr_fine_payload(refine_first_owned=True)
+    )
+    summary = summarize_owned_leaf_amplitudes(
+        wave, amr, owner_rank=1, simple_boundary=True,
+        fdm_use_hjm=False, fdm_first_wave_level=1,
+        radial_centres_box=((0.0, 0.0, 0.0), (0.25, 0.25, 0.25)),
+        radial_edges_box=(0.0, 0.1, 0.6, 0.9),
+        coarse_origin=(0, 0, 0), coarse_cells_per_box=1,
+    )
+    bins = summary.radial_density_sum_by_centre_level_bin
+    assert bins is not None
+    assert bins[0][0] == pytest.approx((0.0, 35.0, 0.0))
+    assert bins[1][0] == pytest.approx((5.0, 15.0, 15.0))
+    assert bins[0][1] == pytest.approx((0.0, 0.0, 0.0))
+
+
+def test_owned_leaf_radial_geometry_requires_explicit_valid_contract(
+    tmp_path: Path,
+) -> None:
+    wave = tmp_path / "fdm_00001.out00001"
+    amr = tmp_path / "amr_00001.out00001"
+    wave.write_bytes(_shard(nboundary=0))
+    amr.write_bytes(_amr_header(simple_boundary=False, nboundary=0) + _amr_fine_payload(nboundary=0))
+    kwargs = dict(owner_rank=1, simple_boundary=False, fdm_use_hjm=False, fdm_first_wave_level=1)
+    with pytest.raises(ValueError, match="must declare"):
+        summarize_owned_leaf_amplitudes(wave, amr, radial_centres_box=((0.0, 0.0, 0.0),) * 2, **kwargs)
+    with pytest.raises(ValueError, match="invalid"):
+        summarize_owned_leaf_amplitudes(
+            wave, amr, radial_centres_box=((0.0, 0.0, 0.0),) * 2,
+            radial_edges_box=(0.0, 0.5, 0.4), coarse_origin=(0, 0, 0),
+            coarse_cells_per_box=1, **kwargs,
+        )

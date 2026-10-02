@@ -694,7 +694,24 @@ and a wave-mass drift no greater than the existing `1e-3` relaxation limit.
 Even a passing status is explicitly `mass_series_within_limit_pending_other_conservation`:
 Hamiltonian, angular momentum, core structure, paired resolution, and physical
 delay remain unassessed.  No measured galaxy-zoom output has yet passed this
-reader.  Bind the eventual complete diagnostic series to both the exact sample
+reader.  The same bounded shard pass can optionally accumulate total-wave
+mass in radial shells around the two **initial** seed centres:
+
+```bash
+python scripts/check_lagramses_fdm_mass_series.py \
+  --sample-ledger results/dual_soliton_relaxation_sample_ledger.json \
+  --coarse-cells-per-box 256 --simple-boundary false \
+  --coarse-origin 0 0 0 --radial-edges-box 0 0.005 0.01 0.02 0.04 \
+  --output results/dual_soliton_relaxation_mass_radial_series.json
+```
+
+The origin and width must come from the effective lagRamses coarse geometry;
+the numbers above are illustrative.  Coordinates use the saved AMR grid
+centres, RAMSES child offsets, and periodic minimum-image radii.  Each
+centred shell includes the **total** FDM field, so overlapping shells are not
+two separately conserved soliton masses.  Seed-centred profiles neither track
+moving peaks nor establish core radii, core separation, or relaxation.  Bind
+the eventual complete diagnostic series to both the exact sample
 ledger and immutable extractor bytes before assessment:
 
 ```bash

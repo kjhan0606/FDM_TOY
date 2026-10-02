@@ -10,6 +10,7 @@ from fdm_smbh_delay.fdm_leaf_mass import (
     FDMLeafMassIdentity,
     assess_fdm_leaf_mass_series,
     check_fdm_leaf_mass_identity,
+    reconstruct_fdm_radial_mass_profile,
 )
 from fdm_smbh_delay.fdm_shard_format import OwnedLeafAmplitudeSummary
 
@@ -172,3 +173,47 @@ def test_mass_series_requires_exact_order_and_cannot_relax_limit(tmp_path: Path)
         assess_fdm_leaf_mass_series(
             ledger, identities, maximum_relative_mass_drift=0.01
         )
+
+
+def test_two_centre_radial_mass_requires_verified_all_rank_leaf_identity(tmp_path: Path) -> None:
+    summaries = _summaries(tmp_path)
+    centres = ((0.0, 0.0, 0.0), (0.25, 0.25, 0.25))
+    edges = (0.0, 0.25, 0.5)
+    radial = (
+        replace(
+            summaries[0], radial_centres_box=centres, radial_edges_box=edges,
+            radial_density_sum_by_centre_level_bin=(
+                ((10.0, 30.0), (0.0, 0.0)),
+                ((20.0, 20.0), (0.0, 0.0)),
+            ),
+        ),
+        replace(
+            summaries[1], radial_centres_box=centres, radial_edges_box=edges,
+            radial_density_sum_by_centre_level_bin=(
+                ((0.0, 0.0), (10.0, 30.0)),
+                ((0.0, 0.0), (20.0, 20.0)),
+            ),
+        ),
+    )
+    identity = check_fdm_leaf_mass_identity(radial, _provenance(tmp_path), coarse_cells_per_box=1)
+    profile = reconstruct_fdm_radial_mass_profile(radial[::-1], identity)
+    assert profile.status == "radial_wave_mass_measured_pending_core_decomposition"
+    assert profile.shell_mass_code_by_centre[0] == pytest.approx((1.40625, 4.21875))
+    assert profile.enclosed_mass_code_by_centre[0] == pytest.approx((1.40625, 5.625))
+    with pytest.raises(ValueError, match="passing leaf-mass"):
+        reconstruct_fdm_radial_mass_profile(
+            radial, replace(identity, status="censored_raw_leaf_mass_or_count_mismatch")
+        )
+    with pytest.raises(ValueError, match="summaries disagree"):
+        reconstruct_fdm_radial_mass_profile(
+            (radial[0], replace(radial[1], radial_edges_box=(0.0, 0.4, 0.5))), identity
+        )
+    with pytest.raises(ValueError, match="exceed their level"):
+        inflated = replace(
+            radial[0],
+            radial_density_sum_by_centre_level_bin=(
+                ((41.0, 0.0), (0.0, 0.0)),
+                radial[0].radial_density_sum_by_centre_level_bin[1],
+            ),
+        )
+        reconstruct_fdm_radial_mass_profile((inflated, radial[1]), identity)
