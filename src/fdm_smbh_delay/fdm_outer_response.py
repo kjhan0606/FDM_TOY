@@ -17,6 +17,7 @@ class FDMOuterResponseTable:
     drift_acceleration_pc_myr2: np.ndarray
     diffusion_tensor_pc2_myr3: np.ndarray
     response_status: str = "uncalibrated"
+    component_frame: str = "unspecified"
 
     def __post_init__(self) -> None:
         radii = np.asarray(self.radii_pc, dtype=float)
@@ -37,6 +38,8 @@ class FDMOuterResponseTable:
             raise ValueError("diffusion tensors must be positive semidefinite")
         if self.response_status not in {"calibrated", "uncalibrated", "censored"}:
             raise ValueError("unsupported outer response status")
+        if self.component_frame not in {"unspecified", "orbital_rtn", "cartesian_lab"}:
+            raise ValueError("unsupported outer response component frame")
         object.__setattr__(self, "radii_pc", radii)
         object.__setattr__(self, "drift_acceleration_pc_myr2", drift)
         object.__setattr__(self, "diffusion_tensor_pc2_myr3", diffusion)
@@ -109,6 +112,7 @@ class FDMOuterResponseTable:
             "drift_acceleration_pc_myr2": self.drift_acceleration_pc_myr2.tolist(),
             "diffusion_tensor_pc2_myr3": self.diffusion_tensor_pc2_myr3.tolist(),
             "response_status": self.response_status,
+            "component_frame": self.component_frame,
         }
 
     @classmethod
@@ -120,4 +124,5 @@ class FDMOuterResponseTable:
             drift_acceleration_pc_myr2=record.get("drift_acceleration_pc_myr2"),
             diffusion_tensor_pc2_myr3=record.get("diffusion_tensor_pc2_myr3"),
             response_status=record.get("response_status", "uncalibrated"),
+            component_frame=record.get("component_frame", "unspecified"),
         )

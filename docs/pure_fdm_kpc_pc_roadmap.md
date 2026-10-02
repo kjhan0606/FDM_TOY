@@ -233,6 +233,15 @@ radii, preserving positive semidefiniteness; the vector drift retains its
 shape-preserving scalar interpolation.  This does not supply a stochastic
 orbit integration or turn an uncalibrated response into a force law.
 
+`project_fdm_outer_response_to_orbit` adds an explicit local orbital
+radial–tangential–normal (RTN) frame and q/e support gate.  It rotates both
+the vector drift and PSD diffusion tensor covariantly, and censors a missing
+frame, nearly radial orbit, uncalibrated table, or q/e/r query outside
+declared support.  The support rectangle is an applicability contract, **not**
+an interpolation across measured q/e cases.  Its output remains a candidate
+until a source-verified q/e response family and restartable stochastic orbit
+evolution are available; the static kpc integrator does not consume it.
+
 `validate_outer_inner_handoff` requires:
 
 - a positive-width overlap, at least a factor of two in separation;
