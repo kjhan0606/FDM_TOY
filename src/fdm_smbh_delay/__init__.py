@@ -169,6 +169,11 @@ from .backreaction import (
     read_verified_backreaction_decision,
 )
 from .fdm_outer_response import FDMOuterResponseTable
+from .kpc_checkpoint import (
+    kpc_physics_sha256,
+    read_kpc_to_hard_checkpoint,
+    write_kpc_to_hard_checkpoint,
+)
 from .fdm_outer_response_family import FDMOuterResponseFamily
 from .fdm_orbital_response import (
     FDMOrbitalResponseSupport,
@@ -267,6 +272,9 @@ __all__ = [
     "PureFDMDualSolitonSeed",
     "RelaxationConservationThresholds",
     "FDMOuterResponseTable",
+    "kpc_physics_sha256",
+    "read_kpc_to_hard_checkpoint",
+    "write_kpc_to_hard_checkpoint",
     "FDMOuterResponseFamily",
     "FDMOrbitalResponseSupport",
     "FDMProjectedOrbitalResponse",
