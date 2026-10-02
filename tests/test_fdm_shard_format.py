@@ -388,6 +388,9 @@ def test_native_shard_stencil_reads_selected_wave_level_only(tmp_path: Path) -> 
     assert result.measurement.leaf_mass_code == pytest.approx(5.0)
     assert result.measurement.integrated_current_code == pytest.approx((0.0, 0.0, 0.0))
     assert result.measurement.central_gradient_square_proxy_code == pytest.approx(0.0)
+    assert measure_fdm_shard_same_level_stencil(
+        wave, amr, **{**kwargs, "fdm_first_wave_level": 2}
+    ).measurement.leaf_mass_code == pytest.approx(5.0)
     with pytest.raises(ValueError, match="controls"):
         measure_fdm_shard_same_level_stencil(
             wave, amr, maximum_grids=0, **kwargs

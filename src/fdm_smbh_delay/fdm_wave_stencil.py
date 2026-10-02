@@ -11,10 +11,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 from pathlib import Path
+from typing import Sequence
 
 import numpy as np
 
 from .fdm_shard_format import _RecordReader, inspect_fdm_amr_shard_pair
+from .lagramses_fdm_provenance import LagRamsesFDMOuterWaveProvenance
 
 
 @dataclass(frozen=True)
@@ -37,7 +39,28 @@ class FDMShardStencilResult:
     amr_path: Path
     owner_rank: int
     ncpu: int
+    nlevelmax: int
+    boxlen_code: float
     measurement: FDMSameLevelStencil
+
+
+@dataclass(frozen=True)
+class FDMWaveWriterIdentity:
+    status: str
+    provenance_path: Path
+    owner_ranks: tuple[int, ...]
+    nlevelmax: int
+    reconstructed_leaf_cells: int
+    writer_leaf_cells: float
+    reconstructed_complete_stencil_cells: int
+    writer_complete_stencil_cells: float
+    reconstructed_mass_code: float
+    writer_mass_code: float
+    reconstructed_current_code: tuple[float, float, float]
+    writer_current_code: tuple[float, float, float]
+    mass_relative_error: float
+    current_component_absolute_error: tuple[float, float, float]
+    reasons: tuple[str, ...]
 
 
 def measure_fdm_same_level_stencil(
@@ -235,7 +258,8 @@ def measure_fdm_shard_same_level_stencil(
         or owner_rank < 1 or owner_rank > wave.ncpu
         or not wave.path.name.endswith(f"{owner_rank:05d}")
         or not amr.path.name.endswith(f"{owner_rank:05d}")
-        or level < fdm_first_wave_level or level > wave.nlevelmax
+        or (fdm_use_hjm and level < fdm_first_wave_level)
+        or level < 1 or level > wave.nlevelmax
     ):
         raise ValueError("FDM shard stencil requires a wave-level unit-box owner shard")
     selected_counts = wave.grid_counts_by_level_and_domain[level - 1]
@@ -318,5 +342,142 @@ def measure_fdm_shard_same_level_stencil(
         )
     return FDMShardStencilResult(
         wave_path=wave.path, amr_path=amr.path, owner_rank=owner_rank,
-        ncpu=wave.ncpu, measurement=measurement,
+        ncpu=wave.ncpu, nlevelmax=wave.nlevelmax,
+        boxlen_code=amr.boxlen_code, measurement=measurement,
+    )
+
+
+def check_fdm_wave_writer_identity(
+    results: Sequence[FDMShardStencilResult],
+    provenance: LagRamsesFDMOuterWaveProvenance,
+    *,
+    maximum_relative_mass_error: float = 1.0e-10,
+    maximum_relative_current_error: float = 1.0e-9,
+    maximum_absolute_current_error: float = 1.0e-12,
+) -> FDMWaveWriterIdentity:
+    """Compare every pure-wave rank/level with the raw writer's global sums.
+
+    Caller must first verify the immutable sample-ledger hashes.  Agreement
+    is a saved-field versus writer-current identity, not wave-Hamiltonian or
+    time-series conservation evidence.
+    """
+
+    thresholds = (
+        maximum_relative_mass_error, maximum_relative_current_error,
+        maximum_absolute_current_error,
+    )
+    if any(not math.isfinite(value) or value < 0.0 for value in thresholds):
+        raise ValueError("FDM writer-identity tolerances must be finite and non-negative")
+    if provenance.fdm_use_hjm:
+        raise ValueError("HJM current requires a separate phase-gradient reconstruction")
+    ncpu = provenance.mpi_ncpu
+    if ncpu is None or ncpu < 1 or not results:
+        raise ValueError("FDM writer identity requires all MPI owner-level results")
+    nlevelmax = results[0].nlevelmax
+    boxlen = results[0].boxlen_code
+    if nlevelmax < 1 or not math.isfinite(boxlen) or boxlen <= 0.0:
+        raise ValueError("FDM writer identity has invalid level or box geometry")
+    if not provenance.psi_snapshot_prefix.startswith("fdm_"):
+        raise ValueError("FDM writer snapshot prefix is invalid")
+    amr_prefix = "amr_" + provenance.psi_snapshot_prefix.removeprefix("fdm_")
+    by_owner_level: dict[tuple[int, int], FDMShardStencilResult] = {}
+    owner_paths: dict[int, tuple[Path, Path]] = {}
+    for result in results:
+        rank = result.owner_rank
+        level = result.measurement.level
+        key = rank, level
+        measure = result.measurement
+        if (
+            key in by_owner_level or rank < 1 or rank > ncpu
+            or level < 1 or level > nlevelmax
+            or result.ncpu != ncpu or result.nlevelmax != nlevelmax
+            or result.boxlen_code != boxlen
+            or result.wave_path.name != f"{provenance.psi_snapshot_prefix}{rank:05d}"
+            or result.amr_path.name != f"{amr_prefix}{rank:05d}"
+            or result.wave_path == result.amr_path
+            or measure.owner_leaf_cells < 0
+            or measure.complete_leaf_stencil_cells < 0
+            or measure.complete_leaf_stencil_cells > measure.owner_leaf_cells
+            or measure.incomplete_leaf_stencil_cells != (
+                measure.owner_leaf_cells - measure.complete_leaf_stencil_cells
+            )
+            or measure.refined_neighbour_stencil_cells < 0
+            or measure.refined_neighbour_stencil_cells > measure.complete_leaf_stencil_cells
+            or not math.isfinite(measure.leaf_mass_code)
+            or measure.leaf_mass_code < 0.0
+            or len(measure.integrated_current_code) != 3
+            or any(not math.isfinite(value) for value in measure.integrated_current_code)
+        ):
+            raise ValueError("FDM owner-level writer identity source or measurement is invalid")
+        paths = result.wave_path, result.amr_path
+        if rank in owner_paths and owner_paths[rank] != paths:
+            raise ValueError("FDM owner shard path changes between levels")
+        owner_paths[rank] = paths
+        by_owner_level[key] = result
+    expected = {(rank, level) for rank in range(1, ncpu + 1)
+                for level in range(1, nlevelmax + 1)}
+    if set(by_owner_level) != expected:
+        raise ValueError("FDM writer identity is missing an MPI owner or AMR level")
+    if len({path for paths in owner_paths.values() for path in paths}) != 2 * ncpu:
+        raise ValueError("FDM owner shard files alias across ranks")
+    ordered = [by_owner_level[key] for key in sorted(expected)]
+    cells = sum(item.measurement.owner_leaf_cells for item in ordered)
+    stencils = sum(item.measurement.complete_leaf_stencil_cells for item in ordered)
+    mass = math.fsum(item.measurement.leaf_mass_code for item in ordered)
+    current = tuple(
+        math.fsum(item.measurement.integrated_current_code[dimension] for item in ordered)
+        for dimension in range(3)
+    )
+    writer_mass = provenance.leaf_mass_code
+    writer_current = provenance.integrated_current_code
+    if (
+        not math.isfinite(mass) or not all(math.isfinite(x) for x in current)
+        or not math.isfinite(writer_mass) or writer_mass < 0.0
+        or len(writer_current) != 3
+        or any(not math.isfinite(x) for x in writer_current)
+        or not math.isfinite(provenance.leaf_cell_count)
+        or not math.isfinite(provenance.complete_current_stencil_cell_count)
+        or provenance.leaf_cell_count < 0.0
+        or provenance.complete_current_stencil_cell_count < 0.0
+    ):
+        raise ValueError("FDM writer identity mass or current is non-finite")
+    mass_relative_error = (
+        abs(mass - writer_mass) / writer_mass if writer_mass > 0.0
+        else (0.0 if mass == 0.0 else math.inf)
+    )
+    current_errors = tuple(abs(a - b) for a, b in zip(current, writer_current, strict=True))
+    reasons = []
+    if cells == 0:
+        reasons.append("snapshot contains no owned wave leaf cells")
+    if cells != provenance.leaf_cell_count:
+        reasons.append("owned leaf-cell count differs from writer")
+    if stencils != provenance.complete_current_stencil_cell_count:
+        reasons.append("complete current-stencil count differs from writer")
+    if mass_relative_error > maximum_relative_mass_error:
+        reasons.append("owned wave mass differs from writer")
+    if any(
+        error > maximum_absolute_current_error
+        + maximum_relative_current_error * max(abs(a), abs(b))
+        for error, a, b in zip(current_errors, current, writer_current, strict=True)
+    ):
+        reasons.append("saved-wave current differs from writer")
+    if any(
+        item.measurement.status != "same_level_current_complete_pending_writer_identity"
+        and item.measurement.owner_leaf_cells > 0
+        for item in ordered
+    ):
+        reasons.append("at least one owner level has an incomplete or refined stencil")
+    return FDMWaveWriterIdentity(
+        status=("saved_wave_writer_current_identity_matches" if not reasons
+                else "censored_saved_wave_writer_current_identity"),
+        provenance_path=provenance.source_path,
+        owner_ranks=tuple(range(1, ncpu + 1)), nlevelmax=nlevelmax,
+        reconstructed_leaf_cells=cells, writer_leaf_cells=provenance.leaf_cell_count,
+        reconstructed_complete_stencil_cells=stencils,
+        writer_complete_stencil_cells=provenance.complete_current_stencil_cell_count,
+        reconstructed_mass_code=mass, writer_mass_code=writer_mass,
+        reconstructed_current_code=current, writer_current_code=writer_current,
+        mass_relative_error=mass_relative_error,
+        current_component_absolute_error=current_errors,
+        reasons=tuple(reasons),
     )

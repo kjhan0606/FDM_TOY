@@ -797,6 +797,25 @@ and AMR interfaces need an independently validated operator.  Synthetic
 shard and periodic-plane-wave tests pass; no real output has yet passed a
 saved-wave versus writer-current identity or all-rank conservation gate.
 
+On Lageunha, compare one immutable-ledger sample at a time without
+overwriting a previous result:
+
+```bash
+python scripts/check_lagramses_fdm_wave_current.py \
+  --sample-ledger results/dual_soliton_relaxation_sample_ledger.json \
+  --sample-index 0 --simple-boundary false \
+  --maximum-grids-per-level 100000 --maximum-array-mib 16 \
+  --output results/dual_soliton_wave_current_sample_0.json
+```
+
+The reader checks every rank and level, then compares leaf counts, complete
+stencil counts, mass, and all three current components with the raw writer.
+It re-verifies the sample-ledger hashes after extraction.  Missing or refined
+neighbours and any identity mismatch remain censored; HJM phase-current
+reconstruction is not yet implemented.  A matching identity still does not
+establish time-series conservation, spectral kinetic energy, or a physical
+binary-decay rate.
+
 Bind the eventual complete diagnostic series to both the exact sample ledger
 and immutable extractor bytes before assessment:
 
