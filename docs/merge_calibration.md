@@ -198,6 +198,20 @@ its first instantaneous two-cell underresolution crossing. The seven other
 zero-bin cases have only 11–12 initially resolved complete orbits per run,
 distributed across eight separation bins; their Hamiltonian conservation
 checks pass, but the matched-bin sample-size requirement does not.
+The reproducible read-only occupancy audit is
+
+```bash
+python scripts/audit_qe_bin_occupancy.py \
+  --assessment /gpfs/kjhan/FDM_TOY_RESULTS/qe_extension/reassessment_20261003_finest_v1/assessment.json
+```
+
+It verifies the original diagnostic hashes before counting orbits. In the
+seven common-support zero-bin cases, the largest count shared by both members
+of any prescribed bin is only 1–3 orbits, versus eight required. Filling all
+eight bins would require at least 64 resolved complete orbits **per run** even
+before any rate, eccentricity, softening, conservation, or box-size gate. This
+is a necessary counting bound, not a prediction that a longer integration
+would keep every orbit spatially resolved or yield converged rates.
 
 As a **design diagnostic only**, recomputing the same completed trajectories
 with one broad separation bin retains a bin in four of the ten cases. This
