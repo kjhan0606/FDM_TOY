@@ -185,6 +185,30 @@ python scripts/reassess_qe_extension.py \
   --profile-id boey2025
 ```
 
+The completed 2026-10-03 assessment at
+`/gpfs/kjhan/FDM_TOY_RESULTS/qe_extension/reassessment_20261003_finest_v1/assessment.json`
+used source revision `a8a875d` and has SHA-256
+`1c2f6b5617dfdd9cabdff2ba8b552607394c30a11375ba2d3aa1a1a14dec0c34`.
+All ten finest-adjacent comparisons are censored under the prescribed eight
+separation bins and eight complete orbits per run per bin: eight retain no
+matched bin, and two equal-mass circular small-separation cases have no common
+resolved-separation support. No candidate or production calibration row was
+admitted. The `q=0.3, e=0.3, a/r_c=0.05` coarse run has no complete orbit before
+its first instantaneous two-cell underresolution crossing. The seven other
+zero-bin cases have only 11–12 initially resolved complete orbits per run,
+distributed across eight separation bins; their Hamiltonian conservation
+checks pass, but the matched-bin sample-size requirement does not.
+
+As a **design diagnostic only**, recomputing the same completed trajectories
+with one broad separation bin retains a bin in four of the ten cases. This
+post-hoc change does not alter the registered eight-bin assessment, does not
+establish resolved dependence on separation, and cannot release table rows.
+The next calibration design must specify its separation-bin widths and orbit
+budget prospectively, demonstrate a shared resolved interval for both members
+of every resolution pair, and include a doubled-box control. Until those gates
+pass, the runtime must report these q-e-small-separation domains as
+uncalibrated/censored.
+
 The guarded q-e queue uses observed device-memory profiles rather than the
 uniform-grid estimate alone. An `n=512` stage requires at least 22 GiB total
 and 21 GiB free: this admits a 23,028 MiB A10 while retaining more than 2 GiB
