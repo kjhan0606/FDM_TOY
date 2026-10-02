@@ -738,6 +738,29 @@ remains a seed-centred profile **candidate**, not proof of two independent
 solitons, wave relaxation, or a calibrated kpc-to-pc delay.  Do not apply this
 fit after the cores overlap.
 
+The sample ledger above binds FDM and AMR shards but does **not** yet bind
+the Poisson potential.  For a later Hamiltonian calculation, bind every
+native `grav_*.out*` rank and the same-output `POISSON_PHI_VALID` marker
+separately, manually on Lageunha:
+
+```bash
+python scripts/bind_lagramses_fdm_gravity_sources.py \
+  --sample-ledger results/dual_soliton_relaxation_sample_ledger.json \
+  --output results/dual_soliton_gravity_source_binding.json
+```
+
+The selected lagRamses VPATH uses `poisson/output_poisson.f90`, whose normal
+writer stores one potential and `ndim` force records for each cell.  Only a
+build explicitly compiled with `OUTPUT_PARTICLE_DENSITY` should add
+`--particle-density-included`; that layout prepends one density record.  The
+binding checks every native Fortran frame, the level/domain counts against
+the paired FDM shards, all MPI ranks, source hashes, and the phi-valid
+marker step, level count, time, and scale factor.  Missing, incomplete, or
+mismatched gravity sources cannot enter a Hamiltonian diagnostic.  A passing
+binding is **source identity only**: no kinetic term, potential-energy
+convention, sink interaction energy, Hamiltonian drift, or angular momentum
+has yet been measured.
+
 Bind the eventual complete diagnostic series to both the exact sample ledger
 and immutable extractor bytes before assessment:
 
