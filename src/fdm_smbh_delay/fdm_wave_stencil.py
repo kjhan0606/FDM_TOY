@@ -10,8 +10,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+from pathlib import Path
 
 import numpy as np
+
+from .fdm_shard_format import _RecordReader, inspect_fdm_amr_shard_pair
 
 
 @dataclass(frozen=True)
@@ -26,6 +29,15 @@ class FDMSameLevelStencil:
     integrated_current_code: tuple[float, float, float]
     central_gradient_square_proxy_code: float
     interpretation: str
+
+
+@dataclass(frozen=True)
+class FDMShardStencilResult:
+    wave_path: Path
+    amr_path: Path
+    owner_rank: int
+    ncpu: int
+    measurement: FDMSameLevelStencil
 
 
 def measure_fdm_same_level_stencil(
@@ -174,4 +186,137 @@ def measure_fdm_same_level_stencil(
             "central-difference wave current on available same-level stencils; "
             "gradient-square term is not the spectral/AMR kinetic Hamiltonian"
         ),
+    )
+
+
+def measure_fdm_shard_same_level_stencil(
+    wave_path: str | Path,
+    amr_path: str | Path,
+    *,
+    owner_rank: int,
+    level: int,
+    simple_boundary: bool,
+    fdm_use_hjm: bool,
+    fdm_first_wave_level: int,
+    hbar_code: float,
+    expected_ncpu: int | None = None,
+    byte_order: str = "<",
+    maximum_grids: int = 100_000,
+    maximum_array_bytes: int = 16 * 1024 * 1024,
+) -> FDMShardStencilResult:
+    """Read one bounded native wave/AMR level and reconstruct its owner current.
+
+    Other levels are frame-checked and skipped.  No source-writer current
+    identity, cross-rank conservation, or true kinetic energy is asserted.
+    """
+
+    if (
+        isinstance(owner_rank, bool) or not isinstance(owner_rank, int)
+        or isinstance(level, bool) or not isinstance(level, int)
+        or not isinstance(simple_boundary, bool)
+        or not isinstance(fdm_use_hjm, bool)
+        or isinstance(fdm_first_wave_level, bool)
+        or not isinstance(fdm_first_wave_level, int)
+        or fdm_first_wave_level < 1
+        or isinstance(maximum_grids, bool) or not isinstance(maximum_grids, int)
+        or maximum_grids < 1
+        or isinstance(maximum_array_bytes, bool)
+        or not isinstance(maximum_array_bytes, int)
+        or maximum_array_bytes < 8
+    ):
+        raise ValueError("FDM shard stencil controls are invalid")
+    pair = inspect_fdm_amr_shard_pair(
+        wave_path, amr_path, simple_boundary=simple_boundary,
+        expected_ncpu=expected_ncpu, byte_order=byte_order,
+    )
+    wave, amr = pair.wave, pair.amr
+    if (
+        wave.ndim != 3 or amr.nx_ny_nz != (1, 1, 1)
+        or owner_rank < 1 or owner_rank > wave.ncpu
+        or not wave.path.name.endswith(f"{owner_rank:05d}")
+        or not amr.path.name.endswith(f"{owner_rank:05d}")
+        or level < fdm_first_wave_level or level > wave.nlevelmax
+    ):
+        raise ValueError("FDM shard stencil requires a wave-level unit-box owner shard")
+    selected_counts = wave.grid_counts_by_level_and_domain[level - 1]
+    if sum(selected_counts) > maximum_grids:
+        raise ValueError("FDM shard stencil exceeds the declared level-grid memory bound")
+    centres_blocks: list[np.ndarray] = []
+    real_blocks: list[np.ndarray] = []
+    imaginary_blocks: list[np.ndarray] = []
+    son_blocks: list[np.ndarray] = []
+    owner_blocks: list[np.ndarray] = []
+    real_dtype = np.dtype(byte_order + "f8")
+    integer_dtype = np.dtype(byte_order + "i4")
+    with wave.path.open("rb") as wave_stream, amr.path.open("rb") as amr_stream:
+        wave_reader = _RecordReader(wave_stream, byte_order=byte_order)
+        amr_reader = _RecordReader(amr_stream, byte_order=byte_order)
+        for _ in range(4):
+            wave_reader.scalar()
+        amr_stream.seek(amr.fine_payload_offset)
+        for current_level in range(1, wave.nlevelmax + 1):
+            for domain, ncache in enumerate(
+                wave.grid_counts_by_level_and_domain[current_level - 1], start=1
+            ):
+                if wave_reader.scalar() != current_level or wave_reader.scalar() != ncache:
+                    raise ValueError("FDM shard block identity changed during stencil extraction")
+                if not ncache:
+                    continue
+                selected = current_level == level
+                if selected and 8 * ncache > maximum_array_bytes:
+                    raise ValueError("FDM shard stencil array exceeds its memory bound")
+                for _ in range(3):
+                    amr_reader.record(4 * ncache)
+                axes = []
+                for _ in range(3):
+                    payload = amr_reader.record(8 * ncache, read_payload=selected)
+                    if selected:
+                        axes.append(np.frombuffer(payload, dtype=real_dtype))
+                for _ in range(7):  # father and six neighbour cells
+                    amr_reader.record(4 * ncache)
+                sons = []
+                for _ in range(8):
+                    payload = amr_reader.record(4 * ncache, read_payload=selected)
+                    if selected:
+                        sons.append(np.frombuffer(payload, dtype=integer_dtype))
+                for _ in range(16):  # cpu and refinement maps
+                    amr_reader.record(4 * ncache)
+                re_children = []
+                im_children = []
+                for _ in range(8):
+                    real_payload = wave_reader.record(8 * ncache, read_payload=selected)
+                    imag_payload = wave_reader.record(8 * ncache, read_payload=selected)
+                    if selected:
+                        re_children.append(np.frombuffer(real_payload, dtype=real_dtype))
+                        im_children.append(np.frombuffer(imag_payload, dtype=real_dtype))
+                if selected:
+                    centres_blocks.append(np.stack(axes, axis=1))
+                    son_blocks.append(np.stack(sons, axis=1))
+                    real_blocks.append(np.stack(re_children, axis=1))
+                    imaginary_blocks.append(np.stack(im_children, axis=1))
+                    owner_blocks.append(np.full(ncache, domain == owner_rank, dtype=bool))
+        if wave_stream.read(1) or amr_stream.read(1):
+            raise ValueError("FDM/AMR shard changed during stencil extraction")
+    if not centres_blocks:
+        measurement = FDMSameLevelStencil(
+            status="censored_no_same_level_wave_grids", level=level,
+            owner_leaf_cells=0, complete_leaf_stencil_cells=0,
+            incomplete_leaf_stencil_cells=0, refined_neighbour_stencil_cells=0,
+            leaf_mass_code=0.0, integrated_current_code=(0.0, 0.0, 0.0),
+            central_gradient_square_proxy_code=0.0,
+            interpretation="no same-level wave grids; no current or kinetic inference",
+        )
+    else:
+        measurement = measure_fdm_same_level_stencil(
+            level=level, coarse_grid_shape=amr.nx_ny_nz,
+            boxlen_code=amr.boxlen_code, coarse_cells_per_box=1,
+            hbar_code=hbar_code, grid_centres=np.concatenate(centres_blocks),
+            wave_real=np.concatenate(real_blocks),
+            wave_imag=np.concatenate(imaginary_blocks),
+            son_grid_index=np.concatenate(son_blocks),
+            owned_grid=np.concatenate(owner_blocks), maximum_grids=maximum_grids,
+        )
+    return FDMShardStencilResult(
+        wave_path=wave.path, amr_path=amr.path, owner_rank=owner_rank,
+        ncpu=wave.ncpu, measurement=measurement,
     )

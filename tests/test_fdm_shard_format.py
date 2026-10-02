@@ -11,6 +11,7 @@ from fdm_smbh_delay.fdm_shard_format import (
     read_amr_shard_header,
     summarize_owned_leaf_amplitudes,
 )
+from fdm_smbh_delay.fdm_wave_stencil import measure_fdm_shard_same_level_stencil
 
 
 def _record(payload: bytes, *, byte_order: str = "<") -> bytes:
@@ -48,9 +49,10 @@ def _amr_header(
     boundary_level1: int = 2,
     nboundary: int = 1,
     cpu_counts: tuple[int, int, int, int] = (1, 0, 0, 1),
+    coarse_shape: tuple[int, int, int] = (8, 8, 8),
 ) -> bytes:
     data = _integer(2) + _integer(3)
-    data += _record(struct.pack("<3i", 8, 8, 8))
+    data += _record(struct.pack("<3i", *coarse_shape))
     for value in (2, 100, nboundary, 2):
         data += _integer(value)
     data += _record(struct.pack("<d", 1.0))
@@ -364,3 +366,79 @@ def test_disjoint_aperture_moments_follow_periodic_child_centres(
     )
     assert shifted.aperture_first_moment_by_centre_level_dim[0][0] == pytest.approx((0.25, 0.0, 0.0))
     assert shifted.aperture_second_moment_by_centre_level[0][0] == pytest.approx(0.0125)
+
+
+def test_native_shard_stencil_reads_selected_wave_level_only(tmp_path: Path) -> None:
+    wave = tmp_path / "fdm_00001.out00001"
+    amr = tmp_path / "amr_00001.out00001"
+    wave.write_bytes(_shard(nboundary=0))
+    amr.write_bytes(
+        _amr_header(simple_boundary=False, nboundary=0, coarse_shape=(1, 1, 1))
+        + _amr_fine_payload(nboundary=0, grid_centre=(0.5, 0.5, 0.5))
+    )
+    kwargs = dict(
+        owner_rank=1, level=1, simple_boundary=False,
+        fdm_use_hjm=False, fdm_first_wave_level=1, hbar_code=1.0,
+    )
+    result = measure_fdm_shard_same_level_stencil(wave, amr, **kwargs)
+    assert result.owner_rank == 1
+    assert result.ncpu == 2
+    assert result.measurement.status == "same_level_current_complete_pending_writer_identity"
+    assert result.measurement.owner_leaf_cells == 8
+    assert result.measurement.leaf_mass_code == pytest.approx(5.0)
+    assert result.measurement.integrated_current_code == pytest.approx((0.0, 0.0, 0.0))
+    assert result.measurement.central_gradient_square_proxy_code == pytest.approx(0.0)
+    with pytest.raises(ValueError, match="controls"):
+        measure_fdm_shard_same_level_stencil(
+            wave, amr, maximum_grids=0, **kwargs
+        )
+    with pytest.raises(ValueError, match="controls"):
+        measure_fdm_shard_same_level_stencil(
+            wave, amr, maximum_grids=1, maximum_array_bytes=7, **kwargs
+        )
+    with pytest.raises(ValueError, match="wave-level unit-box"):
+        measure_fdm_shard_same_level_stencil(
+            wave, amr, **{**kwargs, "fdm_use_hjm": True, "fdm_first_wave_level": 2}
+        )
+    wave.write_bytes(_shard(nboundary=1))
+    amr.write_bytes(
+        _amr_header(simple_boundary=True, coarse_shape=(1, 1, 1))
+        + _amr_fine_payload(grid_centre=(0.5, 0.5, 0.5))
+    )
+    with pytest.raises(ValueError, match="memory bound"):
+        measure_fdm_shard_same_level_stencil(
+            wave, amr, **{**kwargs, "simple_boundary": True}, maximum_grids=2
+        )
+
+
+def test_native_shard_stencil_rejects_wrong_geometry_and_missing_grid(
+    tmp_path: Path,
+) -> None:
+    wave = tmp_path / "fdm_00001.out00002"
+    amr = tmp_path / "amr_00001.out00002"
+    wave.write_bytes(_shard(nboundary=0))
+    amr.write_bytes(
+        _amr_header(simple_boundary=False, nboundary=0, coarse_shape=(1, 1, 1))
+        + _amr_fine_payload(nboundary=0, grid_centre=(0.25, 0.25, 0.25))
+    )
+    kwargs = dict(
+        owner_rank=2, level=2, simple_boundary=False,
+        fdm_use_hjm=False, fdm_first_wave_level=1, hbar_code=1.0,
+    )
+    result = measure_fdm_shard_same_level_stencil(wave, amr, **kwargs)
+    assert result.measurement.owner_leaf_cells == 8
+    assert result.measurement.incomplete_leaf_stencil_cells > 0
+    assert result.measurement.status.startswith("censored_")
+    assert result.measurement.leaf_mass_code == pytest.approx(0.625)
+    with pytest.raises(ValueError, match="controls"):
+        measure_fdm_shard_same_level_stencil(wave, amr, maximum_grids=0, **kwargs)
+    with pytest.raises(ValueError, match="owner shard"):
+        measure_fdm_shard_same_level_stencil(
+            wave, amr, **{**kwargs, "owner_rank": 1}
+        )
+    amr.write_bytes(
+        _amr_header(simple_boundary=False, nboundary=0)
+        + _amr_fine_payload(nboundary=0, grid_centre=(0.25, 0.25, 0.25))
+    )
+    with pytest.raises(ValueError, match="wave-level unit-box"):
+        measure_fdm_shard_same_level_stencil(wave, amr, **kwargs)

@@ -786,6 +786,17 @@ not be used as a relaxation pass.  The wave-gradient kinetic term, sink
 interaction convention, and angular momentum remain to be derived and
 validated separately.
 
+The bounded `fdm_wave_stencil.measure_fdm_shard_same_level_stencil` reader now
+reconstructs the central-difference wave current for one native FDM/AMR shard
+and one selected level.  It reads owned and virtual grids, counts only owned
+leaf cells, and censors absent same-level neighbours or refined-neighbour
+stencils.  It requires the dual-soliton unit-box coarse geometry and an
+explicitly declared wave level.  Its gradient-square output is a **proxy**,
+not the lagRamses kinetic Hamiltonian: the base-grid kinetic step is spectral
+and AMR interfaces need an independently validated operator.  Synthetic
+shard and periodic-plane-wave tests pass; no real output has yet passed a
+saved-wave versus writer-current identity or all-rank conservation gate.
+
 Bind the eventual complete diagnostic series to both the exact sample ledger
 and immutable extractor bytes before assessment:
 
