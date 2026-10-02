@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from types import SimpleNamespace
 
-from scripts.audit_qe_bin_occupancy import pair_occupancy
+from scripts import audit_qe_bin_occupancy as audit
+
+pair_occupancy = audit.pair_occupancy
 
 
 def _run(separations: list[float], *, cutoff: float | None = None) -> dict:
@@ -67,3 +70,45 @@ def test_eight_bin_budget_is_only_a_necessary_full_coverage_bound() -> None:
 def test_invalid_bin_request_is_rejected() -> None:
     with pytest.raises(ValueError, match="invalid"):
         pair_occupancy(_run([0.1, 0.2]), _run([0.1, 0.2]), separation_bins=0)
+
+
+def test_one_bin_probe_cannot_publish_calibration_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = []
+
+    def summarize(_runs, *, separation_bins):
+        assert separation_bins == 1
+        return {"matched_separation": {"bins": [{"bin": 0}]}}
+
+    def build(source):
+        paths.append(source.convergence_summary)
+        assert source.profile_id == "boey2025"
+        assert source.convergence_summary.is_file()
+        return SimpleNamespace(accepted_rows=(object(),), rejected_bins=())
+
+    monkeypatch.setattr(audit, "summarize_convergence", summarize)
+    monkeypatch.setattr(audit, "build_source_rows", build)
+    result = audit.exploratory_single_bin_gates([{}, {}], profile_id="boey2025")
+    assert result["accepted_bin_count"] == 1
+    assert result["production_calibration_row_admitted"] is False
+    assert not paths[0].exists()
+
+
+def test_one_bin_probe_with_no_bin_skips_builder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        audit,
+        "summarize_convergence",
+        lambda runs, *, separation_bins: {"matched_separation": None},
+    )
+    monkeypatch.setattr(
+        audit,
+        "build_source_rows",
+        lambda source: pytest.fail("builder must not be called"),
+    )
+    assert audit.exploratory_single_bin_gates([{}, {}], profile_id="boey2025") == {
+        "status": "no_exploratory_bin",
+        "accepted_bin_count": 0,
+    }

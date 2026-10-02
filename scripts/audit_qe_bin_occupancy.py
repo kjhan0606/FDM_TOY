@@ -10,13 +10,16 @@ import argparse
 import json
 from pathlib import Path
 import sys
+import tempfile
 
 import numpy as np
 
 from fdm_smbh_delay.convergence import (
     _initial_resolved_orbit_indices,
     load_convergence_run,
+    summarize_convergence,
 )
+from fdm_smbh_delay.subgrid_table_builder import CalibrationSource, build_source_rows
 
 # Support both ``python -m scripts.audit_qe_bin_occupancy`` and direct execution.
 if __package__ in (None, ""):
@@ -92,7 +95,35 @@ def pair_occupancy(
     return result
 
 
-def audit_assessment(assessment_path: Path, *, separation_bins: int = 8) -> dict:
+def exploratory_single_bin_gates(runs: list[dict], *, profile_id: str) -> dict:
+    """Probe existing gates at one post-hoc bin; never return calibration rows."""
+
+    summary = summarize_convergence(runs, separation_bins=1)
+    matched = summary["matched_separation"]
+    if matched is None or not matched["bins"]:
+        return {"status": "no_exploratory_bin", "accepted_bin_count": 0}
+    with tempfile.TemporaryDirectory(prefix="qe_one_bin_design_") as temporary:
+        path = Path(temporary) / "summary.json"
+        path.write_text(json.dumps(summary), encoding="utf-8")
+        built = build_source_rows(
+            CalibrationSource(profile_id=profile_id, convergence_summary=path)
+        )
+    return {
+        "status": "post_hoc_design_diagnostic_not_a_calibration_release",
+        "accepted_bin_count": len(built.accepted_rows),
+        "rejected_reasons": [
+            rejected["reasons"] for rejected in built.rejected_bins
+        ],
+        "production_calibration_row_admitted": False,
+    }
+
+
+def audit_assessment(
+    assessment_path: Path,
+    *,
+    separation_bins: int = 8,
+    exploratory_one_bin: bool = False,
+) -> dict:
     """Recheck immutable source hashes before describing bin occupancy."""
 
     assessment = json.loads(assessment_path.read_text(encoding="utf-8"))
@@ -115,11 +146,16 @@ def audit_assessment(assessment_path: Path, *, separation_bins: int = 8) -> dict
                 raise ValueError(f"q-e inputs changed since reassessment: {run}")
             runs.append(load_convergence_run(role, run))
         diagnostic = pair_occupancy(*runs, separation_bins=separation_bins)
-        cases.append({
+        case_record = {
             "case_id": case["case_id"],
             "assessment_status": case["status"],
             "diagnostic": diagnostic,
-        })
+        }
+        if exploratory_one_bin:
+            case_record["exploratory_single_bin"] = exploratory_single_bin_gates(
+                runs, profile_id=assessment["profile_id"]
+            )
+        cases.append(case_record)
     return {
         "status": "qe_bin_occupancy_design_diagnostic_only",
         "assessment": str(assessment_path.resolve()),
@@ -133,10 +169,12 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--assessment", type=Path, required=True)
     parser.add_argument("--separation-bins", type=int, default=8)
+    parser.add_argument("--exploratory-one-bin", action="store_true")
     args = parser.parse_args()
     result = audit_assessment(
         args.assessment.expanduser().resolve(),
         separation_bins=args.separation_bins,
+        exploratory_one_bin=args.exploratory_one_bin,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
 

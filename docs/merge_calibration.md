@@ -217,6 +217,19 @@ As a **design diagnostic only**, recomputing the same completed trajectories
 with one broad separation bin retains a bin in four of the ten cases. This
 post-hoc change does not alter the registered eight-bin assessment, does not
 establish resolved dependence on separation, and cannot release table rows.
+The reproducible exploratory command is
+
+```bash
+python scripts/audit_qe_bin_occupancy.py \
+  --assessment /gpfs/kjhan/FDM_TOY_RESULTS/qe_extension/reassessment_20261003_finest_v1/assessment.json \
+  --exploratory-one-bin
+```
+
+Three of those four broad bins still fail the 20-percent spatial systematic
+limit for orbital power or total wave-energy rate; the circular equal-mass
+case also fails orbital torque. Only `qe_q100_e060_a020` passes those
+single-bin numerical gates, and it remains **unreleased** because the binning
+was selected after examining the pilot and no doubled-box control exists.
 The next calibration design must specify its separation-bin widths and orbit
 budget prospectively, demonstrate a shared resolved interval for both members
 of every resolution pair, and include a doubled-box control. Until those gates
