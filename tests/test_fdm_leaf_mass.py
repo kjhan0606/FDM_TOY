@@ -6,7 +6,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from fdm_smbh_delay.fdm_leaf_mass import check_fdm_leaf_mass_identity
+from fdm_smbh_delay.fdm_leaf_mass import (
+    FDMLeafMassIdentity,
+    assess_fdm_leaf_mass_series,
+    check_fdm_leaf_mass_identity,
+)
 from fdm_smbh_delay.fdm_shard_format import OwnedLeafAmplitudeSummary
 
 
@@ -107,3 +111,64 @@ def test_hjm_controls_and_invalid_scale_are_rejected(tmp_path: Path) -> None:
     provenance.mpi_ncpu = 0
     with pytest.raises(ValueError, match="MPI rank count is invalid"):
         check_fdm_leaf_mass_identity(sources, provenance, coarse_cells_per_box=1)
+
+
+def _series_inputs(tmp_path: Path):
+    paths = tuple(tmp_path / f"fdm_outer_wave_provenance_{index:05d}.txt" for index in range(3))
+    ledger = SimpleNamespace(
+        source_path=tmp_path / "sample-ledger.json",
+        source_sha256="a" * 64,
+        samples=tuple(
+            SimpleNamespace(time_code=float(index), raw_provenance_path=path)
+            for index, path in enumerate(paths)
+        ),
+    )
+    identities = tuple(
+        FDMLeafMassIdentity(
+            status="raw_leaf_mass_reconstruction_matches_writer",
+            provenance_path=path,
+            coarse_cells_per_box=1,
+            owner_ranks=(1,),
+            leaf_cells_by_level=(8,),
+            mass_code_by_level=(mass,),
+            reconstructed_mass_code=mass,
+            writer_mass_code=mass,
+            mass_relative_difference=0.0,
+            reconstructed_leaf_cells=8,
+            writer_leaf_cells=8.0,
+        )
+        for path, mass in zip(paths, (5.0, 5.001, 4.999), strict=True)
+    )
+    return ledger, identities
+
+
+def test_mass_series_is_conditional_even_when_within_limit(tmp_path: Path) -> None:
+    ledger, identities = _series_inputs(tmp_path)
+    result = assess_fdm_leaf_mass_series(ledger, identities)
+    assert result.status == "mass_series_within_limit_pending_other_conservation"
+    assert result.maximum_relative_mass_drift == pytest.approx(0.0002)
+    assert result.sample_ledger_sha256 == "a" * 64
+
+
+def test_mass_series_censors_drift_and_unverified_snapshot(tmp_path: Path) -> None:
+    ledger, identities = _series_inputs(tmp_path)
+    changed = (*identities[:2], replace(identities[2], reconstructed_mass_code=4.9))
+    assert assess_fdm_leaf_mass_series(ledger, changed).status == "censored_mass_series"
+    unverified = (
+        identities[0],
+        replace(identities[1], status="censored_raw_leaf_mass_or_count_mismatch"),
+        identities[2],
+    )
+    result = assess_fdm_leaf_mass_series(ledger, unverified)
+    assert result.status == "censored_mass_series"
+    assert result.maximum_relative_mass_drift is None
+
+
+def test_mass_series_requires_exact_order_and_cannot_relax_limit(tmp_path: Path) -> None:
+    ledger, identities = _series_inputs(tmp_path)
+    with pytest.raises(ValueError, match="aligned"):
+        assess_fdm_leaf_mass_series(ledger, identities[::-1])
+    with pytest.raises(ValueError, match="cannot weaken"):
+        assess_fdm_leaf_mass_series(
+            ledger, identities, maximum_relative_mass_drift=0.01
+        )

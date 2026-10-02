@@ -12,6 +12,10 @@ from pathlib import Path
 from typing import Sequence
 
 from .fdm_shard_format import OwnedLeafAmplitudeSummary
+from .dual_soliton_relaxation import (
+    DualSolitonRelaxationSampleLedger,
+    RelaxationConservationThresholds,
+)
 from .lagramses_fdm_provenance import LagRamsesFDMOuterWaveProvenance
 
 
@@ -28,6 +32,20 @@ class FDMLeafMassIdentity:
     mass_relative_difference: float
     reconstructed_leaf_cells: int
     writer_leaf_cells: float
+
+
+@dataclass(frozen=True)
+class FDMLeafMassSeries:
+    status: str
+    sample_ledger_path: Path
+    sample_ledger_sha256: str
+    sample_times_code: tuple[float, ...]
+    raw_provenance_paths: tuple[Path, ...]
+    mass_code: tuple[float, ...]
+    relative_mass_drift_from_initial: tuple[float, ...] | None
+    maximum_relative_mass_drift: float | None
+    declared_mass_drift_limit: float
+    reasons: tuple[str, ...]
 
 
 def check_fdm_leaf_mass_identity(
@@ -144,4 +162,72 @@ def check_fdm_leaf_mass_identity(
         mass_relative_difference=relative_difference,
         reconstructed_leaf_cells=count,
         writer_leaf_cells=writer_count,
+    )
+
+
+def assess_fdm_leaf_mass_series(
+    ledger: DualSolitonRelaxationSampleLedger,
+    identities: Sequence[FDMLeafMassIdentity],
+    *,
+    maximum_relative_mass_drift: float | None = None,
+) -> FDMLeafMassSeries:
+    """Assess only wave-mass drift on one verified output sequence.
+
+    The caller must obtain ``ledger`` with
+    ``read_verified_dual_soliton_relaxation_sample_ledger`` and build each
+    identity from its exact shard set.  A passing mass-only status never
+    substitutes for Hamiltonian, angular momentum, or core diagnostics.
+    """
+
+    default_limit = RelaxationConservationThresholds().maximum_relative_wave_mass_error
+    limit = default_limit if maximum_relative_mass_drift is None else maximum_relative_mass_drift
+    if not math.isfinite(limit) or limit <= 0.0 or limit > default_limit:
+        raise ValueError("FDM mass-drift limit cannot weaken the relaxation gate")
+    samples = tuple(ledger.samples)
+    if len(samples) < 3 or len(identities) != len(samples):
+        raise ValueError("FDM mass series requires one identity for each of three or more samples")
+    times = tuple(float(sample.time_code) for sample in samples)
+    if any(not math.isfinite(time) for time in times) or any(
+        later <= earlier for earlier, later in zip(times, times[1:])
+    ):
+        raise ValueError("FDM mass sample times must increase strictly")
+    paths = tuple(sample.raw_provenance_path for sample in samples)
+    if any(
+        identity.provenance_path != path
+        for identity, path in zip(identities, paths, strict=True)
+    ):
+        raise ValueError("FDM mass identity is not aligned with the sample ledger")
+    masses = tuple(identity.reconstructed_mass_code for identity in identities)
+    reasons = []
+    if any(
+        identity.status != "raw_leaf_mass_reconstruction_matches_writer"
+        for identity in identities
+    ):
+        reasons.append("at least one snapshot disagrees with its raw mass/count provenance")
+    if any(not math.isfinite(mass) or mass < 0.0 for mass in masses):
+        reasons.append("mass series contains a non-finite or negative value")
+    drifts: tuple[float, ...] | None = None
+    maximum_drift: float | None = None
+    if not reasons:
+        if masses[0] <= 0.0:
+            reasons.append("initial wave mass is not positive")
+        else:
+            drifts = tuple(abs(mass - masses[0]) / masses[0] for mass in masses)
+            maximum_drift = max(drifts)
+            if maximum_drift > limit:
+                reasons.append("wave-mass drift exceeds the declared relaxation limit")
+    return FDMLeafMassSeries(
+        status=(
+            "mass_series_within_limit_pending_other_conservation"
+            if not reasons else "censored_mass_series"
+        ),
+        sample_ledger_path=ledger.source_path,
+        sample_ledger_sha256=ledger.source_sha256,
+        sample_times_code=times,
+        raw_provenance_paths=paths,
+        mass_code=masses,
+        relative_mass_drift_from_initial=drifts,
+        maximum_relative_mass_drift=maximum_drift,
+        declared_mass_drift_limit=limit,
+        reasons=tuple(reasons),
     )

@@ -676,12 +676,25 @@ The example paths, rank count, boundary setting, and coarse-cell width are
 illustrative; the operator must supply the effective solver values and one
 explicit pair for **every** MPI rank.  A missing rank or a mass/count mismatch
 fails closed.  Agreement tests the reader against the writer's own compact
-ledger, not independent time-series conservation, relaxation, or a physical
-delay.  The format reader has synthetic regression tests but
-no measured galaxy-zoom snapshot yet; it neither reconstructs AMR leaf cells
-across a complete output set nor computes core mass, wave Hamiltonian, or
-angular momentum.  Bind the
-eventual measured diagnostic series to both the exact sample
+ledger, not time-series conservation, relaxation, or a physical delay by
+itself.  Once a verified sample ledger exists, run the mass-series reader
+manually on Lageunha with the effective coarse-cell width and boundary mode:
+
+```bash
+python scripts/check_lagramses_fdm_mass_series.py \
+  --sample-ledger results/dual_soliton_relaxation_sample_ledger.json \
+  --coarse-cells-per-box 256 --simple-boundary false \
+  --output results/dual_soliton_relaxation_mass_series.json
+```
+
+This command forces one numerical-library thread, re-verifies the ledger and
+all source hashes after reading, and refuses to overwrite an existing result.
+It requires at least three ordered outputs, a per-output mass/count identity,
+and a wave-mass drift no greater than the existing `1e-3` relaxation limit.
+Even a passing status is explicitly `mass_series_within_limit_pending_other_conservation`:
+Hamiltonian, angular momentum, core structure, paired resolution, and physical
+delay remain unassessed.  No measured galaxy-zoom output has yet passed this
+reader.  Bind the eventual complete diagnostic series to both the exact sample
 ledger and immutable extractor bytes before assessment:
 
 ```bash
