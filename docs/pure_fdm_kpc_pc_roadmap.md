@@ -660,7 +660,24 @@ python scripts/inspect_lagramses_fdm_shard.py \
 
 This raw sum omits cell volume and is **not** a wave-mass or conservation
 measurement; the HJM/wave controls and owner rank must come from verified
-output provenance.  The format reader has synthetic regression tests but
+output provenance.  A separate one-process Lageunha command can apply the
+writer's `dx = 2^{-level} boxlen/(icoarse_max-icoarse_min+1)` volume and require
+every MPI rank before comparing the reconstructed leaf count and code-unit
+mass with the same output's raw provenance:
+
+```bash
+python scripts/check_lagramses_fdm_output_mass.py \
+  --provenance output_00042/fdm_outer_wave_provenance_00042.txt \
+  --coarse-cells-per-box 256 --simple-boundary false \
+  --pair output_00042/fdm_00042.out00001 output_00042/amr_00042.out00001
+```
+
+The example paths, rank count, boundary setting, and coarse-cell width are
+illustrative; the operator must supply the effective solver values and one
+explicit pair for **every** MPI rank.  A missing rank or a mass/count mismatch
+fails closed.  Agreement tests the reader against the writer's own compact
+ledger, not independent time-series conservation, relaxation, or a physical
+delay.  The format reader has synthetic regression tests but
 no measured galaxy-zoom snapshot yet; it neither reconstructs AMR leaf cells
 across a complete output set nor computes core mass, wave Hamiltonian, or
 angular momentum.  Bind the

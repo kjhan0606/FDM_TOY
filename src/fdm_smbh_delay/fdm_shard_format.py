@@ -56,6 +56,11 @@ class OwnedLeafAmplitudeSummary:
     wave_path: Path
     amr_path: Path
     owner_rank: int
+    ncpu: int
+    ndim: int
+    boxlen_code: float
+    fdm_use_hjm: bool
+    fdm_first_wave_level: int
     leaf_cells_by_level: tuple[int, ...]
     density_sum_by_level: tuple[float, ...]
 
@@ -482,6 +487,11 @@ def summarize_owned_leaf_amplitudes(
         wave_path=wave.path,
         amr_path=amr.path,
         owner_rank=owner_rank,
+        ncpu=wave.ncpu,
+        ndim=wave.ndim,
+        boxlen_code=amr.boxlen_code,
+        fdm_use_hjm=fdm_use_hjm,
+        fdm_first_wave_level=fdm_first_wave_level,
         leaf_cells_by_level=tuple(leaf_counts),
         density_sum_by_level=tuple(density_sums),
     )
