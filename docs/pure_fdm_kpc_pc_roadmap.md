@@ -629,7 +629,19 @@ manifest's raw-provenance paths to be exactly the verified output-set paths;
 an omitted, added, or substituted V3/V4/V5 output is rejected.  It is still source
 identity only: the core properties and the wave mass, Hamiltonian, and
 angular-momentum series must still be measured from those sources by a
-declared extractor.  Bind that diagnostic series to both the exact sample
+declared extractor.  A bounded structural reader now checks one native
+`backup_psi` shard's Fortran record framing, level order, MPI-rank count, and
+real/imaginary array lengths without loading the wave fields:
+
+```bash
+python scripts/inspect_lagramses_fdm_shard.py \
+  output_00042/fdm_00042.out00001 --expected-ncpu <mpi_ncpu>
+```
+
+This is a format preflight only.  It has synthetic-format regression tests but
+no measured galaxy-zoom snapshot yet; it neither reconstructs AMR leaf cells
+nor computes core mass, wave Hamiltonian, or angular momentum.  Bind the
+eventual measured diagnostic series to both the exact sample
 ledger and immutable extractor bytes before assessment:
 
 ```bash
@@ -905,7 +917,7 @@ relaxation stage now also has a bounded Lageunha execution wrapper: it binds a
 verified sample ledger, uses a shell-free one-thread child environment, writes
 the result through a private temporary path, and publishes a recheckable
 wrapper-declared attestation only after a successful source-bound result.
-The full toy-repository suite passes (`604 passed` at the latest check).
+The full toy-repository suite must be rerun after each source change.
 
 No pure-FDM outer zoom has been submitted, and no actual Lageunha relaxation
 extractor command or end-to-end physical delay has been run or accepted.  The
