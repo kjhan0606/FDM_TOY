@@ -93,6 +93,20 @@ def test_qe_family_orbital_projection_and_radial_censor() -> None:
     assert radial.drift_acceleration_pc_myr2 is None
 
 
+def test_qe_family_snapshots_mutable_grid_containers() -> None:
+    tables = [[_table(1.0), _table(2.0)], [_table(3.0), _table(4.0)]]
+    source_hashes = [["a" * 64, "b" * 64], ["c" * 64, "d" * 64]]
+    family = _family(tables=tables, source_sha256=source_hashes)
+    before = family.decision(0.3, 0.4, 15.0)
+    tables[0][0] = _table(100.0)
+    source_hashes[0][0] = "f" * 64
+    after = family.decision(0.3, 0.4, 15.0)
+    assert after["drift_acceleration_pc_myr2"] == pytest.approx(
+        before["drift_acceleration_pc_myr2"]
+    )
+    assert after["source_sha256"] == before["source_sha256"]
+
+
 @pytest.mark.parametrize("replacement", [
     {"mass_ratios_q": (0.5, 0.1)},
     {"eccentricities": (0.0, 1.0)},

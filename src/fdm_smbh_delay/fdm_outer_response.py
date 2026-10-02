@@ -9,6 +9,13 @@ import numpy as np
 from scipy.interpolate import PchipInterpolator
 
 
+def _immutable_float_array(values: np.ndarray) -> np.ndarray:
+    """Own a byte-backed snapshot that cannot be made writable by a caller."""
+
+    contiguous = np.ascontiguousarray(values, dtype=np.float64)
+    return np.frombuffer(contiguous.tobytes(), dtype=np.float64).reshape(contiguous.shape)
+
+
 @dataclass(frozen=True)
 class FDMOuterResponseTable:
     """Measured outer-halo response; this class does not define a drag law."""
@@ -40,6 +47,13 @@ class FDMOuterResponseTable:
             raise ValueError("unsupported outer response status")
         if self.component_frame not in {"unspecified", "orbital_rtn", "cartesian_lab"}:
             raise ValueError("unsupported outer response component frame")
+        # np.asarray may alias the caller's mutable arrays.  The drift
+        # interpolators snapshot their inputs, whereas as_dict and diffusion
+        # interpolation read these fields later; aliases would make one
+        # nominally frozen response report incompatible values.
+        radii = _immutable_float_array(radii)
+        drift = _immutable_float_array(drift)
+        diffusion = _immutable_float_array(diffusion)
         object.__setattr__(self, "radii_pc", radii)
         object.__setattr__(self, "drift_acceleration_pc_myr2", drift)
         object.__setattr__(self, "diffusion_tensor_pc2_myr3", diffusion)

@@ -44,6 +44,8 @@ class FDMOuterResponseFamily:
     def __post_init__(self) -> None:
         q = tuple(float(value) for value in self.mass_ratios_q)
         e = tuple(float(value) for value in self.eccentricities)
+        tables = tuple(tuple(row) for row in self.tables)
+        source_sha256 = tuple(tuple(row) for row in self.source_sha256)
         if (
             not q or not e
             or any(not math.isfinite(value) or not 0.0 < value <= 1.0 for value in q)
@@ -52,9 +54,9 @@ class FDMOuterResponseFamily:
             or any(b <= a for a, b in zip(e, e[1:]))
         ):
             raise ValueError("FDM response q/e nodes must be strictly increasing and physical")
-        if len(self.tables) != len(q) or len(self.source_sha256) != len(q):
+        if len(tables) != len(q) or len(source_sha256) != len(q):
             raise ValueError("FDM response q/e grid shape is inconsistent")
-        for table_row, hash_row in zip(self.tables, self.source_sha256):
+        for table_row, hash_row in zip(tables, source_sha256):
             if len(table_row) != len(e) or len(hash_row) != len(e):
                 raise ValueError("FDM response q/e grid shape is inconsistent")
             for table, digest in zip(table_row, hash_row):
@@ -66,6 +68,8 @@ class FDMOuterResponseFamily:
                     raise ValueError("FDM response source SHA-256 is required at every node")
         object.__setattr__(self, "mass_ratios_q", q)
         object.__setattr__(self, "eccentricities", e)
+        object.__setattr__(self, "tables", tables)
+        object.__setattr__(self, "source_sha256", source_sha256)
 
     def decision(self, mass_ratio_q: float, eccentricity: float, radius_pc: float) -> dict[str, Any]:
         """Return a convex q/e mixture only where all source nodes apply."""

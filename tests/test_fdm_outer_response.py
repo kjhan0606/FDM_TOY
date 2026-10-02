@@ -77,3 +77,34 @@ def test_diffusion_interpolation_stays_inside_psd_cone() -> None:
         assert measured == pytest.approx(expected)
         assert np.min(np.linalg.eigvalsh(measured)) >= -1.0e-12
     assert response.decision(41.0)["status"] == "censored"
+
+
+def test_response_snapshots_inputs_and_cannot_be_mutated_after_construction() -> None:
+    radii = np.array([10.0, 20.0])
+    drift = np.array([[1.0, 0.0, 0.0], [2.0, 0.0, 0.0]])
+    diffusion = np.array([np.eye(3), 2.0 * np.eye(3)])
+    response = FDMOuterResponseTable(
+        radii_pc=radii,
+        drift_acceleration_pc_myr2=drift,
+        diffusion_tensor_pc2_myr3=diffusion,
+        response_status="calibrated",
+    )
+    original = response.evaluate(15.0)
+    record = response.as_dict()
+    radii[:] = [1.0, 2.0]
+    drift[:] = 999.0
+    diffusion[:] = -np.eye(3)
+    assert response.evaluate(15.0)["drift_acceleration_pc_myr2"] == pytest.approx(
+        original["drift_acceleration_pc_myr2"]
+    )
+    assert response.evaluate(15.0)["diffusion_tensor_pc2_myr3"] == pytest.approx(
+        original["diffusion_tensor_pc2_myr3"]
+    )
+    assert response.as_dict() == record
+    for array in (
+        response.radii_pc,
+        response.drift_acceleration_pc_myr2,
+        response.diffusion_tensor_pc2_myr3,
+    ):
+        with pytest.raises(ValueError, match="WRITEABLE"):
+            array.setflags(write=True)

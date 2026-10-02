@@ -230,7 +230,10 @@ positive-semidefinite velocity-diffusion tensor.  It returns `censored` when
 the table is uncalibrated or a radius lies outside support.  Diffusion tensors
 are interpolated with a shared convex weight between adjacent measured
 radii, preserving positive semidefiniteness; the vector drift retains its
-shape-preserving scalar interpolation.  This does not supply a stochastic
+shape-preserving scalar interpolation.  The table snapshots all input arrays
+as immutable byte-backed values, so later changes to caller arrays cannot
+change a supposedly fixed response or separate its stored rows from the
+precomputed drift interpolators.  This does not supply a stochastic
 orbit integration or turn an uncalibrated response into a force law.
 
 `project_fdm_outer_response_to_orbit` adds an explicit local orbital
@@ -244,7 +247,8 @@ source identity at every node.  A query evaluates only its exact node or the
 four enclosing measured nodes, uses convex q/e weights for both drift and
 diffusion, and censors missing/uncalibrated/radially unsupported corners or
 queries outside the measured grid.  The corresponding orbital projector
-rotates the interpolated RTN vector/tensor into Cartesian coordinates.
+rotates the interpolated RTN vector/tensor into Cartesian coordinates.  The
+family snapshots its node and source-hash containers at construction.
 These are **numerical candidates**, not source verification: a digest alone
 does not establish that a run is physically converged or that q/e interpolation
 is accurate.  Paired resolution, phase replication, independent source audit,
