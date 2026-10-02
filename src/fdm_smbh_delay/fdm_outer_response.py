@@ -48,17 +48,6 @@ class FDMOuterResponseTable:
                 for axis in range(3)
             ),
         )
-        object.__setattr__(
-            self,
-            "_diffusion_interpolators",
-            tuple(
-                tuple(
-                    PchipInterpolator(radii, diffusion[:, row, col], extrapolate=False)
-                    for col in range(3)
-                )
-                for row in range(3)
-            ),
-        )
 
     def evaluate(self, radius_pc: float) -> dict[str, Any]:
         """Evaluate a calibrated response, rejecting unsupported radii/status."""
@@ -78,15 +67,22 @@ class FDMOuterResponseTable:
             [float(interpolator(radius)) for interpolator in self._drift_interpolators],
             dtype=float,
         )
-        diffusion = np.array(
-            [
-                [float(self._diffusion_interpolators[row][col](radius)) for col in range(3)]
-                for row in range(3)
-            ],
-            dtype=float,
+        # The PSD cone is convex, whereas independent componentwise PCHIP
+        # interpolation does not preserve it.  Interpolate the whole tensor
+        # between adjacent measured radii with one shared convex weight.
+        left = min(int(np.searchsorted(self.radii_pc, radius, side="right")) - 1,
+                   len(self.radii_pc) - 2)
+        weight = (radius - self.radii_pc[left]) / (
+            self.radii_pc[left + 1] - self.radii_pc[left]
+        )
+        diffusion = (
+            (1.0 - weight) * self.diffusion_tensor_pc2_myr3[left]
+            + weight * self.diffusion_tensor_pc2_myr3[left + 1]
         )
         if np.any(~np.isfinite(drift)) or np.any(~np.isfinite(diffusion)):
             raise ValueError("outer FDM response interpolation produced non-finite values")
+        if np.min(np.linalg.eigvalsh(diffusion)) < -1.0e-12:
+            raise ValueError("outer FDM diffusion interpolation is not positive semidefinite")
         return {
             "drift_acceleration_pc_myr2": drift,
             "diffusion_tensor_pc2_myr3": diffusion,

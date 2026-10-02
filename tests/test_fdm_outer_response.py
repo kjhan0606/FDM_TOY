@@ -53,3 +53,27 @@ def test_response_rejects_non_positive_semidefinite_diffusion() -> None:
                 [np.diag([1.0, -1.0, 1.0]), np.eye(3)]
             ),
         )
+
+
+def test_diffusion_interpolation_stays_inside_psd_cone() -> None:
+    vectors = np.array(
+        [[1.0, 0.0, 0.0], [0.0, 2.0, 0.0], [1.0, 1.0, 1.0]]
+    )
+    tensors = np.einsum("ni,nj->nij", vectors, vectors)
+    response = FDMOuterResponseTable(
+        radii_pc=np.array([10.0, 20.0, 40.0]),
+        drift_acceleration_pc_myr2=np.zeros((3, 3)),
+        diffusion_tensor_pc2_myr3=tensors,
+        response_status="calibrated",
+    )
+    for radius, expected in (
+        (10.0, tensors[0]),
+        (15.0, 0.5 * (tensors[0] + tensors[1])),
+        (20.0, tensors[1]),
+        (30.0, 0.5 * (tensors[1] + tensors[2])),
+        (40.0, tensors[2]),
+    ):
+        measured = response.evaluate(radius)["diffusion_tensor_pc2_myr3"]
+        assert measured == pytest.approx(expected)
+        assert np.min(np.linalg.eigvalsh(measured)) >= -1.0e-12
+    assert response.decision(41.0)["status"] == "censored"

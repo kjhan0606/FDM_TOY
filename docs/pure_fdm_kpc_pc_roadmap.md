@@ -227,7 +227,11 @@ drag law.
 
 `FDMOuterResponseTable` accepts a measured vector drift and a symmetric
 positive-semidefinite velocity-diffusion tensor.  It returns `censored` when
-the table is uncalibrated or a radius lies outside support.
+the table is uncalibrated or a radius lies outside support.  Diffusion tensors
+are interpolated with a shared convex weight between adjacent measured
+radii, preserving positive semidefiniteness; the vector drift retains its
+shape-preserving scalar interpolation.  This does not supply a stochastic
+orbit integration or turn an uncalibrated response into a force law.
 
 `validate_outer_inner_handoff` requires:
 
