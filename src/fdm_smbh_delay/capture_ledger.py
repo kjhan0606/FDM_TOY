@@ -110,6 +110,13 @@ def _vector(record: dict[str, Any], key: str) -> np.ndarray:
     return value
 
 
+def _boolean(record: dict[str, Any], key: str) -> bool:
+    value = record.get(key)
+    if not isinstance(value, bool):
+        raise CaptureLedgerError(f"{key} must be a boolean")
+    return value
+
+
 def _event_digest(rows: list[dict[str, Any]]) -> str:
     canonical = "\n".join(
         json.dumps(row, sort_keys=True, separators=(",", ":")) for row in rows
@@ -180,8 +187,15 @@ def _build_event(
     ):
         raise CaptureLedgerError(f"{uid}: member indices are not contiguous")
 
+    pair_rows = sorted(block.pairs, key=lambda row: int(row["pair_index"]))
+    if [int(row["pair_index"]) for row in pair_rows] != list(
+        range(1, expected_pairs + 1)
+    ):
+        raise CaptureLedgerError(f"{uid}: pair indices are not contiguous")
+
     members = []
     member_by_id: dict[int, CaptureMember] = {}
+    position_code_by_id: dict[int, np.ndarray] = {}
     for row in member_rows:
         sink_id = int(row["sink_id"])
         if sink_id in member_by_id:
@@ -200,11 +214,14 @@ def _build_event(
         )
         members.append(member)
         member_by_id[sink_id] = member
+        position_code_by_id[sink_id] = _vector(row, "position_code")
 
-    box_size_pc = _finite_float(begin, "boxlen", positive=True) * length_per_code
+    boxlen_code = _finite_float(begin, "boxlen", positive=True)
+    box_size_pc = boxlen_code * length_per_code
     pairs = []
     seen_pairs: set[tuple[int, int]] = set()
-    for row in sorted(block.pairs, key=lambda item: int(item["pair_index"])):
+    merge_radius_code = _finite_float(begin, "merge_radius_code", positive=True)
+    for row in pair_rows:
         id1 = int(row["sink_id_1"])
         id2 = int(row["sink_id_2"])
         key = tuple(sorted((id1, id2)))
@@ -213,6 +230,21 @@ def _build_event(
         seen_pairs.add(key)
         first = member_by_id[id1]
         second = member_by_id[id2]
+        delta_code = position_code_by_id[id2] - position_code_by_id[id1]
+        delta_code -= boxlen_code * np.floor(delta_code / boxlen_code + 0.5)
+        source_separation_code = float(np.linalg.norm(delta_code))
+        within_merge = _boolean(row, "within_rmerge")
+        if within_merge != (source_separation_code <= merge_radius_code):
+            raise CaptureLedgerError(f"{uid}: pair {key} within_rmerge contradicts source geometry")
+        source_bound = _boolean(row, "two_body_bound")
+        legacy_bound = _boolean(row, "legacy_pair_bound")
+        if "two_body_specific_energy_code" in row:
+            specific_energy_code = row["two_body_specific_energy_code"]
+            if specific_energy_code is None:
+                if source_bound:
+                    raise CaptureLedgerError(f"{uid}: singular pair cannot be two-body bound")
+            elif source_bound != (_finite_float(row, "two_body_specific_energy_code") < 0.0):
+                raise CaptureLedgerError(f"{uid}: pair {key} two_body_bound contradicts source energy")
         try:
             state = pair_orbital_state(
                 member_ids=(id1, id2),
@@ -229,9 +261,9 @@ def _build_event(
             CapturePair(
                 member_ids=(id1, id2),
                 orbital_state=state,
-                within_numerical_merge_radius=bool(row["within_rmerge"]),
-                source_two_body_bound=bool(row["two_body_bound"]),
-                legacy_pair_bound=bool(row["legacy_pair_bound"]),
+                within_numerical_merge_radius=within_merge,
+                source_two_body_bound=source_bound,
+                legacy_pair_bound=legacy_bound,
             )
         )
     if len(seen_pairs) != expected_pairs:

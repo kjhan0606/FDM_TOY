@@ -32,6 +32,13 @@ position and velocity, centre-of-mass state, two-body specific energy,
 orbital energy, angular momentum, eccentricity vector, and osculating
 semi-major axis. A group with more than two members remains `MULTIPLE` and is
 not converted to an arbitrary sequence of binaries.
+The FDM_TOY ledger reader checks that pair flags are actual JSON booleans,
+that pair indices are complete, and that `within_rmerge` agrees with the
+periodic source coordinates and recorded numerical merge radius.  When the
+source-specific energy is present, its sign must also agree with the recorded
+two-body binding flag.  A contradictory event is rejected before it can
+seed post-capture dynamics; a completed ledger transaction alone is not a
+physical-coalescence claim.
 
 No production FDM namelist and pre-compaction event record are present in this
 repository. Consequently, the interface and calculation are fixed, but a

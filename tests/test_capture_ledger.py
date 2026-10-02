@@ -177,3 +177,51 @@ def test_legacy_event_has_unknown_multiple_preservation_policy(tmp_path) -> None
     path = tmp_path / "ledger.jsonl"
     _write_rows(path, _binary_rows())
     assert read_capture_ledger(path).events[0].multiple_members_preserved is None
+
+
+@pytest.mark.parametrize("field", ["within_rmerge", "two_body_bound", "legacy_pair_bound"])
+def test_capture_ledger_rejects_non_boolean_pair_flags(tmp_path, field: str) -> None:
+    rows = _binary_rows()
+    rows[-2][field] = "false"
+    path = tmp_path / "ledger.jsonl"
+    _write_rows(path, rows)
+    with pytest.raises(CaptureLedgerError, match=f"{field} must be a boolean"):
+        read_capture_ledger(path)
+
+
+def test_capture_ledger_recomputes_numerical_merge_radius_flag(tmp_path) -> None:
+    rows = _binary_rows()
+    rows[-2]["within_rmerge"] = False
+    path = tmp_path / "ledger.jsonl"
+    _write_rows(path, rows)
+    with pytest.raises(CaptureLedgerError, match="within_rmerge contradicts"):
+        read_capture_ledger(path)
+
+
+def test_capture_ledger_rejects_source_binding_flag_energy_disagreement(tmp_path) -> None:
+    rows = _binary_rows()
+    rows[-2]["two_body_specific_energy_code"] = 1.0
+    path = tmp_path / "ledger.jsonl"
+    _write_rows(path, rows)
+    with pytest.raises(CaptureLedgerError, match="two_body_bound contradicts"):
+        read_capture_ledger(path)
+
+
+def test_capture_ledger_rejects_noncontiguous_pair_indices(tmp_path) -> None:
+    rows = _binary_rows()
+    rows[-2]["pair_index"] = 2
+    path = tmp_path / "ledger.jsonl"
+    _write_rows(path, rows)
+    with pytest.raises(CaptureLedgerError, match="pair indices are not contiguous"):
+        read_capture_ledger(path)
+
+
+def test_capture_ledger_merge_flag_uses_periodic_minimum_image(tmp_path) -> None:
+    rows = _binary_rows()
+    rows[1]["position_code"] = [99.5, 0.0, 0.0]
+    rows[2]["position_code"] = [0.5, 0.0, 0.0]
+    path = tmp_path / "ledger.jsonl"
+    _write_rows(path, rows)
+    event = read_capture_ledger(path).events[0]
+    assert event.pairs[0].within_numerical_merge_radius
+    assert event.pairs[0].orbital_state.separation_pc == pytest.approx(1.0)
