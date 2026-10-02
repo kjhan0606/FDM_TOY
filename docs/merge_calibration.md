@@ -169,6 +169,22 @@ common `(separation,eccentricity)` support, the affected bin remains
 resource and resolution design; absent that evidence the runtime must not
 interpolate or extrapolate through the missing bin.
 
+The 28 designed q-e runs have completed their seed, Torch, and response stages
+under `/gpfs/kjhan/FDM_TOY_RESULTS/qe_extension/`. The earlier
+`qe_extension_evaluation.json` compares several obsolete coarse/fine pairs and
+must not be used as the final acceptance decision. Reassess the finest adjacent
+pair of every manifest case from the existing diagnostics with
+`scripts/reassess_qe_extension.py`. Its output records candidate matched bins
+but never promotes them to a production table without the doubled-box control:
+
+```bash
+python scripts/reassess_qe_extension.py \
+  --manifest results/wave_calibration_qe_extension/run_manifest.csv \
+  --torch-root /gpfs/kjhan/FDM_TOY_RESULTS/qe_extension/torch \
+  --output-dir /gpfs/kjhan/FDM_TOY_RESULTS/qe_extension/reassessment_<unique-id> \
+  --profile-id boey2025
+```
+
 The guarded q-e queue uses observed device-memory profiles rather than the
 uniform-grid estimate alone. An `n=512` stage requires at least 22 GiB total
 and 21 GiB free: this admits a 23,028 MiB A10 while retaining more than 2 GiB
