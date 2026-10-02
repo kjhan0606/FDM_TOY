@@ -13,6 +13,7 @@ from fdm_smbh_delay.fdm_wave_stencil import (
     FDMShardStencilResult,
     check_fdm_wave_writer_identity,
     measure_fdm_same_level_stencil,
+    measure_uniform_fft_drift_quadratic,
 )
 
 
@@ -169,3 +170,76 @@ def test_writer_identity_requires_every_owner_and_pure_wave_contract(tmp_path: P
     wrong[0] = replace(wrong[0], wave_path=tmp_path / "different00001")
     with pytest.raises(ValueError, match="invalid"):
         check_fdm_wave_writer_identity(wrong, provenance)
+
+
+def test_uniform_fft_quadratic_matches_discrete_source_eigenvalue() -> None:
+    cells = np.arange(4)
+    phase = 2.0 * np.pi * cells[:, None, None] / 4.0
+    wave = np.broadcast_to(np.exp(1j * phase), (4, 4, 4))
+    result = measure_uniform_fft_drift_quadratic(
+        level=2, boxlen_code=1.0, hbar_code=1.0,
+        wave_real=wave.real, wave_imag=wave.imag,
+    )
+    assert result.status == "uniform_fft_drift_quadratic_pending_source_binding"
+    assert result.wave_mass_code == pytest.approx(1.0)
+    assert result.axis_quadratic_code == pytest.approx((16.0, 0.0, 0.0))
+    assert result.drift_generator_quadratic_code == pytest.approx(16.0)
+    assert result.drift_generator_quadratic_code != pytest.approx(8.0)
+    rotated = measure_uniform_fft_drift_quadratic(
+        level=2, boxlen_code=1.0, hbar_code=1.0,
+        wave_real=(wave * np.exp(1j * 0.37)).real,
+        wave_imag=(wave * np.exp(1j * 0.37)).imag,
+    )
+    assert rotated.drift_generator_quadratic_code == pytest.approx(16.0)
+
+    spectrum = np.fft.fftn(wave)
+    frequencies = np.arange(4)
+    denominator = sum(
+        2.0 * (1.0 - np.cos(2.0 * np.pi * frequencies / 4.0)).reshape(
+            tuple(4 if axis == dimension else 1 for axis in range(3))
+        )
+        for dimension in range(3)
+    )
+    spectral_quadratic = (
+        0.5 * (1.0 / 4.0) ** 3 / (1.0 / 4.0) ** 2
+        * np.sum(denominator * np.abs(spectrum) ** 2) / 64.0
+    )
+    assert result.drift_generator_quadratic_code == pytest.approx(spectral_quadratic)
+    alternating = np.broadcast_to((-1.0) ** cells[:, None, None], (4, 4, 4))
+    nyquist = measure_uniform_fft_drift_quadratic(
+        level=2, boxlen_code=1.0, hbar_code=1.0,
+        wave_real=alternating, wave_imag=np.zeros((4, 4, 4)),
+    )
+    assert nyquist.drift_generator_quadratic_code == pytest.approx(32.0)
+    assert nyquist.axis_quadratic_code == pytest.approx((32.0, 0.0, 0.0))
+    doubled_hbar = measure_uniform_fft_drift_quadratic(
+        level=2, boxlen_code=1.0, hbar_code=2.0,
+        wave_real=wave.real, wave_imag=wave.imag,
+    )
+    assert doubled_hbar.drift_generator_quadratic_code == pytest.approx(64.0)
+
+
+def test_uniform_fft_quadratic_refuses_incomplete_or_nonfinite_fields() -> None:
+    zeros = np.zeros((4, 4, 4))
+    empty = measure_uniform_fft_drift_quadratic(
+        level=2, boxlen_code=1.0, hbar_code=1.0,
+        wave_real=zeros, wave_imag=zeros,
+    )
+    assert empty.status.startswith("censored_")
+    with pytest.raises(ValueError, match="incomplete"):
+        measure_uniform_fft_drift_quadratic(
+            level=2, boxlen_code=1.0, hbar_code=1.0,
+            wave_real=zeros[:-1], wave_imag=zeros,
+        )
+    with pytest.raises(ValueError, match="memory bound"):
+        measure_uniform_fft_drift_quadratic(
+            level=2, boxlen_code=1.0, hbar_code=1.0,
+            wave_real=zeros, wave_imag=zeros, maximum_cells=8,
+        )
+    bad = zeros.copy()
+    bad[0, 0, 0] = np.nan
+    with pytest.raises(ValueError, match="finite"):
+        measure_uniform_fft_drift_quadratic(
+            level=2, boxlen_code=1.0, hbar_code=1.0,
+            wave_real=bad, wave_imag=zeros,
+        )

@@ -786,14 +786,31 @@ not be used as a relaxation pass.  The wave-gradient kinetic term, sink
 interaction convention, and angular momentum remain to be derived and
 validated separately.
 
+Source audit of the selected `fdm_step.f90` shows that the base level uses
+a full complex FFT but rotates each mode with the **discrete seven-point
+Laplacian eigenvalue**, not continuum `-k²`.  The drift generator's uniform
+periodic quadratic is therefore proportional to the sum of squared
+*forward* differences.  The kernel mirrors the source's `dx_fft=2^-level`
+in the eigenvalue and uses the writer's code-volume factor separately;
+these conventions still need an independent physical-unit audit.
+`fdm_wave_stencil.measure_uniform_fft_drift_quadratic`
+implements that discrete quadratic for an already assembled, complete
+uniform field, with a small-grid Fourier-eigenvalue regression.  It is not
+yet bound to native all-rank fields; once AMR refinement is present, base
+reflux and fine-level operators prevent treating this uniform result as the
+composite wave Hamiltonian.  The central-difference gradient-square reported
+by the shard reader is a distinct proxy and must not replace the drift
+generator quadratic.
+
 The bounded `fdm_wave_stencil.measure_fdm_shard_same_level_stencil` reader now
 reconstructs the central-difference wave current for one native FDM/AMR shard
 and one selected level.  It reads owned and virtual grids, counts only owned
 leaf cells, and censors absent same-level neighbours or refined-neighbour
 stencils.  It requires the dual-soliton unit-box coarse geometry and an
 explicitly declared wave level.  Its gradient-square output is a **proxy**,
-not the lagRamses kinetic Hamiltonian: the base-grid kinetic step is spectral
-and AMR interfaces need an independently validated operator.  Synthetic
+not the lagRamses kinetic Hamiltonian: the base-grid FFT applies a discrete
+Laplacian eigenvalue and AMR interfaces need an independently validated
+operator.  Synthetic
 shard and periodic-plane-wave tests pass; no real output has yet passed a
 saved-wave versus writer-current identity or all-rank conservation gate.
 
@@ -813,7 +830,7 @@ stencil counts, mass, and all three current components with the raw writer.
 It re-verifies the sample-ledger hashes after extraction.  Missing or refined
 neighbours and any identity mismatch remain censored; HJM phase-current
 reconstruction is not yet implemented.  A matching identity still does not
-establish time-series conservation, spectral kinetic energy, or a physical
+establish time-series conservation, a drift-generator quadratic, or a physical
 binary-decay rate.
 
 Bind the eventual complete diagnostic series to both the exact sample ledger

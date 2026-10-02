@@ -2,8 +2,9 @@
 
 This reproduces the source writer's central-difference current where both
 same-level neighbours are present.  Its gradient-square kinetic term is only
-a finite-difference proxy: the base lagRamses kinetic operator is spectral,
-and AMR interfaces need separately validated ghost/reflux treatment.
+a finite-difference proxy: the base lagRamses FFT drift applies the discrete
+Laplacian eigenvalue, and AMR interfaces need separately validated
+ghost/reflux treatment.
 """
 
 from __future__ import annotations
@@ -61,6 +62,88 @@ class FDMWaveWriterIdentity:
     mass_relative_error: float
     current_component_absolute_error: tuple[float, float, float]
     reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class FDMUniformFFTQuadratic:
+    status: str
+    level: int
+    cell_count: int
+    boxlen_code: float
+    hbar_code: float
+    wave_mass_code: float
+    drift_generator_quadratic_code: float
+    axis_quadratic_code: tuple[float, float, float]
+    interpretation: str
+
+
+def measure_uniform_fft_drift_quadratic(
+    *,
+    level: int,
+    boxlen_code: float,
+    hbar_code: float,
+    wave_real: np.ndarray,
+    wave_imag: np.ndarray,
+    maximum_cells: int = 1_000_000,
+) -> FDMUniformFFTQuadratic:
+    """Measure the exact spatial quadratic of the base FFT drift generator.
+
+    The selected lagRamses source applies a full C2C FFT with eigenvalue
+    ``2 sum(cos(2*pi*k/N)-1) / dx_box**2``.  The equivalent spatial
+    quadratic uses forward differences, not central-gradient squares or
+    continuum ``k**2``.  This function accepts only an already assembled,
+    uniform, periodic field; it does not verify its native source or certify
+    a composite AMR Hamiltonian.
+    """
+
+    if (
+        isinstance(level, bool) or not isinstance(level, int)
+        or level < 1 or level > 30
+        or not math.isfinite(boxlen_code) or boxlen_code <= 0.0
+        or not math.isfinite(hbar_code) or hbar_code <= 0.0
+        or isinstance(maximum_cells, bool) or not isinstance(maximum_cells, int)
+        or maximum_cells < 8
+    ):
+        raise ValueError("FDM uniform FFT quadratic controls are invalid")
+    shape = (1 << level,) * 3
+    count = (1 << level) ** 3
+    if count > maximum_cells or np.shape(wave_real) != shape or np.shape(wave_imag) != shape:
+        raise ValueError("FDM uniform FFT field is incomplete or exceeds the memory bound")
+    real = np.asarray(wave_real, dtype=np.float64)
+    imaginary = np.asarray(wave_imag, dtype=np.float64)
+    if np.any(~np.isfinite(real)) or np.any(~np.isfinite(imaginary)):
+        raise ValueError("FDM uniform FFT field must be finite")
+    dx_box = 0.5**level
+    volume_code = (dx_box * boxlen_code) ** 3
+    density_sum = np.sum(real**2 + imaginary**2, dtype=np.float64)
+    axis = tuple(
+        float(
+            0.5 * hbar_code**2 * volume_code / dx_box**2
+            * np.sum(
+                (np.roll(real, -1, axis=dimension) - real) ** 2
+                + (np.roll(imaginary, -1, axis=dimension) - imaginary) ** 2,
+                dtype=np.float64,
+            )
+        )
+        for dimension in range(3)
+    )
+    total = math.fsum(axis)
+    mass = float(density_sum * volume_code)
+    if not math.isfinite(mass) or not math.isfinite(total):
+        raise ValueError("FDM uniform FFT quadratic is non-finite")
+    return FDMUniformFFTQuadratic(
+        status=("uniform_fft_drift_quadratic_pending_source_binding" if mass > 0.0
+                else "censored_empty_uniform_fft_wave"),
+        level=level, cell_count=count, boxlen_code=boxlen_code,
+        hbar_code=hbar_code, wave_mass_code=mass,
+        drift_generator_quadratic_code=total,
+        axis_quadratic_code=axis,
+        interpretation=(
+            "exact discrete-Laplacian quadratic of the declared base FFT drift "
+            "on an assembled uniform periodic field; not an AMR-composite "
+            "Hamiltonian or conservation pass"
+        ),
+    )
 
 
 def measure_fdm_same_level_stencil(
@@ -207,7 +290,8 @@ def measure_fdm_same_level_stencil(
         central_gradient_square_proxy_code=kinetic_proxy,
         interpretation=(
             "central-difference wave current on available same-level stencils; "
-            "gradient-square term is not the spectral/AMR kinetic Hamiltonian"
+            "central-gradient square is not the FFT discrete-Laplacian or "
+            "AMR-composite kinetic Hamiltonian"
         ),
     )
 
