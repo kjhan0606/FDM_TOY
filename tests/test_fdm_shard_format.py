@@ -80,7 +80,8 @@ def _amr_header(
 
 
 def _amr_fine_payload(
-    *, boundary_level1: int = 2, nboundary: int = 1, refine_first_owned: bool = False
+    *, boundary_level1: int = 2, nboundary: int = 1, refine_first_owned: bool = False,
+    grid_centre: tuple[float, float, float] = (0.0, 0.0, 0.0),
 ) -> bytes:
     data = b""
     for level, counts in enumerate(
@@ -94,9 +95,9 @@ def _amr_fine_payload(
             if not ncache:
                 continue
             integers = _record(struct.pack("<" + "i" * ncache, *([0] * ncache)))
-            reals = _record(struct.pack("<" + "d" * ncache, *([0.0] * ncache)))
             data += integers * 3
-            data += reals * 3
+            for coordinate in grid_centre:
+                data += _record(struct.pack("<" + "d" * ncache, *([coordinate] * ncache)))
             data += integers * 7  # father and six neighbours
             for child in range(8):
                 son = (
@@ -323,3 +324,39 @@ def test_owned_leaf_radial_geometry_requires_explicit_valid_contract(
             radial_edges_box=(0.0, 0.5, 0.4), coarse_origin=(0, 0, 0),
             coarse_cells_per_box=1, **kwargs,
         )
+
+
+def test_disjoint_aperture_moments_follow_periodic_child_centres(
+    tmp_path: Path,
+) -> None:
+    wave = tmp_path / "fdm_00001.out00001"
+    amr = tmp_path / "amr_00001.out00001"
+    wave.write_bytes(_shard(nboundary=0))
+    amr.write_bytes(_amr_header(simple_boundary=False, nboundary=0) + _amr_fine_payload(nboundary=0))
+    options = dict(
+        owner_rank=1, simple_boundary=False, fdm_use_hjm=False,
+        fdm_first_wave_level=1,
+        radial_centres_box=((0.25, 0.25, 0.25), (0.75, 0.75, 0.75)),
+        radial_edges_box=(0.0, 0.2, 0.5),
+        coarse_origin=(0, 0, 0), coarse_cells_per_box=1,
+    )
+    summary = summarize_owned_leaf_amplitudes(
+        wave, amr, aperture_radius_box=0.19, **options
+    )
+    assert summary.aperture_density_sum_by_centre_level == ((5.0, 0.0), (5.0, 0.0))
+    assert summary.aperture_first_moment_by_centre_level_dim == (
+        ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0)),
+        ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0)),
+    )
+    assert summary.aperture_second_moment_by_centre_level == ((0.0, 0.0), (0.0, 0.0))
+    with pytest.raises(ValueError, match="disjoint"):
+        summarize_owned_leaf_amplitudes(wave, amr, aperture_radius_box=0.5, **options)
+    amr.write_bytes(
+        _amr_header(simple_boundary=False, nboundary=0)
+        + _amr_fine_payload(nboundary=0, grid_centre=(0.05, 0.0, 0.0))
+    )
+    shifted = summarize_owned_leaf_amplitudes(
+        wave, amr, aperture_radius_box=0.19, **options
+    )
+    assert shifted.aperture_first_moment_by_centre_level_dim[0][0] == pytest.approx((0.25, 0.0, 0.0))
+    assert shifted.aperture_second_moment_by_centre_level[0][0] == pytest.approx(0.0125)

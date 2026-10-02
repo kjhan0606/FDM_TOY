@@ -61,6 +61,154 @@ class FDMRadialMassProfile:
     total_wave_mass_code: float
 
 
+@dataclass(frozen=True)
+class FDMApertureCentroids:
+    """Mass centroids of two disjoint seed apertures, not fitted soliton peaks."""
+
+    status: str
+    provenance_path: Path
+    seed_centres_box: tuple[tuple[float, ...], ...]
+    aperture_radius_box: float
+    aperture_mass_code: tuple[float, float]
+    centroid_candidates_box: tuple[tuple[float, ...] | None, ...]
+    centroid_shift_box: tuple[float | None, float | None]
+    rms_radius_box: tuple[float | None, float | None]
+    separation_box: float | None
+    reasons: tuple[str, ...]
+
+
+def reconstruct_fdm_aperture_centroids(
+    summaries: Sequence[OwnedLeafAmplitudeSummary],
+    identity: FDMLeafMassIdentity,
+) -> FDMApertureCentroids:
+    """Reconstruct moving *candidates* from source-bound disjoint apertures.
+
+    A density-weighted aperture centroid can follow a core but is not a
+    soliton-centre measurement without background subtraction, a profile fit,
+    and temporal continuity checks.
+    """
+
+    radial = reconstruct_fdm_radial_mass_profile(summaries, identity)
+    ordered = tuple(sorted(summaries, key=lambda item: item.owner_rank))
+    radius = ordered[0].aperture_radius_box
+    if radius is None or not math.isfinite(radius) or radius <= 0.0:
+        raise ValueError("FDM aperture radius is missing")
+    seed_distance = math.sqrt(sum(
+        min(abs(a - b), 1.0 - abs(a - b)) ** 2
+        for a, b in zip(*radial.centres_box, strict=True)
+    ))
+    if radius >= 0.5 * seed_distance:
+        raise ValueError("FDM aperture regions must be disjoint")
+    nlevelmax = len(identity.mass_code_by_level)
+    ndim = ordered[0].ndim
+    for item in ordered:
+        mass = item.aperture_density_sum_by_centre_level
+        first = item.aperture_first_moment_by_centre_level_dim
+        second = item.aperture_second_moment_by_centre_level
+        if (
+            item.aperture_radius_box != radius
+            or mass is None or first is None or second is None
+            or len(mass) != 2 or len(first) != 2 or len(second) != 2
+            or any(len(levels) != nlevelmax for levels in (*mass, *first, *second))
+            or any(len(dimensions) != ndim for levels in first for dimensions in levels)
+            or any(not math.isfinite(value) or value < 0.0 for levels in mass for value in levels)
+            or any(not math.isfinite(value) for levels in first for dimensions in levels for value in dimensions)
+            or any(not math.isfinite(value) or value < 0.0 for levels in second for value in levels)
+        ):
+            raise ValueError("FDM aperture moments disagree across owners")
+    masses = []
+    positions = []
+    shifts = []
+    rms = []
+    reasons = []
+    for centre_index, seed in enumerate(radial.centres_box):
+        level_masses = []
+        level_first = []
+        level_second = []
+        widest_contributing_cell = 0.0
+        for level in range(1, nlevelmax + 1):
+            dx = 0.5**level * ordered[0].boxlen_code / identity.coarse_cells_per_box
+            volume = dx**ndim
+            density_sum = math.fsum(
+                item.aperture_density_sum_by_centre_level[centre_index][level - 1]  # type: ignore[index]
+                for item in ordered
+            )
+            level_masses.append(density_sum * volume)
+            if density_sum > 0.0:
+                widest_contributing_cell = max(widest_contributing_cell, 0.5**level / identity.coarse_cells_per_box)
+            level_first.append(tuple(
+                math.fsum(
+                    item.aperture_first_moment_by_centre_level_dim[centre_index][level - 1][dimension]  # type: ignore[index]
+                    for item in ordered
+                ) * volume
+                for dimension in range(ndim)
+            ))
+            level_second.append(math.fsum(
+                item.aperture_second_moment_by_centre_level[centre_index][level - 1]  # type: ignore[index]
+                for item in ordered
+            ) * volume)
+            if density_sum > math.fsum(item.density_sum_by_level[level - 1] for item in ordered) * (1.0 + 1.0e-10):
+                raise ValueError("FDM aperture density exceeds verified level density")
+            if radius in radial.edges_box and radius != radial.edges_box[-1]:
+                edge_index = radial.edges_box.index(radius)
+                shell_density = math.fsum(
+                    item.radial_density_sum_by_centre_level_bin[centre_index][level - 1][bin_index]  # type: ignore[index]
+                    for item in ordered for bin_index in range(edge_index)
+                )
+                if not math.isclose(density_sum, shell_density, rel_tol=1.0e-10, abs_tol=1.0e-12):
+                    raise ValueError("FDM aperture mass disagrees with radial shells")
+            if level_second[-1] > level_masses[-1] * radius**2 * (1.0 + 1.0e-10):
+                raise ValueError("FDM aperture second moment exceeds its radius")
+            if math.sqrt(sum(value**2 for value in level_first[-1])) > level_masses[-1] * radius * (1.0 + 1.0e-10):
+                raise ValueError("FDM aperture first moment exceeds its radius")
+        mass = math.fsum(level_masses)
+        masses.append(mass)
+        if not math.isfinite(mass) or mass > identity.reconstructed_mass_code * (1.0 + 1.0e-10):
+            raise ValueError("FDM aperture mass exceeds verified wave mass")
+        if mass <= 0.0:
+            positions.append(None)
+            shifts.append(None)
+            rms.append(None)
+            reasons.append(f"aperture {centre_index + 1} has no positive wave mass")
+            continue
+        mean_shift = tuple(
+            math.fsum(level[dimension] for level in level_first) / mass
+            for dimension in range(ndim)
+        )
+        shift = math.sqrt(sum(value**2 for value in mean_shift))
+        variance = math.fsum(level_second) / mass - shift**2
+        if not math.isfinite(shift) or not math.isfinite(variance) or variance < -1.0e-12 * radius**2:
+            raise ValueError("FDM aperture centroid moments are inconsistent")
+        positions.append(tuple((coordinate + offset) % 1.0 for coordinate, offset in zip(seed, mean_shift, strict=True)))
+        shifts.append(shift)
+        rms.append(math.sqrt(max(variance, 0.0)))
+        if shift > 0.5 * radius:
+            reasons.append(f"aperture {centre_index + 1} centroid is near its search edge")
+        if radius < 2.0 * widest_contributing_cell:
+            reasons.append(f"aperture {centre_index + 1} spans fewer than two contributing cell widths")
+    separation = None
+    if positions[0] is not None and positions[1] is not None:
+        separation = math.sqrt(sum(
+            min(abs(a - b), 1.0 - abs(a - b)) ** 2
+            for a, b in zip(positions[0], positions[1], strict=True)
+        ))
+    return FDMApertureCentroids(
+        status=(
+            "aperture_centroid_candidates_pending_core_validation"
+            if not reasons else "censored_aperture_centroids"
+        ),
+        provenance_path=identity.provenance_path,
+        seed_centres_box=radial.centres_box,
+        aperture_radius_box=radius,
+        aperture_mass_code=tuple(masses),
+        centroid_candidates_box=tuple(positions),
+        centroid_shift_box=tuple(shifts),
+        rms_radius_box=tuple(rms),
+        separation_box=separation,
+        reasons=tuple(reasons),
+    )
+
+
 def reconstruct_fdm_radial_mass_profile(
     summaries: Sequence[OwnedLeafAmplitudeSummary],
     identity: FDMLeafMassIdentity,

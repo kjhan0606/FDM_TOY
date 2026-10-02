@@ -32,6 +32,7 @@ from fdm_smbh_delay.dual_soliton_relaxation import (
 from fdm_smbh_delay.fdm_leaf_mass import (
     assess_fdm_leaf_mass_series,
     check_fdm_leaf_mass_identity,
+    reconstruct_fdm_aperture_centroids,
     reconstruct_fdm_radial_mass_profile,
 )
 from fdm_smbh_delay.fdm_shard_format import summarize_owned_leaf_amplitudes
@@ -72,6 +73,7 @@ def main() -> int:
     parser.add_argument("--maximum-array-mib", type=int, default=64)
     parser.add_argument("--coarse-origin", nargs=3, type=int)
     parser.add_argument("--radial-edges-box", nargs="+", type=float)
+    parser.add_argument("--aperture-radius-box", type=float)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     if "lageunha" not in socket.gethostname().lower():
@@ -83,11 +85,14 @@ def main() -> int:
     radial_requested = args.coarse_origin is not None or args.radial_edges_box is not None
     if radial_requested and (args.coarse_origin is None or args.radial_edges_box is None):
         parser.error("radial profiles require both --coarse-origin and --radial-edges-box")
+    if args.aperture_radius_box is not None and not radial_requested:
+        parser.error("aperture centroids require radial geometry")
     if args.output.expanduser().resolve().exists():
         parser.error("mass-series output already exists")
     ledger = read_verified_dual_soliton_relaxation_sample_ledger(args.sample_ledger)
     identities = []
     radial_profiles = []
+    aperture_centroids = []
     for sample in ledger.samples:
         provenance = read_lagramses_fdm_outer_wave_provenance(
             sample.raw_provenance_path
@@ -122,6 +127,7 @@ def main() -> int:
                 coarse_cells_per_box=(
                     args.coarse_cells_per_box if radial_requested else None
                 ),
+                aperture_radius_box=args.aperture_radius_box,
             )
             for rank, (wave, amr) in enumerate(
                 zip(sample.wave_snapshot_files, sample.amr_topology_files, strict=True),
@@ -137,6 +143,12 @@ def main() -> int:
         if radial_requested:
             radial_profiles.append(
                 reconstruct_fdm_radial_mass_profile(summaries, identity)
+                if identity.status == "raw_leaf_mass_reconstruction_matches_writer"
+                else None
+            )
+        if args.aperture_radius_box is not None:
+            aperture_centroids.append(
+                reconstruct_fdm_aperture_centroids(summaries, identity)
                 if identity.status == "raw_leaf_mass_reconstruction_matches_writer"
                 else None
             )
@@ -157,6 +169,10 @@ def main() -> int:
     if radial_requested:
         record["two_centre_total_wave_radial_profiles"] = [
             None if item is None else asdict(item) for item in radial_profiles
+        ]
+    if args.aperture_radius_box is not None:
+        record["two_centre_wave_aperture_centroids"] = [
+            None if item is None else asdict(item) for item in aperture_centroids
         ]
     _publish_json_without_overwrite(args.output, record)
     print(json.dumps({"status": series.status, "output": str(args.output.resolve())}))

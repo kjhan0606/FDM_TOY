@@ -66,6 +66,10 @@ class OwnedLeafAmplitudeSummary:
     radial_centres_box: tuple[tuple[float, ...], ...] | None = None
     radial_edges_box: tuple[float, ...] | None = None
     radial_density_sum_by_centre_level_bin: tuple[tuple[tuple[float, ...], ...], ...] | None = None
+    aperture_radius_box: float | None = None
+    aperture_density_sum_by_centre_level: tuple[tuple[float, ...], ...] | None = None
+    aperture_first_moment_by_centre_level_dim: tuple[tuple[tuple[float, ...], ...], ...] | None = None
+    aperture_second_moment_by_centre_level: tuple[tuple[float, ...], ...] | None = None
 
 
 class _RecordReader:
@@ -391,6 +395,7 @@ def summarize_owned_leaf_amplitudes(
     radial_edges_box: tuple[float, ...] | None = None,
     coarse_origin: tuple[int, ...] | None = None,
     coarse_cells_per_box: int | None = None,
+    aperture_radius_box: float | None = None,
 ) -> OwnedLeafAmplitudeSummary:
     """Sum raw density values on owned AMR leaf cells, one block at a time.
 
@@ -420,6 +425,8 @@ def summarize_owned_leaf_amplitudes(
             raise ValueError("FDM radial geometry must declare two centres, edges, and coarse origin")
     elif any(value is not None for value in (radial_edges_box, coarse_origin, coarse_cells_per_box)):
         raise ValueError("FDM radial geometry is incomplete")
+    if aperture_radius_box is not None and not radial:
+        raise ValueError("FDM aperture moments require radial geometry")
     pair = inspect_fdm_amr_shard_pair(
         wave_path,
         amr_path,
@@ -444,6 +451,18 @@ def summarize_owned_leaf_amplitudes(
             or any(right <= left for left, right in zip(radial_edges_box, radial_edges_box[1:]))
         ):
             raise ValueError("FDM radial geometry is invalid")
+        if aperture_radius_box is not None:
+            separation = math.sqrt(sum(
+                min(abs(a - b), 1.0 - abs(a - b)) ** 2
+                for a, b in zip(*radial_centres_box, strict=True)
+            ))
+            if (
+                not math.isfinite(aperture_radius_box)
+                or aperture_radius_box <= 0.0
+                or aperture_radius_box >= 0.5 * separation
+                or aperture_radius_box > radial_edges_box[-1]
+            ):
+                raise ValueError("FDM aperture radius must fit disjoint seed-centred regions")
     if (
         owner_rank < 1
         or owner_rank > wave.ncpu
@@ -456,6 +475,18 @@ def summarize_owned_leaf_amplitudes(
     radial_sums = (
         np.zeros((2, wave.nlevelmax, len(radial_edges_box) - 1), dtype=np.float64)
         if radial and radial_edges_box is not None else None
+    )
+    aperture_sums = (
+        np.zeros((2, wave.nlevelmax), dtype=np.float64)
+        if aperture_radius_box is not None else None
+    )
+    aperture_first = (
+        np.zeros((2, wave.nlevelmax, wave.ndim), dtype=np.float64)
+        if aperture_radius_box is not None else None
+    )
+    aperture_second = (
+        np.zeros((2, wave.nlevelmax), dtype=np.float64)
+        if aperture_radius_box is not None else None
     )
     integer_dtype = np.dtype(byte_order + "i4")
     real_dtype = np.dtype(byte_order + "f8")
@@ -541,11 +572,24 @@ def summarize_owned_leaf_amplitudes(
                                 ], axis=1
                             )
                             for centre_index, centre in enumerate(radial_centres_box):
-                                delta = np.abs(positions - np.asarray(centre))
-                                distance = np.sqrt(np.sum(np.minimum(delta, 1.0 - delta) ** 2, axis=1))
+                                delta = (positions - np.asarray(centre) + 0.5) % 1.0 - 0.5
+                                distance = np.sqrt(np.sum(delta ** 2, axis=1))
                                 radial_sums[centre_index, level - 1] += np.histogram(
                                     distance, bins=radial_edges_box, weights=density_chunk
                                 )[0]
+                                if aperture_radius_box is not None:
+                                    assert aperture_sums is not None
+                                    assert aperture_first is not None
+                                    assert aperture_second is not None
+                                    inside = distance < aperture_radius_box
+                                    weights = density_chunk[inside]
+                                    aperture_sums[centre_index, level - 1] += np.sum(weights, dtype=np.float64)
+                                    aperture_first[centre_index, level - 1] += np.sum(
+                                        delta[inside] * weights[:, None], axis=0, dtype=np.float64
+                                    )
+                                    aperture_second[centre_index, level - 1] += np.sum(
+                                        distance[inside] ** 2 * weights, dtype=np.float64
+                                    )
             if not math.isfinite(level_density):
                 raise ValueError("FDM owned leaf density sum is non-finite")
             leaf_counts.append(level_count)
@@ -569,6 +613,23 @@ def summarize_owned_leaf_amplitudes(
             None if radial_sums is None else tuple(
                 tuple(tuple(float(value) for value in bins) for bins in levels)
                 for levels in radial_sums
+            )
+        ),
+        aperture_radius_box=aperture_radius_box,
+        aperture_density_sum_by_centre_level=(
+            None if aperture_sums is None else tuple(
+                tuple(float(value) for value in levels) for levels in aperture_sums
+            )
+        ),
+        aperture_first_moment_by_centre_level_dim=(
+            None if aperture_first is None else tuple(
+                tuple(tuple(float(value) for value in dimensions) for dimensions in levels)
+                for levels in aperture_first
+            )
+        ),
+        aperture_second_moment_by_centre_level=(
+            None if aperture_second is None else tuple(
+                tuple(float(value) for value in levels) for levels in aperture_second
             )
         ),
     )

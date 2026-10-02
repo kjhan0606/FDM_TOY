@@ -7,7 +7,11 @@ import sys
 
 import pytest
 
-from fdm_smbh_delay.fdm_leaf_mass import FDMLeafMassIdentity, FDMRadialMassProfile
+from fdm_smbh_delay.fdm_leaf_mass import (
+    FDMApertureCentroids,
+    FDMLeafMassIdentity,
+    FDMRadialMassProfile,
+)
 from scripts import check_lagramses_fdm_mass_series as cli
 
 
@@ -131,14 +135,31 @@ def test_optional_two_centre_profile_is_explicit_and_remains_conditional(
         )
 
     monkeypatch.setattr(cli, "reconstruct_fdm_radial_mass_profile", radial)
+    monkeypatch.setattr(
+        cli, "reconstruct_fdm_aperture_centroids",
+        lambda _summaries, identity: FDMApertureCentroids(
+            status="aperture_centroid_candidates_pending_core_validation",
+            provenance_path=identity.provenance_path,
+            seed_centres_box=((0.25, 0.25, 0.25), (0.75, 0.75, 0.75)),
+            aperture_radius_box=0.1,
+            aperture_mass_code=(1.0, 1.0),
+            centroid_candidates_box=((0.25, 0.25, 0.25), (0.75, 0.75, 0.75)),
+            centroid_shift_box=(0.0, 0.0),
+            rms_radius_box=(0.01, 0.01),
+            separation_box=0.866025403784,
+            reasons=(),
+        ),
+    )
     argv = list(sys.argv)
     argv[1:1] = [
         "--coarse-origin", "0", "0", "0",
         "--radial-edges-box", "0", "0.1", "0.5",
+        "--aperture-radius-box", "0.1",
     ]
     monkeypatch.setattr(sys, "argv", argv)
     assert cli.main() == 0
     record = json.loads(target.read_text())
     assert len(seen) == 3
     assert len(record["two_centre_total_wave_radial_profiles"]) == 3
+    assert len(record["two_centre_wave_aperture_centroids"]) == 3
     assert record["status"] == "mass_series_within_limit_pending_other_conservation"

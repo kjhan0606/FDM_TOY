@@ -10,6 +10,7 @@ from fdm_smbh_delay.fdm_leaf_mass import (
     FDMLeafMassIdentity,
     assess_fdm_leaf_mass_series,
     check_fdm_leaf_mass_identity,
+    reconstruct_fdm_aperture_centroids,
     reconstruct_fdm_radial_mass_profile,
 )
 from fdm_smbh_delay.fdm_shard_format import OwnedLeafAmplitudeSummary
@@ -217,3 +218,58 @@ def test_two_centre_radial_mass_requires_verified_all_rank_leaf_identity(tmp_pat
             ),
         )
         reconstruct_fdm_radial_mass_profile((inflated, radial[1]), identity)
+
+
+def test_aperture_centroids_are_measured_but_not_certified_cores(tmp_path: Path) -> None:
+    seed = ((0.25, 0.25, 0.25), (0.75, 0.75, 0.75))
+    aperture = (
+        replace(
+            _summaries(tmp_path)[0], radial_centres_box=seed,
+            radial_edges_box=(0.0, 0.2, 0.5),
+            radial_density_sum_by_centre_level_bin=(
+                ((10.0, 30.0), (0.0, 0.0)),
+                ((10.0, 30.0), (0.0, 0.0)),
+            ),
+            aperture_radius_box=0.2,
+            aperture_density_sum_by_centre_level=((10.0, 0.0), (10.0, 0.0)),
+            aperture_first_moment_by_centre_level_dim=(
+                ((0.8, 0.0, 0.0), (0.0, 0.0, 0.0)),
+                ((-0.8, 0.0, 0.0), (0.0, 0.0, 0.0)),
+            ),
+            aperture_second_moment_by_centre_level=((0.2, 0.0), (0.2, 0.0)),
+        ),
+        replace(
+            _summaries(tmp_path)[1], radial_centres_box=seed,
+            radial_edges_box=(0.0, 0.2, 0.5),
+            radial_density_sum_by_centre_level_bin=(
+                ((0.0, 0.0), (10.0, 30.0)),
+                ((0.0, 0.0), (10.0, 30.0)),
+            ),
+            aperture_radius_box=0.2,
+            aperture_density_sum_by_centre_level=((0.0, 10.0), (0.0, 10.0)),
+            aperture_first_moment_by_centre_level_dim=(
+                ((0.0, 0.0, 0.0), (0.8, 0.0, 0.0)),
+                ((0.0, 0.0, 0.0), (-0.8, 0.0, 0.0)),
+            ),
+            aperture_second_moment_by_centre_level=((0.0, 0.2), (0.0, 0.2)),
+        ),
+    )
+    identity = check_fdm_leaf_mass_identity(
+        aperture, _provenance(tmp_path, mass=5.625 / 16**3),
+        coarse_cells_per_box=16,
+    )
+    result = reconstruct_fdm_aperture_centroids(aperture, identity)
+    assert result.status == "aperture_centroid_candidates_pending_core_validation"
+    assert result.centroid_candidates_box[0] == pytest.approx((0.33, 0.25, 0.25))
+    assert result.centroid_candidates_box[1] == pytest.approx((0.67, 0.75, 0.75))
+    assert result.rms_radius_box == pytest.approx((0.1166190379, 0.1166190379))
+    assert result.separation_box is not None
+    underresolved = check_fdm_leaf_mass_identity(
+        aperture, _provenance(tmp_path), coarse_cells_per_box=1,
+    )
+    assert reconstruct_fdm_aperture_centroids(aperture, underresolved).status == "censored_aperture_centroids"
+    inconsistent = replace(
+        aperture[0], aperture_density_sum_by_centre_level=((9.0, 0.0), (10.0, 0.0))
+    )
+    with pytest.raises(ValueError, match="disagrees with radial shells"):
+        reconstruct_fdm_aperture_centroids((inconsistent, aperture[1]), identity)
