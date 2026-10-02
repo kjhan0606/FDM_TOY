@@ -202,6 +202,12 @@ combine overlapping intervals, or create a coalescence time.
 - Missing data are not interpreted as zero force or zero delay.
 - Inner live-wave results that lack accepted support remain `uncalibrated` or
   `censored`.
+- The static-host `KpcInspiralModel` accepts only the analytic-unresolved FDM
+  closure.  `live_resolved` suppresses analytic drag in the standalone force
+  evaluator, but the static integrator has no source-bound wake acceleration;
+  constructing that model now fails instead of silently evolving with zero
+  FDM wake force.  Resolved-wave or calibrated-response tracks must enter
+  through their own verified interface.
 
 ### 1. Outer-halo data contract — complete in the toy repository
 
@@ -842,7 +848,9 @@ the build date, patch directory, Git remote/branch, and commit, but not
 compiler defines or a hash of the executed binary.  The Makefile default
 `USE_FFTW=1` is therefore not proof of the branch used by a particular
 output.  A future run needs a build-flag/binary identity bound to its output
-before the FFT candidate can be promoted.
+before the FFT candidate can be promoted.  The existing outer-writer
+integration attestation hashes the binary used for its *test* run, but does
+not establish that the same binary produced each dual-soliton sample.
 
 The reader checks every rank and level, then compares leaf counts, complete
 stencil counts, mass, and all three current components with the raw writer.

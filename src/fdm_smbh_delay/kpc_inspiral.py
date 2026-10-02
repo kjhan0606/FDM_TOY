@@ -70,6 +70,11 @@ class KpcInspiralModel:
             raise ValueError("stellar background and friction controls must be paired")
         if (self.gas_background is None) != (self.gas_friction is None):
             raise ValueError("gas background and friction controls must be paired")
+        if self.fdm_background is not None and self.fdm_background.mode == "live_resolved":
+            raise ValueError(
+                "static-host kpc integration has no source-bound live FDM wake force; "
+                "a resolved-wave run must be evaluated outside this analytic integrator"
+            )
 
 
 @dataclass(frozen=True)

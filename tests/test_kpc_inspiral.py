@@ -10,9 +10,11 @@ from fdm_smbh_delay.constants import G_INTERNAL
 from fdm_smbh_delay.galaxy_environment import (
     CompositePotential,
     DehnenProfile,
+    FDMBackground,
     NuclearEnvelope,
     StellarBackground,
 )
+from fdm_smbh_delay.soliton import SchiveSoliton
 from fdm_smbh_delay.kpc_inspiral import (
     KpcInspiralModel,
     KpcIntegrationConfig,
@@ -36,6 +38,22 @@ def _point_mass_model(*, envelope=None) -> KpcInspiralModel:
         secondary_bh_mass_msun=1.0e8,
         nuclear_envelope=envelope,
     )
+
+
+def test_static_kpc_model_refuses_unprovided_live_fdm_wake_force() -> None:
+    live = FDMBackground(
+        soliton=SchiveSoliton.from_mass(1.0e9, 100.0, "total_profile"),
+        particle_mass_ev=1.0e-21,
+        alpha_df=0.341,
+        bulk_velocity_pc_myr=np.zeros(3),
+        mode="live_resolved",
+    )
+    with pytest.raises(ValueError, match="no source-bound live FDM wake force"):
+        KpcInspiralModel(
+            host_potential=CompositePotential((), central_point_mass_msun=1.0e10),
+            secondary_bh_mass_msun=1.0e8,
+            fdm_background=live,
+        )
 
 
 def _circular_state(model: KpcInspiralModel, radius: float = 100.0):

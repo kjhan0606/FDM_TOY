@@ -283,6 +283,14 @@ def fdm_dynamical_friction(
 ) -> FDMFrictionEvaluation:
     """Apply analytic FDM drag only when a live wake is not resolved."""
 
+    position = np.asarray(position_pc, dtype=float)
+    velocity = np.asarray(velocity_pc_myr, dtype=float)
+    if (
+        not np.isfinite(perturber_mass_msun) or perturber_mass_msun <= 0.0
+        or position.shape != (3,) or velocity.shape != (3,)
+        or np.any(~np.isfinite(position)) or np.any(~np.isfinite(velocity))
+    ):
+        raise ValueError("FDM friction position, velocity, and mass must be finite and valid")
     if background.mode == "live_resolved":
         return FDMFrictionEvaluation(
             acceleration_pc_myr2=np.zeros(3),
@@ -290,11 +298,11 @@ def fdm_dynamical_friction(
             live_wake_resolved=True,
             drag=None,
         )
-    radius = float(np.linalg.norm(position_pc))
+    radius = float(np.linalg.norm(position))
     drag = evaluate_drag(
         mass_msun=perturber_mass_msun,
-        position_pc=np.asarray(position_pc, dtype=float),
-        velocity_pc_myr=np.asarray(velocity_pc_myr, dtype=float),
+        position_pc=position,
+        velocity_pc_myr=velocity,
         separation_pc=radius,
         soliton=background.soliton,
         m_fdm_ev=background.particle_mass_ev,

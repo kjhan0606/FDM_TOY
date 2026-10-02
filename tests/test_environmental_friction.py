@@ -146,3 +146,10 @@ def test_live_fdm_wake_disables_analytic_drag() -> None:
     assert np.allclose(live.acceleration_pc_myr2, 0.0)
     assert analytic.analytic_applied
     assert analytic.acceleration_pc_myr2 @ np.array([0.0, 100.0, 0.0]) < 0.0
+    with pytest.raises(ValueError, match="finite and valid"):
+        fdm_dynamical_friction(
+            perturber_mass_msun=1.0e8,
+            position_pc=np.array([np.nan, 0.0, 0.0]),
+            velocity_pc_myr=np.array([0.0, 100.0, 0.0]),
+            background=FDMBackground(**common, mode="live_resolved"),
+        )
