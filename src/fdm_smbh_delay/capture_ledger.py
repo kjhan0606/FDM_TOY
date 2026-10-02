@@ -117,6 +117,125 @@ def _boolean(record: dict[str, Any], key: str) -> bool:
     return value
 
 
+def _close_code(actual: float, expected: float) -> bool:
+    return bool(np.isclose(actual, expected, rtol=2.0e-12, atol=1.0e-14))
+
+
+def _minimum_image_code(delta: np.ndarray, boxlen_code: float) -> np.ndarray:
+    # Match the Fortran writer at the exactly half-box tie as well.
+    result = delta.copy()
+    result[result > 0.5 * boxlen_code] -= boxlen_code
+    result[result < -0.5 * boxlen_code] += boxlen_code
+    return result
+
+
+def _validate_native_conservation(
+    uid: str,
+    begin: dict[str, Any],
+    member_rows: list[dict[str, Any]],
+    pair_rows: list[dict[str, Any]],
+) -> None:
+    """Independently check full native writer diagnostics when present.
+
+    Minimal legacy/import fixtures lack these fields.  A record that begins
+    claiming native conservation diagnostics must provide the entire set;
+    partial native records cannot pass as independently checked events.
+    """
+
+    event_fields = (
+        "factG_code", "total_mass_code", "com_position_code",
+        "com_velocity_code", "max_pair_separation_code",
+    )
+    if not any(field in begin for field in event_fields):
+        return
+    if any(field not in begin for field in event_fields):
+        raise CaptureLedgerError(f"{uid}: incomplete native event conservation diagnostics")
+    pair_fields = (
+        "delta_position_code", "separation_code", "delta_velocity_code",
+        "relative_speed_code", "reduced_mass_code", "relative_kinetic_code",
+        "newtonian_potential_1overr_code", "two_body_specific_energy_code",
+        "specific_angular_momentum_code", "relative_angular_momentum_code",
+        "legacy_binding_proxy_1overr2_code",
+    )
+    if any(any(field not in row for field in pair_fields) for row in pair_rows):
+        raise CaptureLedgerError(f"{uid}: incomplete native pair conservation diagnostics")
+
+    box = _finite_float(begin, "boxlen", positive=True)
+    fact_g = _finite_float(begin, "factG_code", positive=True)
+    masses = np.array([_finite_float(row, "mass_code", positive=True) for row in member_rows])
+    positions = np.array([_vector(row, "position_code") for row in member_rows])
+    velocities = np.array([_vector(row, "velocity_code") for row in member_rows])
+    total_mass = float(np.sum(masses))
+    if not _close_code(_finite_float(begin, "total_mass_code"), total_mass):
+        raise CaptureLedgerError(f"{uid}: native total-mass conservation failed")
+    offsets = np.array([_minimum_image_code(pos - positions[0], box) for pos in positions])
+    com_position = np.mod(positions[0] + np.sum(masses[:, None] * offsets, axis=0) / total_mass, box)
+    com_velocity = np.sum(masses[:, None] * velocities, axis=0) / total_mass
+    if not np.allclose(_vector(begin, "com_position_code"), com_position, rtol=2.0e-12, atol=1.0e-14):
+        raise CaptureLedgerError(f"{uid}: native centre-of-mass position conservation failed")
+    if not np.allclose(_vector(begin, "com_velocity_code"), com_velocity, rtol=2.0e-12, atol=1.0e-14):
+        raise CaptureLedgerError(f"{uid}: native centre-of-mass velocity conservation failed")
+
+    by_id = {int(row["sink_id"]): (mass, pos, vel)
+             for row, mass, pos, vel in zip(member_rows, masses, positions, velocities)}
+    max_separation = 0.0
+    for pair in pair_rows:
+        id1, id2 = int(pair["sink_id_1"]), int(pair["sink_id_2"])
+        mass1, pos1, vel1 = by_id[id1]
+        mass2, pos2, vel2 = by_id[id2]
+        dr = _minimum_image_code(pos2 - pos1, box)
+        dv = vel2 - vel1
+        separation = float(np.linalg.norm(dr))
+        speed = float(np.linalg.norm(dv))
+        reduced_mass = mass1 * mass2 / (mass1 + mass2)
+        kinetic = 0.5 * reduced_mass * speed**2
+        specific_h = np.cross(dr, dv)
+        max_separation = max(max_separation, separation)
+        vector_checks = (
+            ("delta_position_code", dr),
+            ("delta_velocity_code", dv),
+            ("specific_angular_momentum_code", specific_h),
+            ("relative_angular_momentum_code", reduced_mass * specific_h),
+        )
+        scalar_checks = (
+            ("separation_code", separation),
+            ("relative_speed_code", speed),
+            ("reduced_mass_code", reduced_mass),
+            ("relative_kinetic_code", kinetic),
+        )
+        for field, expected in vector_checks:
+            if not np.allclose(_vector(pair, field), expected, rtol=2.0e-12, atol=1.0e-14):
+                raise CaptureLedgerError(f"{uid}: native pair {id1}-{id2} {field} invariant failed")
+        for field, expected in scalar_checks:
+            if not _close_code(_finite_float(pair, field), expected):
+                raise CaptureLedgerError(f"{uid}: native pair {id1}-{id2} {field} invariant failed")
+        if separation <= np.finfo(float).tiny:
+            if any(pair[field] is not None for field in (
+                "newtonian_potential_1overr_code", "two_body_specific_energy_code",
+                "legacy_binding_proxy_1overr2_code",
+            )):
+                raise CaptureLedgerError(f"{uid}: singular native pair energies must be null")
+            if _boolean(pair, "two_body_bound") or _boolean(pair, "legacy_pair_bound"):
+                raise CaptureLedgerError(f"{uid}: singular native pair cannot be bound")
+            continue
+        potential = -fact_g * mass1 * mass2 / separation
+        energy = 0.5 * speed**2 - fact_g * (mass1 + mass2) / separation
+        legacy_proxy = fact_g * mass1 * mass2 / separation**2
+        for field, expected in (
+            ("newtonian_potential_1overr_code", potential),
+            ("two_body_specific_energy_code", energy),
+            ("legacy_binding_proxy_1overr2_code", legacy_proxy),
+        ):
+            if not _close_code(_finite_float(pair, field), expected):
+                raise CaptureLedgerError(f"{uid}: native pair {id1}-{id2} {field} invariant failed")
+        if _boolean(pair, "two_body_bound") != (energy < 0.0):
+            raise CaptureLedgerError(f"{uid}: native pair {id1}-{id2} two-body bound invariant failed")
+        if _boolean(pair, "legacy_pair_bound") != (kinetic < legacy_proxy):
+            raise CaptureLedgerError(f"{uid}: native pair {id1}-{id2} legacy bound invariant failed")
+    if not _close_code(_finite_float(begin, "max_pair_separation_code"), max_separation):
+        raise CaptureLedgerError(f"{uid}: native maximum pair separation invariant failed")
+
+
 def _event_digest(rows: list[dict[str, Any]]) -> str:
     canonical = "\n".join(
         json.dumps(row, sort_keys=True, separators=(",", ":")) for row in rows
@@ -268,6 +387,8 @@ def _build_event(
         )
     if len(seen_pairs) != expected_pairs:
         raise CaptureLedgerError(f"{uid}: pair coverage is incomplete")
+
+    _validate_native_conservation(uid, begin, member_rows, pair_rows)
 
     rows = block.rows + [end]
     return CaptureEvent(

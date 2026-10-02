@@ -90,6 +90,43 @@ def _write_rows(path, rows: list[dict]) -> None:
     )
 
 
+def _native_binary_rows() -> list[dict]:
+    rows = _binary_rows()
+    begin, first, second, pair, _ = rows
+    mass1 = mass2 = 1.0e8
+    position1 = np.asarray(first["position_code"])
+    position2 = np.asarray(second["position_code"])
+    velocity1 = np.asarray(first["velocity_code"])
+    velocity2 = np.asarray(second["velocity_code"])
+    dr = position2 - position1
+    dv = velocity2 - velocity1
+    radius = float(np.linalg.norm(dr))
+    speed = float(np.linalg.norm(dv))
+    reduced_mass = mass1 * mass2 / (mass1 + mass2)
+    specific_h = np.cross(dr, dv)
+    begin.update(
+        factG_code=G_INTERNAL,
+        total_mass_code=mass1 + mass2,
+        com_position_code=[0.0, 0.0, 0.0],
+        com_velocity_code=[0.0, 0.0, 0.0],
+        max_pair_separation_code=radius,
+    )
+    pair.update(
+        delta_position_code=dr.tolist(),
+        separation_code=radius,
+        delta_velocity_code=dv.tolist(),
+        relative_speed_code=speed,
+        reduced_mass_code=reduced_mass,
+        relative_kinetic_code=0.5 * reduced_mass * speed**2,
+        newtonian_potential_1overr_code=-G_INTERNAL * mass1 * mass2 / radius,
+        two_body_specific_energy_code=0.5 * speed**2 - G_INTERNAL * (mass1 + mass2) / radius,
+        specific_angular_momentum_code=specific_h.tolist(),
+        relative_angular_momentum_code=(reduced_mass * specific_h).tolist(),
+        legacy_binding_proxy_1overr2_code=G_INTERNAL * mass1 * mass2 / radius**2,
+    )
+    return rows
+
+
 def test_capture_ledger_converts_code_units_and_recovers_binary(tmp_path) -> None:
     path = tmp_path / "ledger.jsonl"
     _write_rows(path, _binary_rows())
@@ -225,3 +262,41 @@ def test_capture_ledger_merge_flag_uses_periodic_minimum_image(tmp_path) -> None
     event = read_capture_ledger(path).events[0]
     assert event.pairs[0].within_numerical_merge_radius
     assert event.pairs[0].orbital_state.separation_pc == pytest.approx(1.0)
+
+
+def test_complete_native_conservation_diagnostics_are_checked(tmp_path) -> None:
+    rows = _native_binary_rows()
+    path = tmp_path / "ledger.jsonl"
+    _write_rows(path, rows)
+    assert read_capture_ledger(path).events[0].binary_orbital_state is not None
+
+
+@pytest.mark.parametrize(("row_index", "field", "replacement", "expected"), [
+    (0, "total_mass_code", 3.0e8, "total-mass"),
+    (0, "com_position_code", [1.0, 0.0, 0.0], "centre-of-mass position"),
+    (0, "com_velocity_code", [1.0, 0.0, 0.0], "centre-of-mass velocity"),
+    (0, "max_pair_separation_code", 2.0, "maximum pair separation"),
+    (-2, "delta_position_code", [2.0, 0.0, 0.0], "delta_position_code"),
+    (-2, "relative_kinetic_code", 0.0, "relative_kinetic_code"),
+    (-2, "specific_angular_momentum_code", [0.0, 0.0, 0.0], "specific_angular_momentum_code"),
+    (-2, "newtonian_potential_1overr_code", -1.0, "newtonian_potential_1overr_code"),
+    (-2, "legacy_binding_proxy_1overr2_code", 0.0, "legacy_binding_proxy_1overr2_code"),
+])
+def test_capture_ledger_rejects_corrupt_native_conservation(
+    tmp_path, row_index: int, field: str, replacement: object, expected: str
+) -> None:
+    rows = _native_binary_rows()
+    rows[row_index][field] = replacement
+    path = tmp_path / "ledger.jsonl"
+    _write_rows(path, rows)
+    with pytest.raises(CaptureLedgerError, match=expected):
+        read_capture_ledger(path)
+
+
+def test_capture_ledger_rejects_partial_native_diagnostics(tmp_path) -> None:
+    rows = _native_binary_rows()
+    del rows[-2]["relative_kinetic_code"]
+    path = tmp_path / "ledger.jsonl"
+    _write_rows(path, rows)
+    with pytest.raises(CaptureLedgerError, match="incomplete native pair"):
+        read_capture_ledger(path)

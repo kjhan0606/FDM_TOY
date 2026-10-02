@@ -39,6 +39,12 @@ source-specific energy is present, its sign must also agree with the recorded
 two-body binding flag.  A contradictory event is rejected before it can
 seed post-capture dynamics; a completed ledger transaction alone is not a
 physical-coalescence claim.
+For full native writer records, the reader additionally recomputes total
+sink mass, periodic centre of mass and velocity, maximum pair separation,
+relative kinetic and potential terms, and pair angular momentum from the
+member rows.  A partial native diagnostic block is rejected.  Older sparse
+import records without that block remain readable, but do not acquire the
+full native-conservation verification merely by being parseable.
 
 No production FDM namelist and pre-compaction event record are present in this
 repository. Consequently, the interface and calculation are fixed, but a
