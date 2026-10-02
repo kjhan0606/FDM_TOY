@@ -61,6 +61,7 @@ class CaptureEvent:
     first_line: int
     last_line: int
     multiple_members_preserved: bool | None = None
+    native_conservation_verified: bool = False
 
     @property
     def binary_orbital_state(self) -> PairOrbitalState | None:
@@ -134,7 +135,7 @@ def _validate_native_conservation(
     begin: dict[str, Any],
     member_rows: list[dict[str, Any]],
     pair_rows: list[dict[str, Any]],
-) -> None:
+) -> bool:
     """Independently check full native writer diagnostics when present.
 
     Minimal legacy/import fixtures lack these fields.  A record that begins
@@ -147,7 +148,7 @@ def _validate_native_conservation(
         "com_velocity_code", "max_pair_separation_code",
     )
     if not any(field in begin for field in event_fields):
-        return
+        return False
     if any(field not in begin for field in event_fields):
         raise CaptureLedgerError(f"{uid}: incomplete native event conservation diagnostics")
     pair_fields = (
@@ -234,6 +235,7 @@ def _validate_native_conservation(
             raise CaptureLedgerError(f"{uid}: native pair {id1}-{id2} legacy bound invariant failed")
     if not _close_code(_finite_float(begin, "max_pair_separation_code"), max_separation):
         raise CaptureLedgerError(f"{uid}: native maximum pair separation invariant failed")
+    return True
 
 
 def _event_digest(rows: list[dict[str, Any]]) -> str:
@@ -388,7 +390,9 @@ def _build_event(
     if len(seen_pairs) != expected_pairs:
         raise CaptureLedgerError(f"{uid}: pair coverage is incomplete")
 
-    _validate_native_conservation(uid, begin, member_rows, pair_rows)
+    native_conservation_verified = _validate_native_conservation(
+        uid, begin, member_rows, pair_rows
+    )
 
     rows = block.rows + [end]
     return CaptureEvent(
@@ -411,6 +415,7 @@ def _build_event(
         first_line=block.first_line,
         last_line=last_line,
         multiple_members_preserved=multiple_preserved,
+        native_conservation_verified=native_conservation_verified,
     )
 
 

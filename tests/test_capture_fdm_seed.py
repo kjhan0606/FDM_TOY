@@ -111,6 +111,33 @@ def _rows() -> list[dict[str, object]]:
             },
         )
     )
+    first, second, pair = rows[1], rows[2], rows[3]
+    dr = np.asarray(second["position_code"]) - np.asarray(first["position_code"])
+    dv = np.asarray(second["velocity_code"]) - np.asarray(first["velocity_code"])
+    separation = float(np.linalg.norm(dr))
+    speed = float(np.linalg.norm(dv))
+    reduced_mass = 0.5e8
+    h = np.cross(dr, dv)
+    rows[0].update(
+        factG_code=G_INTERNAL,
+        total_mass_code=2.0e8,
+        com_position_code=[0.0, 0.0, 0.0],
+        com_velocity_code=[0.0, 0.0, 0.0],
+        max_pair_separation_code=separation,
+    )
+    pair.update(
+        delta_position_code=dr.tolist(),
+        separation_code=separation,
+        delta_velocity_code=dv.tolist(),
+        relative_speed_code=speed,
+        reduced_mass_code=reduced_mass,
+        relative_kinetic_code=0.5 * reduced_mass * speed**2,
+        newtonian_potential_1overr_code=-G_INTERNAL * 1.0e16 / separation,
+        two_body_specific_energy_code=0.5 * speed**2 - G_INTERNAL * 2.0e8 / separation,
+        specific_angular_momentum_code=h.tolist(),
+        relative_angular_momentum_code=(reduced_mass * h).tolist(),
+        legacy_binding_proxy_1overr2_code=G_INTERNAL * 1.0e16 / separation**2,
+    )
     return rows
 
 
@@ -187,6 +214,7 @@ def test_capture_binary_derives_from_ledger_kinematics_and_explicit_mass_project
     tmp_path: Path,
 ) -> None:
     event, _ = _event(tmp_path)
+    assert event.native_conservation_verified
     derived = derive_dual_smbh_sink_pair_from_capture(
         event,
         frame=_frame(),
@@ -203,6 +231,32 @@ def test_capture_binary_derives_from_ledger_kinematics_and_explicit_mass_project
     assert "sink_dark_matter_fraction" not in _rows()[1]
     assert derived.as_dict()["requirements"]["soliton_components_required"] == 2
     assert derived.as_dict()["mass_projection"]["source_case_id"] == "hr5-smbh-catalog-case"
+
+
+def test_capture_seed_rejects_sparse_legacy_ledger_without_native_conservation(
+    tmp_path: Path,
+) -> None:
+    rows = _rows()
+    for field in (
+        "factG_code", "total_mass_code", "com_position_code",
+        "com_velocity_code", "max_pair_separation_code",
+    ):
+        rows[0].pop(field)
+    for field in (
+        "delta_position_code", "separation_code", "delta_velocity_code",
+        "relative_speed_code", "reduced_mass_code", "relative_kinetic_code",
+        "newtonian_potential_1overr_code", "two_body_specific_energy_code",
+        "specific_angular_momentum_code", "relative_angular_momentum_code",
+        "legacy_binding_proxy_1overr2_code",
+    ):
+        rows[3].pop(field)
+    event, _ = _event(tmp_path, rows)
+    assert not event.native_conservation_verified
+    with pytest.raises(ValueError, match="verified native ledger conservation"):
+        derive_dual_smbh_sink_pair_from_capture(
+            event, frame=_frame(), assignment=_assignment(),
+            mass_projection=_projection(),
+        )
 
 
 def test_capture_pair_rejects_mass_projection_for_another_event_or_member_order(

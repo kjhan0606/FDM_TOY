@@ -44,7 +44,10 @@ sink mass, periodic centre of mass and velocity, maximum pair separation,
 relative kinetic and potential terms, and pair angular momentum from the
 member rows.  A partial native diagnostic block is rejected.  Older sparse
 import records without that block remain readable, but do not acquire the
-full native-conservation verification merely by being parseable.
+full native-conservation verification merely by being parseable.  Transfer
+of a capture binary into a pure-FDM dual-SMBH seed requires the verified
+native block; a sparse legacy record is censored at that seed boundary even
+if its orbital elements can be inspected.
 
 No production FDM namelist and pre-compaction event record are present in this
 repository. Consequently, the interface and calculation are fixed, but a

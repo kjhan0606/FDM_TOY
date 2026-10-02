@@ -16,6 +16,7 @@ from fdm_smbh_delay.capture_fdm_seed import (
     materialize_capture_derived_sink_pair_record,
 )
 from fdm_smbh_delay.capture_ledger import read_capture_ledger
+from fdm_smbh_delay.constants import G_INTERNAL
 from fdm_smbh_delay.capture_seed_binding import (
     assess_capture_seed_materialization_binding,
 )
@@ -120,6 +121,26 @@ def _capture_event(tmp_path: Path):
             "complete": True,
         },
     ]
+    rows[0].update(
+        factG_code=G_INTERNAL,
+        total_mass_code=1.5e8,
+        com_position_code=[1.0 / 3.0, 0.0, 0.0],
+        com_velocity_code=[0.0, 0.0, 0.0],
+        max_pair_separation_code=1.0,
+    )
+    rows[3].update(
+        delta_position_code=[1.0, 0.0, 0.0],
+        separation_code=1.0,
+        delta_velocity_code=[0.0, 0.0, 0.0],
+        relative_speed_code=0.0,
+        reduced_mass_code=1.0e8 / 3.0,
+        relative_kinetic_code=0.0,
+        newtonian_potential_1overr_code=-G_INTERNAL * 5.0e15,
+        two_body_specific_energy_code=-G_INTERNAL * 1.5e8,
+        specific_angular_momentum_code=[0.0, 0.0, 0.0],
+        relative_angular_momentum_code=[0.0, 0.0, 0.0],
+        legacy_binding_proxy_1overr2_code=G_INTERNAL * 5.0e15,
+    )
     path = tmp_path / "capture.jsonl"
     path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
     return read_capture_ledger(path).events[0], path

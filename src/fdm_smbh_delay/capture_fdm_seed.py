@@ -362,6 +362,8 @@ def _validate_binary_event(
     state = event.binary_orbital_state
     if event.classification != "BINARY" or state is None:
         raise ValueError("only a complete unambiguous BINARY capture can seed a dual-SMBH zoom")
+    if not event.native_conservation_verified:
+        raise ValueError("capture-to-FDM seed requires verified native ledger conservation")
     if set(assignment.member_ids) != set(state.member_ids):
         raise ValueError("seed assignment member IDs do not match the capture binary")
     pair = event.pairs[0]
