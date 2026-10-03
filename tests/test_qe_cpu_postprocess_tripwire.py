@@ -283,6 +283,7 @@ def test_steps_are_sequential_single_threaded_bounded_and_response_is_chunked(
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(tripwire, "_stage_output_valid", output_valid)
+    monkeypatch.setattr(tripwire, "_wave_checkpoint_samples", lambda _row: response_calls)
     monkeypatch.setattr(tripwire, "validate_torch_summary", lambda _row: {})
     runner = tripwire.QeCpuTripwire(
         rows=[row],
@@ -346,6 +347,7 @@ def test_crash_resume_skips_semantically_complete_stages(tmp_path: Path, monkeyp
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(tripwire, "_stage_output_valid", output_valid)
+    monkeypatch.setattr(tripwire, "_wave_checkpoint_samples", lambda _row: 0)
     monkeypatch.setattr(tripwire, "validate_torch_summary", lambda _row: {})
     runner = tripwire.QeCpuTripwire(
         rows=[row],
@@ -617,6 +619,7 @@ def test_one_work_unit_resumes_in_order_and_runs_at_most_one_child(
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(tripwire, "validate_torch_summary", lambda _row: {})
+    monkeypatch.setattr(tripwire, "_wave_checkpoint_samples", lambda _row: response_calls)
     monkeypatch.setattr(
         tripwire, "_stage_output_valid",
         lambda _row, stage: stage in completed_stages,
@@ -661,3 +664,35 @@ def test_one_work_unit_does_not_wait_for_torch(tmp_path: Path) -> None:
     assert runner.run_one_unit() == tripwire.EX_TEMPFAIL
     status = json.loads((tmp_path / "logs" / "qe_cpu_tripwire_status.json").read_text())
     assert status["status"] == "not_ready"
+
+
+def test_wave_response_zero_exit_without_new_checkpoint_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    row = _row(tmp_path, "case_n256", resolution=256)
+    monkeypatch.setattr(tripwire, "_stage_output_valid", lambda *_args: False)
+    monkeypatch.setattr(tripwire, "_wave_checkpoint_samples", lambda _row: 0)
+    runner = tripwire.QeCpuTripwire(
+        rows=[row], log_root=tmp_path / "logs", guard_status_paths=(),
+        cadence_seconds=30.0, timeout_seconds=None,
+        command_runner=lambda command, **_kwargs: subprocess.CompletedProcess(command, 0),
+        available_memory=lambda: 10**15,
+    )
+    with pytest.raises(tripwire.StageFailed, match="no single-sample progress"):
+        runner._run_wave_response(row, max_invocations=1)
+    marker = json.loads(runner._marker(row, "wave_response").read_text())
+    assert marker["status"] == "failed"
+
+
+def test_wave_checkpoint_count_tolerates_one_table_lead_only(tmp_path: Path) -> None:
+    row = _row(tmp_path, "case_n256", resolution=256)
+    run = row.torch_directory
+    run.mkdir(parents=True)
+    response = run / "wave_response_timeseries.partial.csv"
+    radial = run / "wave_radial_profiles.partial.csv"
+    response.write_text("sample\n0\n1\n", encoding="utf-8")
+    radial.write_text("sample\n" + "0\n" * 64, encoding="utf-8")
+    assert tripwire._wave_checkpoint_samples(row) == 1
+    response.write_text("sample\n0\n1\n2\n", encoding="utf-8")
+    with pytest.raises(tripwire.StageFailed, match="sizes disagree"):
+        tripwire._wave_checkpoint_samples(row)

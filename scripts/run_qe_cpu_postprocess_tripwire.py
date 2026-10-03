@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 from contextlib import contextmanager
 import fcntl
 from functools import partial
@@ -255,6 +256,31 @@ def _nonempty(path: Path) -> bool:
         return False
 
 
+def _wave_checkpoint_samples(row: RunPlanRow) -> int:
+    """Count complete paired checkpoint samples, including a torn-write lead."""
+
+    run = row.torch_directory.resolve()
+    response = run / "wave_response_timeseries.partial.csv"
+    radial = run / "wave_radial_profiles.partial.csv"
+    if not response.exists() and not radial.exists():
+        return 0
+    if not response.is_file() or not radial.is_file():
+        raise StageFailed(f"{row.run_id} wave-response checkpoint pair is incomplete")
+
+    def count(path: Path) -> int:
+        with path.open(newline="", encoding="utf-8") as stream:
+            return sum(1 for _ in csv.DictReader(stream))
+
+    response_count = count(response)
+    radial_count, remainder = divmod(count(radial), 64)
+    if remainder or abs(response_count - radial_count) > 1:
+        raise StageFailed(f"{row.run_id} wave-response checkpoint sizes disagree")
+    completed = min(response_count, radial_count)
+    if completed > _expected_saved_3d_states(row):
+        raise StageFailed(f"{row.run_id} wave-response checkpoint exceeds saved states")
+    return completed
+
+
 def _stage_output_valid(row: RunPlanRow, stage: str) -> bool:
     run = row.torch_directory.resolve()
     try:
@@ -488,6 +514,7 @@ class QeCpuTripwire:
                     row, stage, status="complete", exit_code=0, command=command
                 )
                 return True
+            before_samples = _wave_checkpoint_samples(row)
             limit = ADDRESS_SPACE_LIMIT_BYTES[row.resolution]
             available = self.available_memory()
             if available < limit:
@@ -532,6 +559,16 @@ class QeCpuTripwire:
                     f"{row.run_id} wave response exited with {completed.returncode}",
                     completed.returncode or EX_SOFTWARE,
                 )
+            if not _stage_output_valid(row, stage):
+                after_samples = _wave_checkpoint_samples(row)
+                if after_samples != before_samples + 1:
+                    self._write_marker(
+                        row, stage, status="failed", exit_code=EX_SOFTWARE,
+                        command=command,
+                    )
+                    raise StageFailed(
+                        f"{row.run_id} wave response made no single-sample progress"
+                    )
         if _stage_output_valid(row, stage):
             self._write_marker(
                 row, stage, status="complete", exit_code=0, command=command
