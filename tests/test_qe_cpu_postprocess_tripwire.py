@@ -531,6 +531,12 @@ def test_registered_followup_selects_one_run_in_dry_run(
     assert "run_id=qe_q100_e000_a020_n384" not in output
     assert tripwire.ADDRESS_SPACE_LIMIT_BYTES[256] == 16 * 1024**3
     assert tripwire.ADDRESS_SPACE_LIMIT_BYTES[384] == 48 * 1024**3
+    monkeypatch.setattr(sys, "argv", [*sys.argv, "--one-work-unit"])
+    assert tripwire.main() == 0
+    bounded = capsys.readouterr().out
+    assert "check run_id=qe_q100_e000_a020_n256" in bounded
+    assert "lock/one-work-unit/release" in bounded
+    assert "wait run_id=" not in bounded
 
 
 def test_registered_postprocess_refuses_login_node_and_unbounded_wait(

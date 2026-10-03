@@ -835,8 +835,10 @@ def main() -> int:
     if arguments.dry_run:
         print(f"shared_lock={FINALIZER_LOCK}")
         for row in selected:
-            print(f"wait run_id={row.run_id} summary={row.torch_directory / 'torch_run_summary.json'}")
-            print(f"lock/process/release run_id={row.run_id} resolution=n{row.resolution}")
+            action = "check" if arguments.one_work_unit else "wait"
+            print(f"{action} run_id={row.run_id} summary={row.torch_directory / 'torch_run_summary.json'}")
+            work = "one-work-unit" if arguments.one_work_unit else "process"
+            print(f"lock/{work}/release run_id={row.run_id} resolution=n{row.resolution}")
             commands = QeCpuTripwire(
                 rows=[row],
                 log_root=log_root,
