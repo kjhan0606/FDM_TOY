@@ -503,6 +503,7 @@ def test_qe_box_control_compares_same_fixed_bin_without_releasing(
      ("wave_buffer_lifetime", "release_previous_state_before_fft_v1"),
      ("wave_density_layout", "real_imag_addcmul_v1"),
      ("compact_potential_layout", "x_slab32_inplace_rsqrt_v1"),
+     ("potential_phase_layout", "complex_real_imag_inplace_trig_v1"),
      ("backend", "pytorch_cuda")],
 )
 def test_qe_box_control_rejects_mixed_solver_settings(
@@ -531,6 +532,7 @@ def test_qe_box_control_accepts_matching_separable_solver_layout(
         metadata["wave_buffer_lifetime"] = "release_previous_state_before_fft_v1"
         metadata["wave_density_layout"] = "real_imag_addcmul_v1"
         metadata["compact_potential_layout"] = "x_slab32_inplace_rsqrt_v1"
+        metadata["potential_phase_layout"] = "complex_real_imag_inplace_trig_v1"
         path.write_text(json.dumps(metadata))
     result = assess_qe_box_control(
         CalibrationSource("test", pair), CalibrationSource("test", box)

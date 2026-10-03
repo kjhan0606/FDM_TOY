@@ -6,6 +6,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from fdm_smbh_delay.torch_wave import (
+    apply_potential_half_kick_in_place,
     advance_binary_rk4,
     apply_kinetic_phase_in_place,
     periodic_poisson_torch,
@@ -33,6 +34,27 @@ def test_wave_density_matches_complex_magnitude_without_mutating_input() -> None
     assert measured.data_ptr() != original.data_ptr()
     with pytest.raises(ValueError, match="complex dtype"):
         wave_density(torch.ones(3, dtype=torch.float64))
+
+
+def test_potential_half_kick_matches_complex_exponential_and_preserves_norm() -> None:
+    rng = np.random.default_rng(2827)
+    initial = torch.as_tensor(
+        rng.normal(size=(8, 8, 8)) + 1j * rng.normal(size=(8, 8, 8)),
+        dtype=torch.complex128,
+    )
+    potential = torch.as_tensor(rng.normal(size=(8, 8, 8)))
+    potential_before = potential.clone()
+    expected = initial * torch.exp(-0.5j * 0.003 * potential)
+    measured = initial.clone()
+    apply_potential_half_kick_in_place(measured, potential, 0.003)
+    torch.testing.assert_close(measured, expected, rtol=2e-15, atol=2e-15)
+    torch.testing.assert_close(potential, potential_before, rtol=0, atol=0)
+    torch.testing.assert_close(
+        torch.sum(measured.abs().square()), torch.sum(initial.abs().square()),
+        rtol=2e-15, atol=2e-15,
+    )
+    with pytest.raises(ValueError, match="incompatible"):
+        apply_potential_half_kick_in_place(measured, potential, -0.003)
 
 
 def test_separable_kinetic_phase_matches_cubic_reference_and_preserves_norm() -> None:

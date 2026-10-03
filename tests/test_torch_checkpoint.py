@@ -14,6 +14,7 @@ sys.path.insert(0, str(PROJECT / "scripts"))
 
 import run_torch_wave_case  # noqa: E402
 from fdm_smbh_delay.torch_wave import (  # noqa: E402
+    apply_potential_half_kick_in_place,
     apply_kinetic_phase_in_place,
     periodic_poisson_torch,
     spectral_grid,
@@ -47,12 +48,15 @@ def test_remaining_time_uses_only_steps_completed_since_resume() -> None:
 
 
 @pytest.mark.parametrize(
-    "field", ("wave_density_layout", "compact_potential_layout")
+    "field", (
+        "wave_density_layout", "compact_potential_layout", "potential_phase_layout",
+    )
 )
 def test_restart_rejects_missing_or_changed_numerical_layout(field: str) -> None:
     requested = {key: 1 for key in run_torch_wave_case._RESTART_METADATA_KEYS}
     requested["wave_density_layout"] = "real_imag_addcmul_v1"
     requested["compact_potential_layout"] = "x_slab32_inplace_rsqrt_v1"
+    requested["potential_phase_layout"] = "complex_real_imag_inplace_trig_v1"
     run_torch_wave_case._require_resume_metadata(dict(requested), requested)
     saved = dict(requested)
     del saved[field]
@@ -180,7 +184,7 @@ def test_self_gravitating_wave_restart_matches_uninterrupted_split_steps(
             potential = periodic_poisson_torch(
                 density, grid.poisson_inverse_wavenumber_squared
             )
-            wavefunction.mul_(torch.exp(-0.5j * 0.001 * potential))
+            apply_potential_half_kick_in_place(wavefunction, potential, 0.001)
             spectrum = torch.fft.fftn(wavefunction)
             apply_kinetic_phase_in_place(spectrum, grid.kinetic_axis_phase)
             wavefunction = torch.fft.ifftn(spectrum)
@@ -188,7 +192,7 @@ def test_self_gravitating_wave_restart_matches_uninterrupted_split_steps(
             potential = periodic_poisson_torch(
                 density, grid.poisson_inverse_wavenumber_squared
             )
-            wavefunction.mul_(torch.exp(-0.5j * 0.001 * potential))
+            apply_potential_half_kick_in_place(wavefunction, potential, 0.001)
         return wavefunction
 
     uninterrupted = advance(initial.clone(), 4)

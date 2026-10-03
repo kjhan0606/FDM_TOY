@@ -108,6 +108,29 @@ def wave_density(wavefunction: torch.Tensor) -> torch.Tensor:
     return density
 
 
+def apply_potential_half_kick_in_place(
+    wavefunction: torch.Tensor, potential: torch.Tensor, time_step: float
+) -> None:
+    """Apply the split-step half kick with one complex phase allocation."""
+
+    if (
+        wavefunction.dtype != torch.complex128
+        or potential.dtype != torch.float64
+        or wavefunction.shape != potential.shape
+        or wavefunction.device != potential.device
+        or not np.isfinite(time_step)
+        or time_step <= 0.0
+    ):
+        raise ValueError("wave, potential, and time step are incompatible")
+    phase = torch.empty_like(wavefunction)
+    phase.real.copy_(potential)
+    phase.real.mul_(-0.5 * time_step)
+    phase.imag.copy_(phase.real)
+    phase.real.cos_()
+    phase.imag.sin_()
+    wavefunction.mul_(phase)
+
+
 def periodic_poisson_torch(
     density: torch.Tensor, inverse_wavenumber_squared: torch.Tensor
 ) -> torch.Tensor:

@@ -19,6 +19,7 @@ from fdm_smbh_delay.qe_followup_design import (
     verify_qe_design_run_request,
 )
 from fdm_smbh_delay.torch_wave import (
+    apply_potential_half_kick_in_place,
     apply_kinetic_phase_in_place,
     advance_binary_rk4_patched,
     periodic_poisson_torch,
@@ -42,6 +43,7 @@ _RESTART_METADATA_KEYS = (
     "wave_buffer_lifetime",
     "wave_density_layout",
     "compact_potential_layout",
+    "potential_phase_layout",
 )
 
 
@@ -365,6 +367,7 @@ def main() -> int:
             "wave_buffer_lifetime": "release_previous_state_before_fft_v1",
             "wave_density_layout": "real_imag_addcmul_v1",
             "compact_potential_layout": "x_slab32_inplace_rsqrt_v1",
+            "potential_phase_layout": "complex_real_imag_inplace_trig_v1",
             "memory_stage_profile_enabled": args.profile_memory_stages,
             "checkpoint_every_saved_intervals": args.checkpoint_every_saves,
             "wave_acceleration_during_particle_rk4": (
@@ -503,9 +506,7 @@ def main() -> int:
                 save_index=0,
             )
     for step in range(start_step + 1, actual_steps + 1):
-        half_phase = torch.exp(-0.5j * time_step * total_potential)
-        wavefunction.mul_(half_phase)
-        del half_phase
+        apply_potential_half_kick_in_place(wavefunction, total_potential, time_step)
         profile_stage(f"step_{step:06d}_first_kick")
         # None of the previous density/potential buffers enters the FFT drift.
         # Release them before allocating its complex work arrays, rather than
@@ -551,7 +552,7 @@ def main() -> int:
         )
         profile_stage(f"step_{step:06d}_compact_potential")
         total_potential = wave_potential + compact_potential
-        wavefunction.mul_(torch.exp(-0.5j * time_step * total_potential))
+        apply_potential_half_kick_in_place(wavefunction, total_potential, time_step)
         profile_stage(f"step_{step:06d}_second_kick")
         if step % steps_per_save == 0:
             save_index = step // steps_per_save
