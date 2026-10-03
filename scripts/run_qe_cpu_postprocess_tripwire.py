@@ -679,7 +679,7 @@ def main() -> int:
         if (
             not arguments.dry_run
             and "SLURM_JOB_ID" not in os.environ
-            and socket.gethostname().split(".", maxsplit=1)[0] != "lageunha"
+            and socket.gethostname().split(".", maxsplit=1)[0].lower() != "lageunha"
         ):
             parser.error(
                 "registered q/e post-processing requires lageunha or a Slurm allocation"

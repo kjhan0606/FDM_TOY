@@ -545,7 +545,7 @@ def test_registered_postprocess_refuses_login_node_and_unbounded_wait(
         tripwire.main()
     assert error.value.code == 2
     monkeypatch.delenv("SLURM_JOB_ID", raising=False)
-    monkeypatch.setattr(tripwire.socket, "gethostname", lambda: "lageunha")
+    monkeypatch.setattr(tripwire.socket, "gethostname", lambda: "LagEunha")
     monkeypatch.setattr(
         sys, "argv", base + ["--wait-timeout-seconds", "120"]
     )
