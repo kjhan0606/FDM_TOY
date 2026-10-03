@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import replace
+import csv
+from dataclasses import asdict, replace
 
 import numpy as np
 import pytest
@@ -55,8 +56,16 @@ def _synthetic_kepler_mean(axis_pc: float, eccentricity: float) -> MeanSeparatio
 def _test_release(table: SubgridCalibrationTable, schema: int) -> SubgridCalibrationTable:
     """Mark a synthetic table as release-loaded within this test module only."""
 
+    from fdm_smbh_delay.subgrid_calibration import _RELEASE_PROVENANCE_TOKEN
+
     table.release_schema_version = schema
     table.release_table_sha256 = "a" * 64
+    table._release_provenance = (
+        _RELEASE_PROVENANCE_TOKEN,
+        schema,
+        table.release_table_sha256,
+        table.rows,
+    )
     return table
 
 
@@ -132,6 +141,11 @@ def test_finite_step_closes_energy_and_angular_momentum() -> None:
         final.extracted_angular_momentum_by_channel
     ) == pytest.approx(initial_angular_momentum, rel=2.0e-15)
     assert final.eccentricity < initial.eccentricity
+
+
+def test_binary_state_rejects_identity_without_closure_references() -> None:
+    with pytest.raises(ValueError, match="identity and closure references"):
+        BoundBinaryState(0.0, 1.0, 0.0, model_identity="orphaned-model")
 
 
 def test_fixed_e_gw_transition_is_event_specific() -> None:
@@ -217,6 +231,18 @@ def test_uncalibrated_fdm_state_is_not_silently_extrapolated() -> None:
     assert result.environment_fdm_segment.reason == result.reason
 
 
+def test_fresh_supported_custom_provider_requires_stable_identity_before_step() -> None:
+    def supported(_axis: float, _eccentricity: float) -> FDMExchangeRates:
+        return FDMExchangeRates(-1.0e8, -1.0e6, "supported-but-unidentified")
+
+    with pytest.raises(ValueError, match="evolution requires a stable FDM provider identity"):
+        integrate_bound_binary(
+            initial_state=BoundBinaryState(0.0, 1.0, 0.0),
+            model=BoundBinaryModel(1.0e8, 1.0e8, fdm_rate_provider=supported),
+            config=BinaryEvolutionConfig(1.0, 1.0e-4, 0.01),
+        )
+
+
 def test_missing_environment_does_not_trigger_gw_transition() -> None:
     model = BoundBinaryModel(1.0e8, 1.0e8)
     rates = binary_rate_budget(model, semimajor_axis_pc=1.0, eccentricity_squared=0.0)
@@ -236,7 +262,12 @@ def test_expanding_environment_is_not_relabelled_as_gw_dominated() -> None:
     def expanding(_axis: float, _eccentricity: float) -> FDMExchangeRates:
         return FDMExchangeRates(1.0e-6, 0.0, "expanding-test")
 
-    model = BoundBinaryModel(1.0e8, 1.0e8, fdm_rate_provider=expanding)
+    model = BoundBinaryModel(
+        1.0e8,
+        1.0e8,
+        fdm_rate_provider=expanding,
+        fdm_provider_identity="expanding-test",
+    )
     rates = binary_rate_budget(model, semimajor_axis_pc=1.0, eccentricity_squared=0.0)
     assert rates.environmental_semimajor_axis_rate_pc_myr > 0.0
     assert not gw_dominates_environment(rates)
@@ -286,7 +317,27 @@ def test_legacy_fdm_adapter_rejects_unmeasured_q_and_e() -> None:
         core_radius_pc=5.0,
         particle_mass_ev=_particle_mass_for_similarity(1.0, 5.0),
     )
-    assert circular(1.0, 0.0).calibration_id == "legacy-v2:koo"
+    legacy_id = circular(1.0, 0.0).calibration_id
+    assert legacy_id.startswith(f"legacy-v2:koo:table={'a' * 64}:")
+    assert "m1=100000000:m2=100000000:ms=1000000000:rc=5:" in legacy_id
+    physically_distinct = legacy_circular_fdm_rate_provider(
+        table,
+        profile_id="koo",
+        mass1_msun=2.0e8,
+        mass2_msun=2.0e8,
+        soliton_mass_msun=2.0e9,
+        core_radius_pc=5.0,
+        particle_mass_ev=_particle_mass_for_similarity(1.0, 5.0) / np.sqrt(2.0),
+    )
+    with pytest.raises(ValueError, match="conflicts with built-in provenance"):
+        BoundBinaryModel(
+            2.0e8,
+            2.0e8,
+            fdm_rate_provider=physically_distinct,
+            fdm_provider_identity=getattr(circular, "_fdm_static_identity"),
+        )
+    with pytest.raises(ValueError, match="masses do not match"):
+        BoundBinaryModel(1.0e8, 5.0e7, fdm_rate_provider=circular)
     with pytest.raises(UncalibratedBinaryState, match="eccentricity"):
         circular(1.0, 0.1)
 
@@ -299,6 +350,18 @@ def test_qe_fdm_adapter_passes_runtime_e_and_censors_missing_plane() -> None:
         5,
     )
 
+    with pytest.raises(ValueError, match="requires an explicit stable identity"):
+        calibrated_qe_fdm_rate_provider(
+            table,
+            profile_id="boey2025",
+            mass1_msun=1.0e8,
+            mass2_msun=3.0e7,
+            soliton_mass_msun=1.0e9,
+            core_radius_pc=5.0,
+            particle_mass_ev=_particle_mass_for_similarity(1.0, 5.0),
+            mean_separation_provider=_synthetic_kepler_mean,
+        )
+
     provider = calibrated_qe_fdm_rate_provider(
         table,
         profile_id="boey2025",
@@ -308,10 +371,14 @@ def test_qe_fdm_adapter_passes_runtime_e_and_censors_missing_plane() -> None:
         core_radius_pc=5.0,
         particle_mass_ev=_particle_mass_for_similarity(1.0, 5.0),
         mean_separation_provider=_synthetic_kepler_mean,
+        mean_separation_provider_identity="synthetic-kepler",
     )
     rates = provider(1.0, 0.3)
     assert rates.calibration_id == (
-        f"v5:boey2025:table={'a' * 64}:eta=1:q=0.3:rmap=synthetic-kepler"
+        f"v5:boey2025:table={'a' * 64}:eta=1:q=0.3:"
+        "m1=100000000:m2=30000000:"
+        f"ms=1000000000:rc=5:mp={_particle_mass_for_similarity(1.0, 5.0):.17g}:"
+        "rmap=synthetic-kepler"
     )
     with pytest.raises(UncalibratedBinaryState, match="calibrated range"):
         provider(1.0, 0.2)
@@ -326,6 +393,7 @@ def test_qe_fdm_adapter_passes_runtime_e_and_censors_missing_plane() -> None:
         core_radius_pc=5.0,
         particle_mass_ev=2.0 * _particle_mass_for_similarity(1.0, 5.0),
         mean_separation_provider=_synthetic_kepler_mean,
+        mean_separation_provider_identity="synthetic-kepler",
     )
     with pytest.raises(UncalibratedBinaryState, match="similarity parameter"):
         unsupported_similarity(1.0, 0.3)
@@ -384,6 +452,7 @@ def test_qe_provider_requires_mapping_and_checks_measured_bin_boundary() -> None
         core_radius_pc=core_radius,
         particle_mass_ev=particle_mass,
         mean_separation_provider=_synthetic_kepler_mean,
+        mean_separation_provider_identity="synthetic-kepler",
     )
     assert provider(1.0, 0.3).orbital_power_msun_pc2_myr3 < 0.0
     with pytest.raises(UncalibratedBinaryState, match="separation"):
@@ -403,6 +472,7 @@ def test_qe_provider_requires_mapping_and_checks_measured_bin_boundary() -> None
         core_radius_pc=core_radius,
         particle_mass_ev=particle_mass,
         mean_separation_provider=interval,
+        mean_separation_provider_identity="synthetic-interval",
     )
     assert "rmap=synthetic-interval" in interval_provider(1.0, 0.3).calibration_id
     second_row = replace(
@@ -424,6 +494,7 @@ def test_qe_provider_requires_mapping_and_checks_measured_bin_boundary() -> None
         mean_separation_provider=lambda _a, _e: MeanSeparationEstimate(
             1.045, 1.04, 1.15, "synthetic-cross-gap"
         ),
+        mean_separation_provider_identity="synthetic-cross-gap",
     )
     with pytest.raises(UncalibratedBinaryState, match="gap"):
         gap_provider(1.0, 0.3)
@@ -472,9 +543,47 @@ def test_qe_provider_rejects_unstructured_mapping_and_invalid_envelope() -> None
         core_radius_pc=5.0,
         particle_mass_ev=1.0e-21,
         mean_separation_provider=lambda _a, _e: 1.0,
+        mean_separation_provider_identity="invalid-result-test",
     )
     with pytest.raises(UncalibratedBinaryState, match="validated interval"):
         provider(1.0, 0.0)
+
+
+@pytest.mark.parametrize("schema", [2, 5])
+@pytest.mark.parametrize("loader", ["constructor", "csv"])
+def test_fdm_provider_rejects_metadata_only_forged_release(
+    tmp_path, schema: int, loader: str
+) -> None:
+    row = _synthetic_row(
+        profile_id="forged", similarity=1.0, mass_ratio=1.0, eccentricity=0.0
+    )
+    if loader == "constructor":
+        table = SubgridCalibrationTable((row,))
+    else:
+        path = tmp_path / "forged.csv"
+        with path.open("w", newline="", encoding="utf-8") as stream:
+            writer = csv.DictWriter(stream, fieldnames=asdict(row).keys())
+            writer.writeheader()
+            writer.writerow(asdict(row))
+        table = SubgridCalibrationTable.from_csv(path)
+    table.release_schema_version = schema
+    table.release_table_sha256 = "a" * 64
+
+    provider = (
+        legacy_circular_fdm_rate_provider
+        if schema == 2
+        else calibrated_qe_fdm_rate_provider
+    )
+    with pytest.raises(ValueError, match=f"verified schema-v{schema} release"):
+        provider(
+            table,
+            profile_id="forged",
+            mass1_msun=1.0e8,
+            mass2_msun=1.0e8,
+            soliton_mass_msun=1.0e9,
+            core_radius_pc=5.0,
+            particle_mass_ev=_particle_mass_for_similarity(1.0, 5.0),
+        )
 
 
 def test_unsupported_rk_endpoint_is_not_accepted_or_checkpointed(monkeypatch) -> None:
@@ -483,7 +592,12 @@ def test_unsupported_rk_endpoint_is_not_accepted_or_checkpointed(monkeypatch) ->
             raise UncalibratedBinaryState("outside measured axis support")
         return FDMExchangeRates(-1.0, -1.0, "synthetic-bounded")
 
-    model = BoundBinaryModel(1.0e8, 1.0e8, fdm_rate_provider=bounded_rate)
+    model = BoundBinaryModel(
+        1.0e8,
+        1.0e8,
+        fdm_rate_provider=bounded_rate,
+        fdm_provider_identity="bounded-test",
+    )
     initial = BoundBinaryState(0.0, 1.0, 0.3**2)
 
     def unsupported_endpoint(state, _model, time_step):
@@ -522,7 +636,17 @@ def test_rate_budget_and_restart_preserve_fdm_calibration_identity() -> None:
     def rate_b(_axis: float, _eccentricity: float) -> FDMExchangeRates:
         return FDMExchangeRates(-1.0e8, -1.0e6, "release-a:rmap=map-b")
 
-    model_a = BoundBinaryModel(1.0e8, 1.0e8, fdm_rate_provider=rate_a)
+    with pytest.raises(ValueError, match="identity"):
+        BoundBinaryModel(
+            1.0e8,
+            1.0e8,
+            fdm_rate_provider=rate_a,
+            fdm_provider_identity="absent",
+        )
+
+    model_a = BoundBinaryModel(
+        1.0e8, 1.0e8, fdm_rate_provider=rate_a, fdm_provider_identity="rate-a"
+    )
     budget = binary_rate_budget(model_a, semimajor_axis_pc=1.0, eccentricity_squared=0.0)
     assert budget.fdm_calibration_id == "release-a:rmap=map-a"
     config = BinaryEvolutionConfig(1.0, 1.0e-4, 0.01, stop_at_gw_transition=False)
@@ -534,12 +658,208 @@ def test_rate_budget_and_restart_preserve_fdm_calibration_identity() -> None:
     )
     assert checkpoint.status == "checkpoint"
     assert checkpoint.final_state.fdm_calibration_id == "release-a:rmap=map-a"
-    with pytest.raises(ValueError, match="calibration identity"):
+    with pytest.raises(ValueError, match="model identity"):
         integrate_bound_binary(
             initial_state=checkpoint.final_state,
-            model=BoundBinaryModel(1.0e8, 1.0e8, fdm_rate_provider=rate_b),
+            model=BoundBinaryModel(
+                1.0e8, 1.0e8, fdm_rate_provider=rate_b, fdm_provider_identity="rate-b"
+            ),
             config=config,
         )
+    with pytest.raises(ValueError, match="model identity"):
+        advance_bound_binary_rk4(
+            checkpoint.final_state,
+            BoundBinaryModel(
+                2.0e8,
+                1.0e8,
+                fdm_rate_provider=rate_a,
+                fdm_provider_identity="rate-a",
+            ),
+            1.0e-4,
+        )
+
+
+def test_restart_identity_and_closure_fail_before_uncalibrated_rate_lookup() -> None:
+    def supported(_axis: float, _eccentricity: float) -> FDMExchangeRates:
+        return FDMExchangeRates(-1.0e8, -1.0e6, "supported-provider")
+
+    def unsupported(_axis: float, _eccentricity: float) -> FDMExchangeRates:
+        raise UncalibratedBinaryState("provider must not mask restart corruption")
+
+    stellar = _stellar_model().stellar
+    model = BoundBinaryModel(
+        1.0e8,
+        1.0e8,
+        stellar=stellar,
+        fdm_rate_provider=supported,
+        fdm_provider_identity="provider-a",
+    )
+    config = BinaryEvolutionConfig(1.0, 1.0e-4, 0.01, stop_at_gw_transition=False)
+    checkpoint = integrate_bound_binary(
+        initial_state=BoundBinaryState(0.0, 1.0, 0.0),
+        model=model,
+        config=config,
+        step_budget=1,
+    ).final_state
+
+    with pytest.raises(ValueError, match="explicit stable FDM provider identity"):
+        integrate_bound_binary(
+            initial_state=checkpoint,
+            model=BoundBinaryModel(
+                model.mass1_msun,
+                model.mass2_msun,
+                stellar=stellar,
+                fdm_rate_provider=unsupported,
+            ),
+            config=config,
+        )
+    with pytest.raises(ValueError, match="model identity"):
+        integrate_bound_binary(
+            initial_state=checkpoint,
+            model=BoundBinaryModel(
+                2.0e8,
+                1.0e8,
+                stellar=stellar,
+                fdm_rate_provider=unsupported,
+                fdm_provider_identity="unsupported",
+            ),
+            config=config,
+        )
+    corrupted = replace(
+        checkpoint,
+        extracted_energy_by_channel=(1.0e30, 0.0, 0.0, 0.0),
+    )
+    result = integrate_bound_binary(
+        initial_state=corrupted,
+        model=BoundBinaryModel(
+            model.mass1_msun,
+            model.mass2_msun,
+            stellar=stellar,
+            fdm_rate_provider=unsupported,
+            fdm_provider_identity="provider-a",
+        ),
+        config=config,
+    )
+    assert result.status == "invalid"
+    assert "energy closure gate failed" in result.reason
+
+    with pytest.raises(ValueError, match="model identity"):
+        integrate_bound_binary(
+            initial_state=checkpoint,
+            model=BoundBinaryModel(
+                model.mass1_msun,
+                model.mass2_msun,
+                stellar=stellar,
+                fdm_rate_provider=unsupported,
+                fdm_provider_identity="changed-unsupported-provider",
+            ),
+            config=config,
+        )
+
+
+def test_qe_calibration_identity_binds_physical_scales_but_not_eccentricity() -> None:
+    table = _test_release(
+        SubgridCalibrationTable(
+            (
+                _synthetic_row(
+                    profile_id="scaled", similarity=1.0, mass_ratio=0.3, eccentricity=0.3
+                ),
+            )
+        ),
+        5,
+    )
+    particle_mass = _particle_mass_for_similarity(1.0, 5.0)
+    first = calibrated_qe_fdm_rate_provider(
+        table,
+        profile_id="scaled",
+        mass1_msun=1.0e8,
+        mass2_msun=3.0e7,
+        soliton_mass_msun=1.0e9,
+        core_radius_pc=5.0,
+        particle_mass_ev=particle_mass,
+        mean_separation_provider=_synthetic_kepler_mean,
+        mean_separation_provider_identity="synthetic-kepler",
+    )
+    with pytest.raises(ValueError, match="masses do not match"):
+        BoundBinaryModel(1.0e8, 1.0e8, fdm_rate_provider=first)
+    with pytest.raises(ValueError, match="conflicts with built-in provenance"):
+        BoundBinaryModel(
+            1.0e8,
+            3.0e7,
+            fdm_rate_provider=first,
+            fdm_provider_identity="arbitrary-qe-override",
+        )
+    with pytest.raises(ValueError, match="identity requires a provider"):
+        calibrated_qe_fdm_rate_provider(
+            table,
+            profile_id="scaled",
+            mass1_msun=1.0e8,
+            mass2_msun=3.0e7,
+            soliton_mass_msun=1.0e9,
+            core_radius_pc=5.0,
+            particle_mass_ev=particle_mass,
+            mean_separation_provider_identity="orphaned-mapping-id",
+        )
+    scaled = calibrated_qe_fdm_rate_provider(
+        table,
+        profile_id="scaled",
+        mass1_msun=4.0e8,
+        mass2_msun=1.2e8,
+        soliton_mass_msun=4.0e9,
+        core_radius_pc=5.0,
+        particle_mass_ev=particle_mass / 2.0,
+        mean_separation_provider=_synthetic_kepler_mean,
+        mean_separation_provider_identity="synthetic-kepler",
+    )
+    first_id = first(1.0, 0.3).calibration_id
+    assert scaled(1.0, 0.3).calibration_id != first_id
+    assert first(1.0, 0.3000000000001).calibration_id == first_id
+
+    mismatched_mapping = calibrated_qe_fdm_rate_provider(
+        table,
+        profile_id="scaled",
+        mass1_msun=1.0e8,
+        mass2_msun=3.0e7,
+        soliton_mass_msun=1.0e9,
+        core_radius_pc=5.0,
+        particle_mass_ev=particle_mass,
+        mean_separation_provider=_synthetic_kepler_mean,
+        mean_separation_provider_identity="different-mapping-artifact",
+    )
+    with pytest.raises(UncalibratedBinaryState, match="identity does not match"):
+        mismatched_mapping(1.0, 0.3)
+
+
+def test_qe_calibration_identity_binds_binary_masses_at_fixed_physical_scales() -> None:
+    lower = _synthetic_row(
+        profile_id="mass-scaled", similarity=1.0, mass_ratio=0.3, eccentricity=0.3
+    )
+    upper = replace(
+        lower,
+        source_case_id="synthetic-mass-scaled",
+        binary_to_soliton_mass=0.26,
+    )
+    table = _test_release(SubgridCalibrationTable((lower, upper)), 5)
+    particle_mass = _particle_mass_for_similarity(1.0, 5.0)
+
+    def make_provider(mass1: float, mass2: float):
+        return calibrated_qe_fdm_rate_provider(
+            table,
+            profile_id="mass-scaled",
+            mass1_msun=mass1,
+            mass2_msun=mass2,
+            soliton_mass_msun=1.0e9,
+            core_radius_pc=5.0,
+            particle_mass_ev=particle_mass,
+            mean_separation_provider=_synthetic_kepler_mean,
+            mean_separation_provider_identity="synthetic-kepler",
+        )
+
+    lower_id = make_provider(1.0e8, 3.0e7)(1.0, 0.3).calibration_id
+    upper_id = make_provider(2.0e8, 6.0e7)(1.0, 0.3).calibration_id
+    assert lower_id != upper_id
+    assert "m1=100000000:m2=30000000" in lower_id
+    assert "m1=200000000:m2=60000000" in upper_id
 
 
 @pytest.mark.parametrize(
@@ -590,3 +910,21 @@ def test_unsampled_candidate_must_pass_closure_gate(monkeypatch) -> None:
     assert result.status == "invalid"
     assert "energy closure gate failed" in result.reason
     assert result.final_state.completed_steps == 0
+
+
+def test_nonfinite_closure_residual_fails_closed() -> None:
+    model = _stellar_model()
+    config = BinaryEvolutionConfig(1.0, 1.0e-4, 0.01, stop_at_gw_transition=False)
+    checkpoint = integrate_bound_binary(
+        initial_state=BoundBinaryState(0.0, 1.0, 0.0),
+        model=model,
+        config=config,
+        step_budget=1,
+    ).final_state
+    corrupted = replace(
+        checkpoint,
+        extracted_energy_by_channel=(1.0e308, 1.0e308, 1.0e308, 1.0e308),
+    )
+    result = integrate_bound_binary(initial_state=corrupted, model=model, config=config)
+    assert result.status == "invalid"
+    assert "non-finite residual" in result.reason

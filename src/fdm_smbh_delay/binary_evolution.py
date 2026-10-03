@@ -122,6 +122,7 @@ class MeanSeparationEstimate:
 
 
 MeanSeparationProvider = Callable[[float, float], MeanSeparationEstimate]
+_NO_FDM_PROVIDER_IDENTITY = "absent"
 
 
 def legacy_circular_fdm_rate_provider(
@@ -149,10 +150,7 @@ def legacy_circular_fdm_rate_provider(
 
     if (
         not isinstance(table, SubgridCalibrationTable)
-        or table.release_schema_version != 2
-        or not isinstance(table.release_table_sha256, str)
-        or len(table.release_table_sha256) != 64
-        or any(character not in "0123456789abcdef" for character in table.release_table_sha256)
+        or not table.is_verified_release(2)
     ):
         raise ValueError("legacy FDM rates require a verified schema-v2 release")
     controls = np.asarray(
@@ -209,9 +207,23 @@ def legacy_circular_fdm_rate_provider(
         return FDMExchangeRates(
             rates.orbital_power,
             rates.orbital_torque,
-            f"legacy-v2:{profile_id}",
+            (
+                f"legacy-v2:{profile_id}:table={table.release_table_sha256}:"
+                f"m1={mass1_msun:.17g}:m2={mass2_msun:.17g}:"
+                f"ms={soliton_mass_msun:.17g}:rc={core_radius_pc:.17g}:"
+                f"mp={particle_mass_ev:.17g}:q0={calibrated_mass_ratio:.17g}:"
+                f"qtol={mass_ratio_tolerance:.17g}:emax={maximum_eccentricity:.17g}"
+            ),
         )
 
+    provider._fdm_static_identity = (  # type: ignore[attr-defined]
+        f"legacy-v2:{profile_id}:table={table.release_table_sha256}:"
+        f"m1={mass1_msun:.17g}:m2={mass2_msun:.17g}:"
+        f"ms={soliton_mass_msun:.17g}:rc={core_radius_pc:.17g}:"
+        f"mp={particle_mass_ev:.17g}:q0={calibrated_mass_ratio:.17g}:"
+        f"qtol={mass_ratio_tolerance:.17g}:emax={maximum_eccentricity:.17g}"
+    )
+    provider._fdm_bound_masses = (mass1_msun, mass2_msun)  # type: ignore[attr-defined]
     return provider
 
 
@@ -225,6 +237,7 @@ def calibrated_qe_fdm_rate_provider(
     core_radius_pc: float,
     particle_mass_ev: float,
     mean_separation_provider: MeanSeparationProvider | None = None,
+    mean_separation_provider_identity: str | None = None,
 ) -> FDMRateProvider:
     """Adapt an accepted q/e table without q, e, or a extrapolation.
 
@@ -236,6 +249,10 @@ def calibrated_qe_fdm_rate_provider(
     a bounded uncertainty interval. An absent mapping, an unsupported
     interval, or an unstructured point estimate censors the state rather
     than assuming Kepler motion.
+    Restart-capable integrations must also supply
+    ``mean_separation_provider_identity`` matching every returned
+    ``MeanSeparationEstimate.mapping_id``; callable names do not identify
+    captured mapping data reliably.
     Converting a failure to
     ``UncalibratedBinaryState`` makes the orbit integrator return a censored
     calibration gap instead of silently substituting another plane.
@@ -247,14 +264,20 @@ def calibrated_qe_fdm_rate_provider(
     )
     if np.any(~np.isfinite(controls)) or np.any(controls <= 0.0):
         raise ValueError("calibrated FDM provider scales must be positive")
+    if mean_separation_provider_identity is not None and (
+        not isinstance(mean_separation_provider_identity, str)
+        or not mean_separation_provider_identity.strip()
+    ):
+        raise ValueError("mean-separation provider identity must be a nonempty string")
+    if mean_separation_provider is None and mean_separation_provider_identity is not None:
+        raise ValueError("mean-separation provider identity requires a provider")
+    if mean_separation_provider is not None and mean_separation_provider_identity is None:
+        raise ValueError("q/e FDM mapping requires an explicit stable identity")
     from .subgrid_calibration import SubgridCalibrationTable, physical_subgrid_rates
 
     if (
         not isinstance(table, SubgridCalibrationTable)
-        or table.release_schema_version != 5
-        or not isinstance(table.release_table_sha256, str)
-        or len(table.release_table_sha256) != 64
-        or any(character not in "0123456789abcdef" for character in table.release_table_sha256)
+        or not table.is_verified_release(5)
     ):
         raise ValueError("q/e FDM rates require a verified schema-v5 release")
     profile_boundaries_pc = tuple(sorted({
@@ -278,6 +301,14 @@ def calibrated_qe_fdm_rate_provider(
             if not isinstance(mapped, MeanSeparationEstimate):
                 raise ValueError(
                     "orbit-mean separation mapping lacks a validated interval"
+                )
+            if (
+                mean_separation_provider_identity is not None
+                and mapped.mapping_id != mean_separation_provider_identity
+            ):
+                raise ValueError(
+                    "orbit-mean separation mapping identity does not match "
+                    "the provider provenance"
                 )
             mean_separation_pc = mapped.mean_pc
             rates = physical_subgrid_rates(
@@ -326,6 +357,9 @@ def calibrated_qe_fdm_rate_provider(
             f"v5:{profile_id}:table={table.release_table_sha256}:"
             f"eta={dimensionless.schrodinger_poisson_similarity_parameter:.12g}:"
             f"q={dimensionless.mass_ratio_q:.12g}:"
+            f"m1={mass1_msun:.17g}:m2={mass2_msun:.17g}:"
+            f"ms={soliton_mass_msun:.17g}:rc={core_radius_pc:.17g}:"
+            f"mp={particle_mass_ev:.17g}:"
             f"rmap={mapped.mapping_id}"
         )
         return FDMExchangeRates(
@@ -334,6 +368,15 @@ def calibrated_qe_fdm_rate_provider(
             calibration_id,
         )
 
+    if mean_separation_provider_identity is not None:
+        mapping_identity = mean_separation_provider_identity
+        provider._fdm_static_identity = (  # type: ignore[attr-defined]
+            f"v5:{profile_id}:table={table.release_table_sha256}:"
+            f"m1={mass1_msun:.17g}:m2={mass2_msun:.17g}:"
+            f"ms={soliton_mass_msun:.17g}:rc={core_radius_pc:.17g}:"
+            f"mp={particle_mass_ev:.17g}:mapping={mapping_identity}"
+        )
+    provider._fdm_bound_masses = (mass1_msun, mass2_msun)  # type: ignore[attr-defined]
     return provider
 
 
@@ -344,11 +387,51 @@ class BoundBinaryModel:
     stellar: StellarHardeningModel | None = None
     gas: GasMigrationModel | None = None
     fdm_rate_provider: FDMRateProvider | None = None
+    fdm_provider_identity: str | None = None
 
     def __post_init__(self) -> None:
         values = np.asarray([self.mass1_msun, self.mass2_msun], dtype=float)
         if np.any(~np.isfinite(values)) or np.any(values <= 0.0):
             raise ValueError("SMBH masses must be finite and positive")
+        if self.fdm_provider_identity is not None and (
+            not isinstance(self.fdm_provider_identity, str)
+            or not self.fdm_provider_identity.strip()
+            or self.fdm_provider_identity in {_NO_FDM_PROVIDER_IDENTITY, "none"}
+        ):
+            raise ValueError("explicit FDM provider identity must be a nonempty string")
+        if self.fdm_rate_provider is None and self.fdm_provider_identity is not None:
+            raise ValueError("FDM provider identity requires an FDM rate provider")
+        stamped_identity = (
+            getattr(self.fdm_rate_provider, "_fdm_static_identity", None)
+            if self.fdm_rate_provider is not None
+            else None
+        )
+        if (
+            isinstance(stamped_identity, str)
+            and self.fdm_provider_identity is not None
+            and self.fdm_provider_identity != stamped_identity
+        ):
+            raise ValueError(
+                "explicit FDM provider identity conflicts with built-in provenance"
+            )
+        bound_masses = (
+            getattr(self.fdm_rate_provider, "_fdm_bound_masses", None)
+            if self.fdm_rate_provider is not None
+            else None
+        )
+        if bound_masses is not None and bound_masses != (
+            self.mass1_msun,
+            self.mass2_msun,
+        ):
+            raise ValueError("built-in FDM provider masses do not match the binary model")
+        if (
+            bound_masses is not None
+            and not isinstance(stamped_identity, str)
+            and self.fdm_provider_identity is not None
+        ):
+            raise ValueError(
+                "explicit identity cannot replace missing built-in FDM provenance"
+            )
 
     @property
     def total_mass_msun(self) -> float:
@@ -442,6 +525,10 @@ class BoundBinaryState:
             self.reference_angular_momentum_total is None
         ):
             raise ValueError("binary closure references must be supplied together")
+        if (self.model_identity is None) != (self.reference_energy_total is None):
+            raise ValueError(
+                "binary model identity and closure references must be supplied together"
+            )
         is_restart = (
             self.completed_steps > 0
             or self.elapsed_myr > 0.0
@@ -843,8 +930,13 @@ def advance_bound_binary_rk4(
 ) -> BoundBinaryState:
     if not np.isfinite(time_step_myr) or time_step_myr <= 0.0:
         raise ValueError("binary time step must be finite and positive")
+    if model.fdm_rate_provider is not None and _fdm_provider_identity(model) is None:
+        raise ValueError("binary evolution requires a stable FDM provider identity")
     a0 = state.semimajor_axis_pc
     y0 = state.eccentricity_squared
+    identity = _model_identity(model)
+    if state.model_identity is not None and state.model_identity != identity:
+        raise ValueError("restart model identity does not match the binary model")
     rates1 = binary_rate_budget(
         model, semimajor_axis_pc=a0, eccentricity_squared=y0
     )
@@ -852,13 +944,15 @@ def advance_bound_binary_rk4(
         initial_energy, initial_angular_momentum = orbital_invariants(model, a0, y0)
         state = dataclass_replace(
             state,
-            model_identity=_model_identity(model),
+            model_identity=identity,
             fdm_calibration_id=rates1.fdm_calibration_id,
             reference_energy_total=initial_energy
             + sum(state.extracted_energy_by_channel),
             reference_angular_momentum_total=initial_angular_momentum
             + sum(state.extracted_angular_momentum_by_channel),
         )
+    elif state.fdm_calibration_id != rates1.fdm_calibration_id:
+        raise ValueError("restart FDM calibration identity does not match the rate model")
     k1a = rates1.total_semimajor_axis_rate_pc_myr
     k1y = rates1.total_eccentricity_squared_rate_per_myr
     rates2 = binary_rate_budget(
@@ -983,10 +1077,21 @@ def _samples_with_final(
 
 
 def _model_identity(model: BoundBinaryModel) -> str:
+    provider_identity = _fdm_provider_identity(model)
     return (
         f"m1={model.mass1_msun:.17g}:m2={model.mass2_msun:.17g}:"
-        f"stellar={model.stellar!r}:gas={model.gas!r}"
+        f"stellar={model.stellar!r}:gas={model.gas!r}:"
+        f"fdm={provider_identity if provider_identity is not None else 'unidentified'}"
     )
+
+
+def _fdm_provider_identity(model: BoundBinaryModel) -> str | None:
+    if model.fdm_rate_provider is None:
+        return _NO_FDM_PROVIDER_IDENTITY
+    identity = getattr(model.fdm_rate_provider, "_fdm_static_identity", None)
+    if isinstance(identity, str) and identity:
+        return identity
+    return model.fdm_provider_identity
 
 
 def _closure_failure_reason(
@@ -1007,8 +1112,12 @@ def _closure_failure_reason(
         + sum(state.extracted_angular_momentum_by_channel)
         - state.reference_angular_momentum_total
     ) / max(abs(angular_momentum), np.finfo(float).tiny)
+    if not np.isfinite(energy_error):
+        return "energy closure gate failed (non-finite residual)"
     if energy_error > config.maximum_relative_energy_closure_error:
         return f"energy closure gate failed ({energy_error:.6g})"
+    if not np.isfinite(angular_error):
+        return "angular-momentum closure gate failed (non-finite residual)"
     if angular_error > config.maximum_relative_angular_momentum_closure_error:
         return f"angular-momentum closure gate failed ({angular_error:.6g})"
     return None
@@ -1028,7 +1137,18 @@ def integrate_bound_binary(
     if initial_state.elapsed_myr > config.maximum_time_myr:
         raise ValueError("initial binary state lies beyond maximum time")
     state = initial_state
+    if state.model_identity is not None and _fdm_provider_identity(model) is None:
+        raise ValueError("restart requires an explicit stable FDM provider identity")
     identity = _model_identity(model)
+    initial_energy, initial_angular_momentum = orbital_invariants(
+        model, state.semimajor_axis_pc, state.eccentricity_squared
+    )
+    if state.model_identity is not None:
+        if state.model_identity != identity:
+            raise ValueError("restart model identity does not match the binary model")
+        closure_failure = _closure_failure_reason(state, model, config)
+        if closure_failure is not None:
+            return BinaryEvolutionResult("invalid", state, (), closure_failure, None)
     try:
         initial_rates = binary_rate_budget(
             model,
@@ -1037,9 +1157,8 @@ def integrate_bound_binary(
         )
     except UncalibratedBinaryState as error:
         return BinaryEvolutionResult("uncalibrated", state, (), str(error), None)
-    initial_energy, initial_angular_momentum = orbital_invariants(
-        model, state.semimajor_axis_pc, state.eccentricity_squared
-    )
+    if model.fdm_rate_provider is not None and _fdm_provider_identity(model) is None:
+        raise ValueError("binary evolution requires a stable FDM provider identity")
     if state.model_identity is None:
         state = dataclass_replace(
             state,
@@ -1050,15 +1169,10 @@ def integrate_bound_binary(
             reference_angular_momentum_total=initial_angular_momentum
             + sum(state.extracted_angular_momentum_by_channel),
         )
-    elif state.model_identity != identity:
-        raise ValueError("restart model identity does not match the binary model")
     elif state.fdm_calibration_id != initial_rates.fdm_calibration_id:
         raise ValueError("restart FDM calibration identity does not match the rate model")
     reference_energy_total = state.reference_energy_total
     reference_angular_momentum_total = state.reference_angular_momentum_total
-    closure_failure = _closure_failure_reason(state, model, config)
-    if closure_failure is not None:
-        return BinaryEvolutionResult("invalid", state, (), closure_failure, None)
     try:
         samples = [
             _sample(

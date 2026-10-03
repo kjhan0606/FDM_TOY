@@ -1004,6 +1004,7 @@ def test_qe_release_requires_registered_design_and_verifies_box_provenance(
         mean_separation_provider=lambda _a, _e: MeanSeparationEstimate(
             0.6, 0.6, 0.6, "synthetic-test-only",
         ),
+        mean_separation_provider_identity="synthetic-test-only",
     )
     assert provider(0.6, 0.23).calibration_id.startswith(
         f"v5:test:table={summary['table']['sha256']}:"

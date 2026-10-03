@@ -29,6 +29,11 @@ ACCEPTED_TABLE_STATUS = "accepted_subgrid_calibration_table"
 SUBGRID_CALIBRATION_SCHEMA_VERSION = 4
 QE_SUBGRID_CALIBRATION_SCHEMA_VERSION = 5
 
+# Capability attached only after ``from_release`` has completed every release
+# validation.  The public metadata remain available for diagnostics, but are
+# not themselves trusted by production rate providers.
+_RELEASE_PROVENANCE_TOKEN = object()
+
 
 def _release_input_sha256(
     acceptance: dict,
@@ -607,6 +612,7 @@ class SubgridCalibrationTable:
         self.rows = tuple(rows)
         self.release_schema_version: int | None = None
         self.release_table_sha256: str | None = None
+        self._release_provenance: tuple[object, int, str, tuple] | None = None
         if not self.rows:
             raise ValueError("a subgrid calibration table cannot be empty")
         keys = [
@@ -1018,7 +1024,32 @@ class SubgridCalibrationTable:
             raise ValueError("subgrid release calibrated domains do not match")
         table.release_schema_version = schema_version
         table.release_table_sha256 = expected_sha256
+        table._release_provenance = (
+            _RELEASE_PROVENANCE_TOKEN,
+            schema_version,
+            expected_sha256,
+            table.rows,
+        )
         return table
+
+    def is_verified_release(self, schema_version: int) -> bool:
+        """Return whether this instance was fully validated by ``from_release``."""
+
+        provenance = self._release_provenance
+        return (
+            provenance is not None
+            and provenance[0] is _RELEASE_PROVENANCE_TOKEN
+            and provenance[1] == schema_version
+            and provenance[2] == self.release_table_sha256
+            and provenance[3] is self.rows
+            and self.release_schema_version == schema_version
+            and isinstance(self.release_table_sha256, str)
+            and len(self.release_table_sha256) == 64
+            and all(
+                character in "0123456789abcdef"
+                for character in self.release_table_sha256
+            )
+        )
 
     def _mass_plane(
         self,
