@@ -11,10 +11,12 @@ import json
 from pathlib import Path
 
 import numpy as np
+from scipy.spatial import cKDTree
 
 from .convergence import (
     _COORDINATE_RATIO_BOOTSTRAP_SAMPLES,
     _TARGET_ORBIT_RATE_BOOTSTRAP_BLOCK_LENGTH,
+    _initial_resolved_orbit_indices,
     load_convergence_run,
     summarize_convergence,
 )
@@ -214,6 +216,99 @@ def _necessary_mapping_coordinate_overlap(observations: dict) -> dict:
         "joint_a_e_support_verified": False,
         "runtime_mapping_admitted": False,
     }
+
+
+def _joint_orbit_coordinate_proximity(
+    observations: dict[str, np.ndarray],
+) -> dict:
+    """Find the nearest actual three-run (a,e) orbit triplet, without release."""
+
+    roles = ("fine", "coarse", "doubled_box")
+    selected: dict[str, np.ndarray] = {}
+    coordinates: dict[str, np.ndarray] = {}
+    for role in roles:
+        orbit = observations[role]
+        if orbit.size == 0:
+            return {
+                "status": "no_joint_orbit_sample_censored",
+                "runtime_mapping_admitted": False,
+            }
+        required = {
+            "mean_separation_pc", "mean_semimajor_axis_osculating_pc",
+            "mean_eccentricity_osculating",
+        }
+        if not required <= set(orbit.dtype.names or ()):
+            raise ValueError("joint-coordinate diagnostic lacks orbit columns")
+        separation = np.asarray(orbit["mean_separation_pc"], dtype=float)
+        axis = np.asarray(orbit["mean_semimajor_axis_osculating_pc"], dtype=float)
+        eccentricity = np.asarray(orbit["mean_eccentricity_osculating"], dtype=float)
+        if (
+            np.any(~np.isfinite(separation)) or np.any(separation <= 0.0)
+            or np.any(~np.isfinite(axis)) or np.any(axis <= 0.0)
+            or np.any(~np.isfinite(eccentricity))
+            or np.any((eccentricity < 0.0) | (eccentricity >= 1.0))
+        ):
+            raise ValueError("joint-coordinate diagnostic has invalid orbit coordinates")
+        selected[role] = np.column_stack((separation, axis, eccentricity))
+        coordinates[role] = np.column_stack((np.log(axis), eccentricity))
+
+    fine = coordinates["fine"]
+    coarse_distance, coarse_index = cKDTree(coordinates["coarse"]).query(
+        fine, k=1, p=np.inf
+    )
+    box_distance, box_index = cKDTree(coordinates["doubled_box"]).query(
+        fine, k=1, p=np.inf
+    )
+    closest_fine = int(np.argmin(np.maximum(coarse_distance, box_distance)))
+    indices = {
+        "fine": closest_fine,
+        "coarse": int(coarse_index[closest_fine]),
+        "doubled_box": int(box_index[closest_fine]),
+    }
+    triplet = {}
+    for role in roles:
+        separation, axis, eccentricity = selected[role][indices[role]]
+        triplet[role] = {
+            "mean_separation_pc": float(separation),
+            "mean_semimajor_axis_osculating_pc": float(axis),
+            "mean_eccentricity_osculating": float(eccentricity),
+            "measured_over_kepler_mean_ratio": float(
+                separation / (axis * (1.0 + 0.5 * eccentricity**2))
+            ),
+        }
+    return {
+        "status": "closest_joint_orbit_triplet_diagnostic_only",
+        "complete_orbits_by_role": {
+            role: int(selected[role].shape[0]) for role in roles
+        },
+        "minimum_max_log_axis_or_e_mismatch": float(
+            max(coarse_distance[closest_fine], box_distance[closest_fine])
+        ),
+        "coarse_log_axis_or_e_mismatch": float(coarse_distance[closest_fine]),
+        "doubled_box_log_axis_or_e_mismatch": float(box_distance[closest_fine]),
+        "closest_triplet": triplet,
+        "joint_a_e_support_verified": False,
+        "runtime_mapping_admitted": False,
+    }
+
+
+def _resolved_orbits_in_fixed_bin(
+    run: dict, lower_pc: float, upper_pc: float, *, include_upper: bool
+) -> np.ndarray:
+    orbit = run["orbit_series"]
+    if orbit is None:
+        raise ValueError("joint-coordinate diagnostic requires orbit series")
+    valid = _initial_resolved_orbit_indices(
+        orbit,
+        float(run["conservation"]["initial_spatially_resolved_duration_myr"]),
+    )
+    separation = orbit["mean_separation_pc"][valid]
+    inside = separation >= lower_pc - 1.0e-14
+    inside &= (
+        separation <= upper_pc + 1.0e-14
+        if include_upper else separation < upper_pc
+    )
+    return orbit[valid[inside]]
 
 
 def _mapping_ratio_diagnostic(observations: dict) -> dict:
@@ -617,13 +712,51 @@ def prepare_qe_calibration_candidate(
         }
         for index in sorted(controlled)
     ]
+    if mapping_observations:
+        pair_edges = pair_summary["matched_separation"]["separation_bin_edges_pc"]
+        loaded_mapping_runs = {
+            "fine": load_convergence_run(
+                pair_ref["label"], Path(pair_ref["run"]).resolve()
+            ),
+            "coarse": load_convergence_run(
+                pair_coarse["label"], Path(pair_coarse["run"]).resolve()
+            ),
+            "doubled_box": load_convergence_run(
+                box_ref["label"], Path(box_ref["run"]).resolve()
+            ),
+        }
+        mapping_source_hashes = {
+            str(Path(row["run"]).resolve()): row["sha256"]
+            for comparison in assessment["raw_verification"].values()
+            for row in comparison["raw_inputs"]
+        }
     for observation in mapping_observations:
+        index = observation["separation_bin_index"]
+        orbit_samples = {
+            role: _resolved_orbits_in_fixed_bin(
+                run, pair_edges[index], pair_edges[index + 1],
+                include_upper=index == len(pair_edges) - 2,
+            )
+            for role, run in loaded_mapping_runs.items()
+        }
+        observation["closest_joint_orbit_triplet_not_released"] = (
+            _joint_orbit_coordinate_proximity(orbit_samples)
+        )
         observation["necessary_coordinate_overlap"] = (
             _necessary_mapping_coordinate_overlap(observation)
         )
         observation["unmatched_ratio_diagnostic"] = (
             _mapping_ratio_diagnostic(observation)
         )
+    if mapping_observations:
+        for run in loaded_mapping_runs.values():
+            run_path = Path(run["run"]).resolve()
+            expected = mapping_source_hashes[str(run_path)]
+            for name in ("orbit_averaged_exchange.csv", "conservation_summary.json"):
+                if _sha256(run_path / name) != expected[name]:
+                    raise ValueError(
+                        f"q/e joint-coordinate source changed during audit: {run_path}/{name}"
+                    )
     if (_sha256(pair_path) != assessment["resolution_pair_sha256"]
             or _sha256(box_path) != assessment["doubled_box_sha256"]):
         raise ValueError("q/e comparison changed while packaging mapping observations")

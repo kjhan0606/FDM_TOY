@@ -350,6 +350,14 @@ doubled-box/fine differences, together with the differences in mean `a` and
 ratio differences are descriptive diagnostics, **not** a mapping-convergence
 test or a new acceptance threshold. A future test must match joint `(a,e)`
 support and quantify uncertainty before producing a runtime map.
+The candidate package also records the closest triplet of actual,
+initially resolved complete orbits across fine, coarse, and doubled-box runs
+within each fixed separation bin, minimizing the largest difference in
+`(log a, e)`. This tests the correlated orbit samples rather than independently
+overlapping `a` and `e` ranges. A single closest triplet is still only a
+design diagnostic: it does not establish common two-dimensional support,
+interpolation uncertainty, or a runtime mapping, and cannot release a table
+row.
 For each retained bin, 2,000 reproducible moving-block resamples also give
 an orbit-sampling interval for the *ratio of the jointly resampled,
 duration-weighted means*. The same orbit indices resample `r`, `a`, `e`, and

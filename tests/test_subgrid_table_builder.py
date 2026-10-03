@@ -819,6 +819,28 @@ def _mock_strict_box_assessment(
     decision["raw_diagnostics_verified"] = True
     decision["raw_verification"] = verified
     monkeypatch.setattr(qe_box_module, "assess_qe_box_control", lambda *args, **kwargs: decision)
+    orbit = np.array(
+        [
+            (0.6, 0.624, 0.23, 4.0, float(index + 1))
+            for index in range(8)
+        ],
+        dtype=[
+            ("mean_separation_pc", "f8"),
+            ("mean_semimajor_axis_osculating_pc", "f8"),
+            ("mean_eccentricity_osculating", "f8"),
+            ("mean_separation_over_cell_size", "f8"),
+            ("end_time_myr", "f8"),
+        ],
+    )
+    monkeypatch.setattr(
+        qe_box_module,
+        "load_convergence_run",
+        lambda label, run: {
+            "label": label, "run": str(Path(run).resolve()),
+            "orbit_series": orbit,
+            "conservation": {"initial_spatially_resolved_duration_myr": 8.0},
+        },
+    )
     return pair_path, box_path
 
 
@@ -862,6 +884,10 @@ def test_qe_candidate_package_retains_only_box_controlled_rows(
     assert observations[0]["necessary_coordinate_overlap"][
         "runtime_mapping_admitted"
     ] is False
+    closest = observations[0]["closest_joint_orbit_triplet_not_released"]
+    assert closest["status"] == "closest_joint_orbit_triplet_diagnostic_only"
+    assert closest["minimum_max_log_axis_or_e_mismatch"] == pytest.approx(0.0)
+    assert closest["runtime_mapping_admitted"] is False
     disjoint = deepcopy(observations[0])
     disjoint["doubled_box"]["minimum_orbit_mean_eccentricity"] = 0.4
     disjoint["doubled_box"]["mean_eccentricity_osculating"] = 0.45
