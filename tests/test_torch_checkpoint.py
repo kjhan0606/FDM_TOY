@@ -17,6 +17,7 @@ from fdm_smbh_delay.torch_wave import (  # noqa: E402
     apply_kinetic_phase_in_place,
     periodic_poisson_torch,
     spectral_grid,
+    wave_density,
 )
 
 
@@ -43,6 +44,19 @@ def test_remaining_time_uses_only_steps_completed_since_resume() -> None:
         step=600,
         total_steps=1200,
     ) is None
+
+
+def test_restart_rejects_missing_or_changed_density_layout() -> None:
+    requested = {key: 1 for key in run_torch_wave_case._RESTART_METADATA_KEYS}
+    requested["wave_density_layout"] = "real_imag_addcmul_v1"
+    run_torch_wave_case._require_resume_metadata(dict(requested), requested)
+    saved = dict(requested)
+    del saved["wave_density_layout"]
+    with pytest.raises(ValueError, match="wave_density_layout"):
+        run_torch_wave_case._require_resume_metadata(saved, requested)
+    saved["wave_density_layout"] = "other_layout"
+    with pytest.raises(ValueError, match="wave_density_layout"):
+        run_torch_wave_case._require_resume_metadata(saved, requested)
 
 
 def test_torch_checkpoint_round_trip_and_replaces_the_previous_pair(
@@ -158,7 +172,7 @@ def test_self_gravitating_wave_restart_matches_uninterrupted_split_steps(
 
     def advance(wavefunction: torch.Tensor, count: int) -> torch.Tensor:
         for _ in range(count):
-            density = wavefunction.abs().square()
+            density = wave_density(wavefunction)
             potential = periodic_poisson_torch(
                 density, grid.poisson_inverse_wavenumber_squared
             )
@@ -166,7 +180,7 @@ def test_self_gravitating_wave_restart_matches_uninterrupted_split_steps(
             spectrum = torch.fft.fftn(wavefunction)
             apply_kinetic_phase_in_place(spectrum, grid.kinetic_axis_phase)
             wavefunction = torch.fft.ifftn(spectrum)
-            density = wavefunction.abs().square()
+            density = wave_density(wavefunction)
             potential = periodic_poisson_torch(
                 density, grid.poisson_inverse_wavenumber_squared
             )

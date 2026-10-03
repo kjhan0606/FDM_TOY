@@ -393,6 +393,19 @@ do not validate the full wave state or longer trajectories. The one-step
 n=256 probe also does not establish longer-run peaks or capacity at n=512,
 768, or 1024; those larger grids remain unmeasured for the new solver revision.
 
+A further allocation change computes `|psi|^2` directly from its real and
+imaginary components, including the spectral-power diagnostic. With the same
+one-step seed and A10, revision `93694f1` (Slurm job `411440`) peaked at
+1,409,825,280 allocated bytes (1.313 GiB), 127.994 MiB below job `411436`.
+The saved energy arrays agree to at most `2.6e-16` relative to their maximum
+absolute values, and the saved SMBH state differs by at most `1.94e-18` in
+its saved units. The source snapshot and summary are in
+`/gpfs/kjhan/FDM_TOY_RESULTS/qe_extension/torch/memory_probe_n256_density_v2_411440/`.
+The combined measured one-step reduction relative to baseline job `411438`
+is 27.6%, but remains an n=256 allocation result only. Subsequent runs stamp
+`wave_density_layout=real_imag_addcmul_v1`; restarts and q/e box controls
+reject mismatched density layouts.
+
 The guarded q-e queue uses observed device-memory profiles rather than the
 uniform-grid estimate alone. An `n=512` stage requires at least 22 GiB total
 and 21 GiB free: this admits a 23,028 MiB A10 while retaining more than 2 GiB

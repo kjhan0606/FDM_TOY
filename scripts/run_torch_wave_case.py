@@ -31,6 +31,27 @@ from fdm_smbh_delay.torch_wave import (
 )
 
 
+_RESTART_METADATA_KEYS = (
+    "resolution",
+    "box_size_pc",
+    "duration_myr",
+    "save_number",
+    "actual_wave_steps",
+    "wave_time_step_code",
+    "kinetic_phase_layout",
+    "wave_buffer_lifetime",
+    "wave_density_layout",
+)
+
+
+def _require_resume_metadata(saved: dict, requested: dict) -> None:
+    for key in _RESTART_METADATA_KEYS:
+        if saved.get(key) != requested[key]:
+            raise ValueError(f"restart request changes {key}")
+    if saved.get("qe_design_binding") != requested.get("qe_design_binding"):
+        raise ValueError("restart request changes q/e design binding")
+
+
 def _initial_paths(reference: Path) -> tuple[Path, Path]:
     wave = reference / "Outputs" / "3Wfn" / "P3D_#000.npy"
     particles = reference / "Outputs" / "NBody" / "NTM_#000.npy"
@@ -324,6 +345,7 @@ def main() -> int:
             "wave_time_step_code": time_step,
             "kinetic_phase_layout": "separable_axis_v1",
             "wave_buffer_lifetime": "release_previous_state_before_fft_v1",
+            "wave_density_layout": "real_imag_addcmul_v1",
             "checkpoint_every_saved_intervals": args.checkpoint_every_saves,
             "wave_acceleration_during_particle_rk4": (
                 "interpolated_from_a_local_potential_patch_at_each_rk4_stage"
@@ -338,20 +360,7 @@ def main() -> int:
         saved_metadata = json.loads(
             (output / "fdm_adapter_metadata.json").read_text(encoding="utf-8")
         )
-        for key in (
-            "resolution",
-            "box_size_pc",
-            "duration_myr",
-            "save_number",
-            "actual_wave_steps",
-            "wave_time_step_code",
-            "kinetic_phase_layout",
-            "wave_buffer_lifetime",
-        ):
-            if saved_metadata.get(key) != metadata[key]:
-                raise ValueError(f"restart request changes {key}")
-        if saved_metadata.get("qe_design_binding") != metadata.get("qe_design_binding"):
-            raise ValueError("restart request changes q/e design binding")
+        _require_resume_metadata(saved_metadata, metadata)
     else:
         output.mkdir(parents=True)
         (output / "Outputs").mkdir()
