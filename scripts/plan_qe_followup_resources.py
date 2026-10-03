@@ -15,12 +15,14 @@ from fdm_smbh_delay.calibration import estimated_uniform_grid_memory_gib
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.reassess_qe_extension import finest_adjacent_pairs
+from scripts.audit_qe_bin_occupancy import audit_assessment
 
 
 def plan_resources(
     manifest: Path,
     cases_file: Path,
     *,
+    assessment: Path | None = None,
     separation_bins: int = 8,
     minimum_orbits_per_bin: int = 8,
     box_factor: int = 2,
@@ -44,8 +46,22 @@ def plan_resources(
                 raise ValueError("q-e case IDs must be present and unique")
             cases[case_id] = row
     rows = []
+    pilot = None
+    pilot_by_case = {}
+    if assessment is not None:
+        pilot = audit_assessment(
+            assessment, separation_bins=separation_bins,
+            minimum_orbits_per_bin=minimum_orbits_per_bin,
+        )
+        for row in pilot["cases"]:
+            case_id = row["case_id"]
+            if case_id in pilot_by_case:
+                raise ValueError(f"q-e assessment repeats case: {case_id}")
+            pilot_by_case[case_id] = row["diagnostic"]
     minimum_orbits = separation_bins * minimum_orbits_per_bin
+    planned_case_ids = set()
     for case_id, fine, coarse in finest_adjacent_pairs(manifest):
+        planned_case_ids.add(case_id)
         if case_id not in cases:
             raise ValueError(f"q-e case is absent from physical cases: {case_id}")
         case = cases[case_id]
@@ -71,6 +87,33 @@ def plan_resources(
                     memory > reference_gpu_memory_gib
                 ),
             })
+        pilot_support = None
+        if pilot is not None:
+            if case_id not in pilot_by_case:
+                raise ValueError(f"q-e assessment lacks manifest case: {case_id}")
+            diagnostic = pilot_by_case[case_id]
+            status = diagnostic["status"]
+            if status == "insufficient_initially_resolved_orbits":
+                precondition = "initial_resolution_redesign_required"
+            elif status == "no_common_resolved_separation":
+                precondition = "common_separation_support_redesign_required"
+            elif status == "common_resolved_separation_binned":
+                precondition = "common_support_only_new_registered_sampling_required"
+            else:
+                raise ValueError(f"unrecognized q-e occupancy status: {status}")
+            pilot_support = {
+                "status": precondition,
+                "resolved_complete_orbits": diagnostic["resolved_complete_orbits"],
+                "common_minimum_separation_pc": diagnostic.get(
+                    "common_minimum_separation_pc"
+                ),
+                "common_maximum_separation_pc": diagnostic.get(
+                    "common_maximum_separation_pc"
+                ),
+                "orbit_count_eligible_bins": diagnostic.get(
+                    "orbit_count_eligible_bins", 0
+                ),
+            }
         rows.append({
             "case_id": case_id,
             "nominal_kepler_orbits_in_existing_target": old_duration / period,
@@ -82,11 +125,20 @@ def plan_resources(
                 minimum_orbits * period / old_duration
             ),
             "same_cell_size_box_controls": controls,
+            "pilot_support": pilot_support,
         })
+    if pilot is not None and set(pilot_by_case) != planned_case_ids:
+        raise ValueError("q-e assessment contains cases absent from manifest")
     return {
         "status": "qe_followup_resource_design_only_no_run_authorized",
         "manifest": str(manifest.resolve()),
         "physical_cases": str(cases_file.resolve()),
+        "verified_pilot_assessment": (
+            None if pilot is None else {
+                "path": pilot["assessment"],
+                "sha256": pilot["assessment_sha256"],
+            }
+        ),
         "separation_bins": separation_bins,
         "minimum_orbits_per_bin": minimum_orbits_per_bin,
         "box_factor": box_factor,
@@ -105,6 +157,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--cases", type=Path, required=True)
+    parser.add_argument("--assessment", type=Path)
     parser.add_argument("--separation-bins", type=int, default=8)
     parser.add_argument("--minimum-orbits-per-bin", type=int, default=8)
     parser.add_argument("--box-factor", type=int, default=2)
@@ -113,6 +166,8 @@ def main() -> None:
     result = plan_resources(
         args.manifest.expanduser().resolve(),
         args.cases.expanduser().resolve(),
+        assessment=(None if args.assessment is None
+                    else args.assessment.expanduser().resolve()),
         separation_bins=args.separation_bins,
         minimum_orbits_per_bin=args.minimum_orbits_per_bin,
         box_factor=args.box_factor,

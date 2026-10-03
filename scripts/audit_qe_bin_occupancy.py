@@ -122,6 +122,7 @@ def audit_assessment(
     assessment_path: Path,
     *,
     separation_bins: int = 8,
+    minimum_orbits_per_bin: int = 8,
     exploratory_one_bin: bool = False,
 ) -> dict:
     """Recheck immutable source hashes before describing bin occupancy."""
@@ -145,7 +146,10 @@ def audit_assessment(
             ):
                 raise ValueError(f"q-e inputs changed since reassessment: {run}")
             runs.append(load_convergence_run(role, run))
-        diagnostic = pair_occupancy(*runs, separation_bins=separation_bins)
+        diagnostic = pair_occupancy(
+            *runs, separation_bins=separation_bins,
+            minimum_orbits_per_bin=minimum_orbits_per_bin,
+        )
         case_record = {
             "case_id": case["case_id"],
             "assessment_status": case["status"],
@@ -169,11 +173,13 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--assessment", type=Path, required=True)
     parser.add_argument("--separation-bins", type=int, default=8)
+    parser.add_argument("--minimum-orbits-per-bin", type=int, default=8)
     parser.add_argument("--exploratory-one-bin", action="store_true")
     args = parser.parse_args()
     result = audit_assessment(
         args.assessment.expanduser().resolve(),
         separation_bins=args.separation_bins,
+        minimum_orbits_per_bin=args.minimum_orbits_per_bin,
         exploratory_one_bin=args.exploratory_one_bin,
     )
     print(json.dumps(result, indent=2, sort_keys=True))

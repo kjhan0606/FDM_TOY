@@ -291,8 +291,20 @@ The corresponding resource-design calculation (which launches no solver) is
 ```bash
 python scripts/plan_qe_followup_resources.py \
   --manifest results/wave_calibration_qe_extension/run_manifest.csv \
-  --cases results/wave_calibration_qe_extension/physical_cases.csv
+  --cases results/wave_calibration_qe_extension/physical_cases.csv \
+  --assessment /gpfs/kjhan/FDM_TOY_RESULTS/qe_extension/reassessment_20261003_finest_v1/assessment.json
 ```
+
+With `--assessment`, the planner rechecks the pilot's named raw-diagnostic
+hashes and reports each case's initially resolved orbit count and common
+separation support alongside the resource bound.  In the current pilot, seven
+cases have common support but no eight-orbit fixed bin; two equal-mass
+small-separation cases have no common support, and the `q=0.3, e=0.3,
+a/r_c=0.05` coarse run has no initially resolved complete orbit.  Thus a
+longer duration is not a sufficient prescription for any case.  The latter
+three require a changed resolution/initial-condition design before duration
+can matter.  The report is a design diagnostic, not a registered set of bin
+edges or authorization to launch or release a calibration row.
 
 At the initial Kepler period, the **necessary** 64-orbit duration for complete
 coverage of eight bins is 0.1749 Myr at `a/r_c=0.20`, 0.0618 Myr at 0.10, and

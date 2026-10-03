@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts import plan_qe_followup_resources as planner
 from scripts.plan_qe_followup_resources import plan_resources
 
 
@@ -63,3 +64,52 @@ def test_invalid_resource_request_is_rejected(tmp_path: Path) -> None:
     manifest, cases = _inputs(tmp_path)
     with pytest.raises(ValueError, match="invalid"):
         plan_resources(manifest, cases, box_factor=1)
+
+
+@pytest.mark.parametrize(
+    ("pilot_status", "expected"),
+    [
+        ("insufficient_initially_resolved_orbits", "initial_resolution_redesign_required"),
+        ("no_common_resolved_separation", "common_separation_support_redesign_required"),
+        ("common_resolved_separation_binned", "common_support_only_new_registered_sampling_required"),
+    ],
+)
+def test_followup_plan_distinguishes_pilot_support_from_orbit_budget(
+    tmp_path: Path, monkeypatch, pilot_status: str, expected: str,
+) -> None:
+    manifest, cases = _inputs(tmp_path)
+    assessment = tmp_path / "assessment.json"
+    assessment.write_text("{}")
+    calls = []
+
+    def audited(path, *, separation_bins, minimum_orbits_per_bin):
+        calls.append((path, separation_bins, minimum_orbits_per_bin))
+        return {
+            "assessment": str(path), "assessment_sha256": "a" * 64,
+            "cases": [{"case_id": "case_a", "diagnostic": {
+                "status": pilot_status, "resolved_complete_orbits": [12, 11],
+                "common_minimum_separation_pc": 0.4,
+                "common_maximum_separation_pc": 0.5,
+                "orbit_count_eligible_bins": 0,
+            }}],
+        }
+
+    monkeypatch.setattr(planner, "audit_assessment", audited)
+    plan = plan_resources(manifest, cases, assessment=assessment)
+    assert calls == [(assessment, 8, 8)]
+    assert plan["verified_pilot_assessment"]["sha256"] == "a" * 64
+    assert plan["cases"][0]["pilot_support"]["status"] == expected
+    assert plan["cases"][0]["minimum_orbits_for_full_bin_coverage"] == 64
+
+
+def test_followup_plan_rejects_assessment_case_mismatch(tmp_path: Path, monkeypatch) -> None:
+    manifest, cases = _inputs(tmp_path)
+    monkeypatch.setattr(planner, "audit_assessment", lambda *args, **kwargs: {
+        "assessment": "pilot.json", "assessment_sha256": "a" * 64,
+        "cases": [{"case_id": "different", "diagnostic": {
+            "status": "common_resolved_separation_binned",
+            "resolved_complete_orbits": [8, 8],
+        }}],
+    })
+    with pytest.raises(ValueError, match="lacks manifest case"):
+        plan_resources(manifest, cases, assessment=tmp_path / "pilot.json")
