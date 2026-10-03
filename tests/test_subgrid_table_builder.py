@@ -115,6 +115,8 @@ def _matched_bin(
                 "complete_orbits": 20,
                 "mean_separation_pc": 0.5 * (lower + upper),
                 "mean_eccentricity_osculating": 0.23,
+                "minimum_orbit_mean_eccentricity": 0.22,
+                "maximum_orbit_mean_eccentricity": 0.24,
                 "mean_semimajor_axis_osculating_pc": axis_mean,
                 "minimum_orbit_mean_semimajor_axis_pc": axis_mean * 0.98,
                 "maximum_orbit_mean_semimajor_axis_pc": axis_mean * 1.02,
@@ -130,6 +132,8 @@ def _matched_bin(
                 "complete_orbits": 18,
                 "mean_separation_pc": 0.5 * (lower + upper),
                 "mean_eccentricity_osculating": 0.23,
+                "minimum_orbit_mean_eccentricity": 0.22,
+                "maximum_orbit_mean_eccentricity": 0.24,
                 "mean_semimajor_axis_osculating_pc": axis_mean,
                 "minimum_orbit_mean_semimajor_axis_pc": axis_mean * 0.98,
                 "maximum_orbit_mean_semimajor_axis_pc": axis_mean * 1.02,
@@ -718,7 +722,20 @@ def test_qe_box_control_rejects_missing_osculating_axis(tmp_path: Path) -> None:
         "mean_semimajor_axis_osculating_pc"
     ]
     pair_path.write_text(json.dumps(pair))
-    with pytest.raises(ValueError, match="lacks measured osculating-axis"):
+    with pytest.raises(ValueError, match="lacks measured osculating"):
+        assess_qe_box_control(
+            CalibrationSource("test", pair_path), CalibrationSource("test", box)
+        )
+
+
+def test_qe_box_control_rejects_invalid_eccentricity_range(tmp_path: Path) -> None:
+    pair_path, box = _write_qe_box_pair(tmp_path)
+    pair = json.loads(pair_path.read_text())
+    pair["matched_separation"]["bins"][0]["runs"][0][
+        "minimum_orbit_mean_eccentricity"
+    ] = -0.01
+    pair_path.write_text(json.dumps(pair))
+    with pytest.raises(ValueError, match="invalid osculating coordinates"):
         assess_qe_box_control(
             CalibrationSource("test", pair_path), CalibrationSource("test", box)
         )
@@ -775,6 +792,19 @@ def test_qe_candidate_package_retains_only_box_controlled_rows(
         0.52 * (0.4 + 0.8)
     )
     assert observations[0]["doubled_box"]["complete_orbits"] == 20
+    assert observations[0]["necessary_coordinate_overlap"]["status"] == (
+        "rectangular_overlap_necessary_only"
+    )
+    assert observations[0]["necessary_coordinate_overlap"][
+        "runtime_mapping_admitted"
+    ] is False
+    disjoint = deepcopy(observations[0])
+    disjoint["doubled_box"]["minimum_orbit_mean_eccentricity"] = 0.4
+    disjoint["doubled_box"]["mean_eccentricity_osculating"] = 0.45
+    disjoint["doubled_box"]["maximum_orbit_mean_eccentricity"] = 0.5
+    assert qe_box_module._necessary_mapping_coordinate_overlap(disjoint)[
+        "status"
+    ] == "no_common_coordinate_rectangle_censored"
     assert package["production_calibration_row_admitted"] is False
 
 

@@ -165,6 +165,12 @@ def test_common_interval_comparison_uses_resolved_duration(tmp_path: Path) -> No
             "mean_eccentricity_osculating"
         ] == pytest.approx(0.2)
         assert second_at_matched_separation[
+            "minimum_orbit_mean_eccentricity"
+        ] == pytest.approx(0.2)
+        assert second_at_matched_separation[
+            "maximum_orbit_mean_eccentricity"
+        ] == pytest.approx(0.2)
+        assert second_at_matched_separation[
             "minimum_orbit_mean_semimajor_axis_pc"
         ] <= second_at_matched_separation[
             "mean_semimajor_axis_osculating_pc"

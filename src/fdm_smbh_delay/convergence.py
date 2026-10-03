@@ -174,7 +174,8 @@ def load_convergence_run(label: str, run: Path) -> dict:
             "mean_eccentricity_osculating",
             *_ORBIT_TABLE_RATE_FIELDS,
         }
-        if str(metadata.get("case_id", "")).startswith("qe_"):
+        is_qe_case = str(metadata.get("case_id", "")).startswith("qe_")
+        if is_qe_case:
             orbit_required.add("mean_semimajor_axis_osculating_pc")
         orbit_missing = sorted(
             orbit_required - set(orbit_series.dtype.names or ())
@@ -194,6 +195,11 @@ def load_convergence_run(label: str, run: Path) -> dict:
                     f"{label}: orbit-averaged field {field} contains "
                     "non-finite values"
                 )
+        if is_qe_case and np.any(
+            (orbit_series["mean_eccentricity_osculating"] < 0.0)
+            | (orbit_series["mean_eccentricity_osculating"] >= 1.0)
+        ):
+            raise ValueError(f"{label}: q/e orbit-mean eccentricity is invalid")
         if "mean_semimajor_axis_osculating_pc" in (orbit_series.dtype.names or ()):
             axis = orbit_series["mean_semimajor_axis_osculating_pc"]
             if np.any(~np.isfinite(axis)) or np.any(axis <= 0.0):
@@ -445,6 +451,13 @@ def _matched_separation_bins(
                 ),
                 "rates": _bootstrap_orbit_rates(orbit, selection),
             }
+            eccentricity = orbit["mean_eccentricity_osculating"][selection]
+            run_row["minimum_orbit_mean_eccentricity"] = float(
+                np.min(eccentricity)
+            )
+            run_row["maximum_orbit_mean_eccentricity"] = float(
+                np.max(eccentricity)
+            )
             if "mean_semimajor_axis_osculating_pc" in (orbit.dtype.names or ()):
                 axis = orbit["mean_semimajor_axis_osculating_pc"][selection]
                 run_row["mean_semimajor_axis_osculating_pc"] = float(

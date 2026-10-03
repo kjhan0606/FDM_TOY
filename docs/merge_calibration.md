@@ -156,8 +156,9 @@ not silently substitute
 either `a` or its Kepler estimate.
 For new q/e comparisons, the source orbit CSV must contain a finite, positive
 per-orbit mean osculating semimajor axis. Each retained fixed-separation bin
-now records its duration-weighted mean and the range of those orbit means,
-alongside the existing mean separation and eccentricity. These are measured
+now records its duration-weighted mean and the range of orbit means for both
+osculating semimajor axis and eccentricity, alongside the existing mean
+separation. These are measured
 coordinates for a future mapping assessment, not a mapping release; the
 resolution pair and doubled-box control still have to establish common
 support and uncertainty before the bound-binary runtime may use them.
@@ -335,9 +336,13 @@ still does not produce a runtime-loadable calibration table.
 The candidate package also retains fine, coarse, and doubled-box measurements
 of mean separation, osculating semimajor axis and eccentricity for each
 box-supported bin. The osculating-axis mean and per-orbit range must be
-present in both comparisons, and the reused fine-run values must agree.
-These observations are inputs to a future coordinate-mapping convergence
-test; they are not an accepted mapping or permission to apply a rate.
+present in both comparisons, as must the eccentricity range, and the reused
+fine-run values must agree. It reports whether the three sampled `a` ranges
+and three sampled `e` ranges intersect. Rectangular overlap is only a
+*necessary* condition: correlated `(a,e)` samples may still have no common
+joint support, and no interpolation uncertainty has been established.
+These observations are inputs to a future coordinate-mapping convergence test;
+they are not an accepted mapping or permission to apply a rate.
 
 The corresponding resource-design calculation (which launches no solver) is
 

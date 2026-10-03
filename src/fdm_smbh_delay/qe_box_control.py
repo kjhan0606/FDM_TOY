@@ -33,6 +33,11 @@ _MAPPING_COORDINATES = (
     "minimum_orbit_mean_semimajor_axis_pc",
     "maximum_orbit_mean_semimajor_axis_pc",
 )
+_ECCENTRICITY_COORDINATES = (
+    "mean_eccentricity_osculating",
+    "minimum_orbit_mean_eccentricity",
+    "maximum_orbit_mean_eccentricity",
+)
 _RAW_INPUTS = (
     "fdm_adapter_metadata.json",
     "config.uldm",
@@ -94,17 +99,27 @@ def _fixed_bins(summary: dict) -> dict[int, dict]:
                 mean, lower, upper = (
                     float(run_row[field]) for field in _MAPPING_COORDINATES
                 )
+                mean_e, lower_e, upper_e = (
+                    float(run_row[field]) for field in _ECCENTRICITY_COORDINATES
+                )
             except (KeyError, TypeError, ValueError) as error:
                 raise ValueError(
-                    "box-control bin lacks measured osculating-axis coordinates"
+                    "box-control bin lacks measured osculating coordinates"
                 ) from error
             if (
                 not all(np.isfinite(value) for value in (mean, lower, upper))
                 or lower <= 0.0
-                or not lower <= mean <= upper
+                or mean <= 0.0
+                or (mean < lower and not np.isclose(mean, lower, rtol=0, atol=1e-12))
+                or (mean > upper and not np.isclose(mean, upper, rtol=0, atol=1e-12))
+                or not all(np.isfinite(value) for value in (mean_e, lower_e, upper_e))
+                or not 0.0 <= lower_e <= upper_e < 1.0
+                or not 0.0 <= mean_e < 1.0
+                or (mean_e < lower_e and not np.isclose(mean_e, lower_e, rtol=0, atol=1e-12))
+                or (mean_e > upper_e and not np.isclose(mean_e, upper_e, rtol=0, atol=1e-12))
             ):
                 raise ValueError(
-                    "box-control bin has invalid osculating-axis coordinates"
+                    "box-control bin has invalid osculating coordinates"
                 )
         by_index[index] = row
     return by_index
@@ -123,8 +138,31 @@ def _mapping_observation(run_bin: dict) -> dict:
     return {
         "complete_orbits": run_bin["complete_orbits"],
         "mean_separation_pc": run_bin["mean_separation_pc"],
-        "mean_eccentricity_osculating": run_bin["mean_eccentricity_osculating"],
         **{field: run_bin[field] for field in _MAPPING_COORDINATES},
+        **{field: run_bin[field] for field in _ECCENTRICITY_COORDINATES},
+    }
+
+
+def _necessary_mapping_coordinate_overlap(observations: dict) -> dict:
+    """Bound a necessary rectangular overlap; never assert joint 2D support."""
+
+    runs = tuple(observations[role] for role in ("fine", "coarse", "doubled_box"))
+    lower_axis = max(run["minimum_orbit_mean_semimajor_axis_pc"] for run in runs)
+    upper_axis = min(run["maximum_orbit_mean_semimajor_axis_pc"] for run in runs)
+    lower_e = max(run["minimum_orbit_mean_eccentricity"] for run in runs)
+    upper_e = min(run["maximum_orbit_mean_eccentricity"] for run in runs)
+    return {
+        "status": (
+            "rectangular_overlap_necessary_only"
+            if lower_axis <= upper_axis and lower_e <= upper_e
+            else "no_common_coordinate_rectangle_censored"
+        ),
+        "lower_semimajor_axis_pc": lower_axis,
+        "upper_semimajor_axis_pc": upper_axis,
+        "lower_eccentricity": lower_e,
+        "upper_eccentricity": upper_e,
+        "joint_a_e_support_verified": False,
+        "runtime_mapping_admitted": False,
     }
 
 
@@ -381,7 +419,7 @@ def assess_qe_box_control(
             box_shared = _run_bin(box_bins[index], box_other["label"])
             for field in (
                 "complete_orbits", "mean_separation_pc",
-                "mean_eccentricity_osculating", *_MAPPING_COORDINATES,
+                *_ECCENTRICITY_COORDINATES, *_MAPPING_COORDINATES,
             ):
                 if not np.isclose(pair_shared[field], box_shared[field], rtol=1e-12, atol=1e-12):
                     raise ValueError(f"shared fine-run bin differs across comparisons: {index}/{field}")
@@ -488,6 +526,10 @@ def prepare_qe_calibration_candidate(
         }
         for index in sorted(controlled)
     ]
+    for observation in mapping_observations:
+        observation["necessary_coordinate_overlap"] = (
+            _necessary_mapping_coordinate_overlap(observation)
+        )
     if (_sha256(pair_path) != assessment["resolution_pair_sha256"]
             or _sha256(box_path) != assessment["doubled_box_sha256"]):
         raise ValueError("q/e comparison changed while packaging mapping observations")
