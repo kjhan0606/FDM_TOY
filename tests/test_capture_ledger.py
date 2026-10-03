@@ -10,9 +10,14 @@ import pytest
 from fdm_smbh_delay.capture_ledger import (
     CaptureLedgerError,
     _close_code,
-    read_capture_ledger,
+    read_capture_ledger as _read_capture_ledger,
 )
 from fdm_smbh_delay.constants import G_INTERNAL
+
+
+def read_capture_ledger(path, **kwargs):
+    # This module also tests historical bare-ledger diagnostics explicitly.
+    return _read_capture_ledger(path, allow_legacy_events=True, **kwargs)
 
 
 def _binary_rows(uid: str = "10-1-7-9-2") -> list[dict]:
@@ -232,6 +237,26 @@ def test_restarted_capture_censors_uncommitted_batch(tmp_path) -> None:
     assert ledger.censored_batch_uids == ("10-1-2-1",)
 
 
+def test_restart_censors_one_torn_jsonl_row_after_checkpoint(tmp_path) -> None:
+    path = tmp_path / "ledger.jsonl"
+    checkpoint = {"schema_version": 1, "record_type": "checkpoint",
+                  "output_number": 1, "nstep_coarse": 10}
+    rows = [_attempt(), checkpoint, *_committed_batch_rows()[:-1]]
+    _write_rows(path, rows)
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write('{"schema_version":1,"record_type":"batch_commit"\n\n')
+        for row in [_attempt(1, 10), *_committed_batch_rows(step=11)]:
+            stream.write(json.dumps(row) + "\n")
+    ledger = read_capture_ledger(path)
+    assert [event.event_uid for event in ledger.events] == ["11-1-7-9-2"]
+    assert ledger.censored_batch_uids == ("10-1-2-1",)
+
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write('{"bad":\n')
+    with pytest.raises(CaptureLedgerError, match="invalid JSON"):
+        read_capture_ledger(path)
+
+
 def test_missing_batch_commit_without_restart_is_not_censored(tmp_path) -> None:
     path = tmp_path / "ledger.jsonl"
     batch = _committed_batch_rows()
@@ -350,6 +375,14 @@ def test_capture_ledger_converts_code_units_and_recovers_binary(tmp_path) -> Non
     assert event.binary_orbital_state is not None
     assert event.binary_orbital_state.separation_pc == pytest.approx(1.0)
     assert event.binary_orbital_state.eccentricity == pytest.approx(0.0, abs=2.0e-14)
+
+
+def test_legacy_event_is_not_admitted_by_default(tmp_path) -> None:
+    path = tmp_path / "ledger.jsonl"
+    _write_rows(path, _native_binary_rows())
+    with pytest.raises(CaptureLedgerError, match="cannot prove post-compaction capture"):
+        _read_capture_ledger(path)
+    assert read_capture_ledger(path).events[0].native_conservation_verified
 
 
 def test_exact_restart_event_is_deduplicated(tmp_path) -> None:

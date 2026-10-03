@@ -529,11 +529,12 @@ def _validate_batched_event_source(block: _OpenEvent) -> None:
 
 def read_capture_ledger(
     path: str | Path, *, allow_incomplete_tail: bool = False,
-    allow_incomplete_batches: bool = True,
+    allow_incomplete_batches: bool = True, allow_legacy_events: bool = False,
 ) -> CaptureLedger:
     """Read only committed events on the final restart lineage.
 
-    Legacy bare events remain readable until the first batch/attempt marker.
+    Legacy bare events require explicit opt-in for historical inspection;
+    event_end alone cannot prove post-compaction capture.
     A complete ``event_end`` in a new ledger is not enough: its batch must
     commit after sink compaction, and superseded restart branches are excluded.
     A batch interrupted by a valid later restart attempt is censored by
@@ -552,6 +553,7 @@ def read_capture_ledger(
     checkpoints: dict[int, tuple[int, int, int]] = {}
     incomplete: list[str] = []
     censored_batches: list[str] = []
+    corrupt_restart_tail = False
 
     def censor_open_batch(reason: str) -> None:
         nonlocal current, batch
@@ -572,12 +574,23 @@ def read_capture_ledger(
             try:
                 record = json.loads(line)
             except json.JSONDecodeError as exc:
+                # A crashed formatted write may leave one partial JSONL row.
+                # Only a following, checkpoint-bound attempt may supersede it.
+                if seen_protocol and batch is not None and not corrupt_restart_tail:
+                    corrupt_restart_tail = True
+                    continue
                 raise CaptureLedgerError(
                     f"{resolved}:{line_number}: invalid JSON"
                 ) from exc
             if not isinstance(record, dict):
                 raise CaptureLedgerError(f"{resolved}:{line_number}: record is not an object")
             record_type = record.get("record_type")
+            if corrupt_restart_tail:
+                if record_type != "attempt_begin":
+                    raise CaptureLedgerError(
+                        f"{resolved}:{line_number}: corrupt batch tail lacks restart attempt"
+                    )
+                corrupt_restart_tail = False
             if record_type == "attempt_begin":
                 if current is not None and batch is None:
                     raise CaptureLedgerError(f"{current.uid}: missing event_end")
@@ -700,6 +713,8 @@ def read_capture_ledger(
                     f"{resolved}:{line_number}: unknown record_type={record_type!r}"
                 )
 
+    if corrupt_restart_tail:
+        raise CaptureLedgerError("corrupt batch tail has no restart attempt")
     if current is not None:
         incomplete.append(current.uid)
         if batch is None and not allow_incomplete_tail:
@@ -733,6 +748,11 @@ def read_capture_ledger(
         else:
             raise CaptureLedgerError(f"{event.event_uid}: conflicting deterministic event UID")
 
+    if legacy and not allow_legacy_events:
+        raise CaptureLedgerError(
+            "legacy bare events cannot prove post-compaction capture; "
+            "use allow_legacy_events=True only for historical inspection"
+        )
     for event in legacy:
         accept(event)
     for batch_index, (committed_batch, digest, owner) in enumerate(committed):
