@@ -72,6 +72,57 @@ def test_invalid_bin_request_is_rejected() -> None:
         pair_occupancy(_run([0.1, 0.2]), _run([0.1, 0.2]), separation_bins=0)
 
 
+def test_orbit_coordinate_diagnostic_uses_only_initially_resolved_cycles() -> None:
+    orbit = np.zeros(
+        3,
+        dtype=[
+            ("mean_separation_pc", float),
+            ("mean_semimajor_axis_osculating_pc", float),
+            ("mean_eccentricity_osculating", float),
+            ("mean_separation_over_cell_size", float),
+            ("end_time_myr", float),
+        ],
+    )
+    orbit["mean_separation_pc"] = [0.9, 1.1, 10.0]
+    orbit["mean_semimajor_axis_osculating_pc"] = 1.0
+    orbit["mean_eccentricity_osculating"] = 0.0
+    orbit["mean_separation_over_cell_size"] = 3.0
+    orbit["end_time_myr"] = [1.0, 2.0, 3.0]
+    result = audit.orbit_coordinate_diagnostic({
+        "orbit_series": orbit,
+        "conservation": {"initial_spatially_resolved_duration_myr": 2.0},
+    })
+    assert result["initially_resolved_complete_orbits"] == 2
+    assert result["minimum_fractional_discrepancy"] == pytest.approx(-0.1)
+    assert result["maximum_fractional_discrepancy"] == pytest.approx(0.1)
+    assert result["maximum_absolute_fractional_discrepancy"] == pytest.approx(0.1)
+    assert result["status"] == "design_diagnostic_only_no_runtime_mapping"
+
+
+def test_orbit_coordinate_diagnostic_rejects_missing_or_invalid_axis() -> None:
+    with pytest.raises(ValueError, match="lacks"):
+        audit.orbit_coordinate_diagnostic(_run([0.4, 0.5]))
+    invalid = np.zeros(
+        1,
+        dtype=[
+            ("mean_separation_pc", float),
+            ("mean_semimajor_axis_osculating_pc", float),
+            ("mean_eccentricity_osculating", float),
+            ("mean_separation_over_cell_size", float),
+            ("end_time_myr", float),
+        ],
+    )
+    invalid["mean_separation_pc"] = 0.4
+    invalid["mean_semimajor_axis_osculating_pc"] = 0.0
+    invalid["mean_separation_over_cell_size"] = 3.0
+    invalid["end_time_myr"] = 1.0
+    with pytest.raises(ValueError, match="invalid"):
+        audit.orbit_coordinate_diagnostic({
+            "orbit_series": invalid,
+            "conservation": {"initial_spatially_resolved_duration_myr": 1.0},
+        })
+
+
 def test_one_bin_probe_cannot_publish_calibration_rows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

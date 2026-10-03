@@ -141,8 +141,11 @@ Their ratio to the Kepler estimate differs by up to 6.9% for the circular
 `fe4b44c30a022ac434c4e85c99ac62aa9f829dc938a8bd59312cf2c9b514ab81`
 and `5e4f5bbd7f471eada8894247347bcbd78a453a360f9a84e61b834c30597fb98f`,
 respectively). These pilot discrepancies are not accepted mapping
-calibrations, and can exceed a proposed fixed-bin width. The q/e runtime
-therefore requires an explicitly supplied, independently validated
+calibrations, and can exceed a proposed fixed-bin width. The estimate uses
+the *separately averaged* osculating `a` and `e` in each complete orbit, so
+this diagnostic alone cannot assign the discrepancy uniquely to the soliton
+potential rather than intra-orbit variation of the osculating elements. The
+q/e runtime therefore requires an explicitly supplied, independently validated
 `(a,e) -> <r>` mapping; without one, or if its mapped mean leaves accepted
 bins, it returns uncalibrated/censored. The next release must establish and
 verify that mapping from accepted orbit diagnostics, not silently substitute
@@ -275,6 +278,17 @@ budget prospectively, demonstrate a shared resolved interval for both members
 of every resolution pair, and include a doubled-box control. Until those gates
 pass, the runtime must report these q-e-small-separation domains as
 uncalibrated/censored.
+
+The same hash-verified occupancy audit now also reports extrema of the
+fractional difference between measured mean separation and
+`mean(a) * (1 + mean(e)^2/2)` over initially resolved complete orbits. Across
+the ten finest-adjacent
+pilot pairs, the largest absolute difference is 12.65% in the
+`qe_q100_e060_a020` fine run; one coarse small-separation run has zero
+initially resolved complete orbits and therefore no such estimate. This is
+a reproducible design diagnostic, not an accepted `(a,e) -> <r>` mapping or a
+calibration release. The command is the occupancy audit shown above; its
+`orbit_coordinate_diagnostics_fine_coarse` fields carry the counts and extrema.
 
 For a new registered design, the resolution pair and same-cell-size doubled-box
 control must use identical physical separation-bin edges. The comparison CLI

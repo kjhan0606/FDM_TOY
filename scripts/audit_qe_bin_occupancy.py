@@ -96,6 +96,58 @@ def pair_occupancy(
     return result
 
 
+def orbit_coordinate_diagnostic(run: dict) -> dict:
+    """Compare measured and Kepler orbit means on initially resolved cycles.
+
+    This is a design diagnostic only: a per-orbit discrepancy is not a
+    validated runtime map from secular ``(a,e)`` to mean separation.
+    """
+
+    orbit = run["orbit_series"]
+    if orbit is None:
+        raise ValueError("orbit-averaged exchange table is required")
+    required = {
+        "mean_separation_pc",
+        "mean_semimajor_axis_osculating_pc",
+        "mean_eccentricity_osculating",
+    }
+    missing = sorted(required - set(orbit.dtype.names or ()))
+    if missing:
+        raise ValueError(f"orbit-coordinate diagnostic lacks {', '.join(missing)}")
+    valid = _initial_resolved_orbit_indices(
+        orbit,
+        float(run["conservation"]["initial_spatially_resolved_duration_myr"]),
+    )
+    result = {
+        "status": "design_diagnostic_only_no_runtime_mapping",
+        "initially_resolved_complete_orbits": int(valid.size),
+    }
+    if valid.size == 0:
+        return result
+    separation = np.asarray(orbit["mean_separation_pc"][valid], dtype=float)
+    axis = np.asarray(orbit["mean_semimajor_axis_osculating_pc"][valid], dtype=float)
+    eccentricity = np.asarray(orbit["mean_eccentricity_osculating"][valid], dtype=float)
+    if (
+        np.any(~np.isfinite(separation))
+        or np.any(~np.isfinite(axis))
+        or np.any(~np.isfinite(eccentricity))
+        or np.any(separation <= 0.0)
+        or np.any(axis <= 0.0)
+        or np.any((eccentricity < 0.0) | (eccentricity >= 1.0))
+    ):
+        raise ValueError("initially resolved orbit coordinates are invalid")
+    kepler = axis * (1.0 + 0.5 * eccentricity**2)
+    discrepancy = separation / kepler - 1.0
+    result.update({
+        "minimum_fractional_discrepancy": float(np.min(discrepancy)),
+        "maximum_fractional_discrepancy": float(np.max(discrepancy)),
+        "maximum_absolute_fractional_discrepancy": float(
+            np.max(np.abs(discrepancy))
+        ),
+    })
+    return result
+
+
 def exploratory_single_bin_gates(runs: list[dict], *, profile_id: str) -> dict:
     """Probe existing gates at one post-hoc bin; never return calibration rows."""
 
@@ -138,6 +190,7 @@ def audit_assessment(
     for case in assessment["cases"]:
         runs = []
         peak_allocated_bytes = []
+        coordinate_diagnostics = []
         for role in ("fine", "coarse"):
             run = Path(case[f"{role}_run"])
             if not run.is_dir():
@@ -158,7 +211,11 @@ def audit_assessment(
             if _sha256(memory_path) != expected["torch_run_summary.json"]:
                 raise ValueError(f"q-e peak allocation source changed during audit: {run}")
             peak_allocated_bytes.append(peak)
-            runs.append(load_convergence_run(role, run))
+            loaded = load_convergence_run(role, run)
+            coordinate_diagnostics.append(orbit_coordinate_diagnostic(loaded))
+            if any(_sha256(run / name) != expected[name] for name in RUN_INPUTS):
+                raise ValueError(f"q-e inputs changed during audit: {run}")
+            runs.append(loaded)
         diagnostic = pair_occupancy(
             *runs, separation_bins=separation_bins,
             minimum_orbits_per_bin=minimum_orbits_per_bin,
@@ -167,6 +224,7 @@ def audit_assessment(
             "case_id": case["case_id"],
             "assessment_status": case["status"],
             "diagnostic": diagnostic,
+            "orbit_coordinate_diagnostics_fine_coarse": coordinate_diagnostics,
             "peak_device_memory_bytes_fine_coarse": peak_allocated_bytes,
         }
         if exploratory_one_bin:
