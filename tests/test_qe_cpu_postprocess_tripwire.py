@@ -508,6 +508,49 @@ def test_fixed_production_lock_path_has_no_fdm_prefix() -> None:
     )
 
 
+def test_registered_followup_selects_one_run_in_dry_run(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    design_root = PROJECT / "results/wave_calibration_qe_followup_q100e000"
+    monkeypatch.setattr(sys, "argv", [
+        "run_qe_cpu_postprocess_tripwire.py",
+        "--manifest", str(design_root / "run_manifest.csv"),
+        "--cases", str(PROJECT / "results/wave_calibration_qe_extension/physical_cases.csv"),
+        "--qe-design", str(design_root / "design.json"),
+        "--initial-root", str(tmp_path / "initial"),
+        "--torch-root", str(tmp_path / "torch"),
+        "--log-root", str(tmp_path / "logs"),
+        "--run-id", "qe_q100_e000_a020_n256",
+        "--dry-run",
+    ])
+    assert tripwire.main() == 0
+    output = capsys.readouterr().out
+    assert "run_id=qe_q100_e000_a020_n256" in output
+    assert "run_id=qe_q100_e000_a020_n384" not in output
+    assert tripwire.ADDRESS_SPACE_LIMIT_BYTES[256] == 16 * 1024**3
+    assert tripwire.ADDRESS_SPACE_LIMIT_BYTES[384] == 48 * 1024**3
+
+
+def test_registered_postprocess_refuses_login_node_and_unbounded_wait(
+    tmp_path: Path, monkeypatch
+) -> None:
+    base = [
+        "run_qe_cpu_postprocess_tripwire.py",
+        "--qe-design", str(tmp_path / "design.json"),
+        "--run-id", "qe_q100_e000_a020_n256",
+    ]
+    monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+    monkeypatch.setattr(sys, "argv", base)
+    with pytest.raises(SystemExit) as error:
+        tripwire.main()
+    assert error.value.code == 2
+    monkeypatch.setenv("SLURM_JOB_ID", "12345")
+    monkeypatch.setattr(sys, "argv", base)
+    with pytest.raises(SystemExit) as error:
+        tripwire.main()
+    assert error.value.code == 2
+
+
 def test_dry_run_prints_wait_lock_and_bounded_response_without_execution(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:

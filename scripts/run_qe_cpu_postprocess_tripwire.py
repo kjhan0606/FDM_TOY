@@ -30,7 +30,12 @@ from plan_wave_calibration_runs import (
 EX_SOFTWARE = 70
 EX_TEMPFAIL = 75
 EX_CONFIG = 78
-ADDRESS_SPACE_LIMIT_BYTES = {512: 64 * 1024**3, 768: 192 * 1024**3}
+ADDRESS_SPACE_LIMIT_BYTES = {
+    256: 16 * 1024**3,
+    384: 48 * 1024**3,
+    512: 64 * 1024**3,
+    768: 192 * 1024**3,
+}
 FINALIZER_LOCK = Path("/gpfs/kjhan/FDM_TOY_RESULTS/logs/qe_finalize_all.lock")
 GPU_RESOLUTIONS = {512, 768}
 THREAD_ENVIRONMENT = {
@@ -335,6 +340,7 @@ class QeCpuTripwire:
         guard_status_paths: tuple[Path, ...],
         cadence_seconds: float,
         timeout_seconds: float | None,
+        status_file: Path | None = None,
         command_runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
         wait_function: Callable[..., None] = wait_for_torch_completion,
         lock_function: Callable[..., object] = shared_finalizer_lock,
@@ -345,6 +351,7 @@ class QeCpuTripwire:
         self.guard_status_paths = guard_status_paths
         self.cadence_seconds = cadence_seconds
         self.timeout_seconds = timeout_seconds
+        self.status_file = status_file
         self.command_runner = command_runner
         self.wait_function = wait_function
         self.lock_function = lock_function
@@ -576,7 +583,7 @@ class QeCpuTripwire:
                 raise StageFailed(f"final verification failed: {row.run_id} {required_stage}")
 
     def run(self) -> int:
-        status_path = self.log_root / "qe_cpu_tripwire_status.json"
+        status_path = self.status_file or self.log_root / "qe_cpu_tripwire_status.json"
         detail = ""
         try:
             for row in self.rows:
@@ -648,6 +655,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("/gpfs/kjhan/FDM_TOY_RESULTS/logs"),
     )
     parser.add_argument("--run-id", action="append", dest="run_ids")
+    parser.add_argument(
+        "--qe-design", type=Path,
+        help="process one registered q/e follow-up run in a Slurm allocation",
+    )
     parser.add_argument("--guard-status", type=Path, action="append", default=[])
     parser.add_argument("--wait-cadence-seconds", type=float, default=300.0)
     parser.add_argument("--wait-timeout-seconds", type=float)
@@ -662,7 +673,14 @@ def main() -> int:
         parser.error("--wait-cadence-seconds must be at least 30")
     if arguments.wait_timeout_seconds is not None and arguments.wait_timeout_seconds <= 0:
         parser.error("--wait-timeout-seconds must be positive")
-    if not arguments.dry_run and socket.gethostname().split(".", maxsplit=1)[0] != "syntax":
+    if arguments.qe_design is not None:
+        if arguments.run_ids is None or len(arguments.run_ids) != 1:
+            parser.error("registered q/e post-processing requires exactly one --run-id")
+        if not arguments.dry_run and "SLURM_JOB_ID" not in os.environ:
+            parser.error("registered q/e post-processing requires a Slurm allocation")
+        if not arguments.dry_run and arguments.wait_timeout_seconds is None:
+            parser.error("registered q/e post-processing requires a bounded wait timeout")
+    elif not arguments.dry_run and socket.gethostname().split(".", maxsplit=1)[0] != "syntax":
         parser.error("CPU post-processing is restricted to syntax")
 
     plan = build_plan(
@@ -671,9 +689,19 @@ def main() -> int:
         arguments.initial_root.expanduser().resolve(),
         arguments.torch_root.expanduser().resolve(),
         arguments.pyul_path.expanduser().resolve(),
+        qe_design_path=(
+            None if arguments.qe_design is None
+            else arguments.qe_design.expanduser().resolve()
+        ),
+        selected_run_ids=(
+            None if arguments.qe_design is None
+            else set(arguments.run_ids)
+        ),
     )
-    selected = select_eight_added_runs(
-        plan, None if arguments.run_ids is None else set(arguments.run_ids)
+    selected = (
+        plan if arguments.qe_design is not None else select_eight_added_runs(
+            plan, None if arguments.run_ids is None else set(arguments.run_ids)
+        )
     )
     log_root = arguments.log_root.expanduser().resolve()
     guard_paths = tuple(
@@ -703,12 +731,17 @@ def main() -> int:
             stage, command = commands[-1]
             print(f"stage={stage} command={' '.join(command)}")
         return 0
+    status_file = (
+        None if arguments.qe_design is None
+        else log_root / f"qe_cpu_tripwire_{selected[0].run_id}.json"
+    )
     return QeCpuTripwire(
         rows=selected,
         log_root=log_root,
         guard_status_paths=guard_paths,
         cadence_seconds=arguments.wait_cadence_seconds,
         timeout_seconds=arguments.wait_timeout_seconds,
+        status_file=status_file,
     ).run()
 
 
