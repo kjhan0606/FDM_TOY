@@ -14,6 +14,29 @@ from fdm_smbh_delay.qe_followup_design import (
     verify_qe_design_run_request,
 )
 from scripts import summarize_pyul_convergence as comparison_cli
+from scripts.plan_wave_calibration_runs import build_plan
+
+
+def test_registered_q100e000_followup_is_bound_but_has_no_results(tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[1]
+    cases = root / "results/wave_calibration_qe_extension/physical_cases.csv"
+    manifest = root / "results/wave_calibration_qe_followup_q100e000/run_manifest.csv"
+    path = root / "results/wave_calibration_qe_followup_q100e000/design.json"
+    design, digest = read_verified_qe_followup_design(
+        path, physical_cases=cases, run_manifest=manifest,
+    )
+    assert len(digest) == 64
+    assert design["production_calibration_row_admitted"] is False
+    assert design["separation_bin_edges_pc"] == [0.43, 0.438]
+    plan = build_plan(
+        manifest, cases, tmp_path / "initial", tmp_path / "torch",
+        tmp_path / "pyul", qe_design_path=path,
+    )
+    assert [row.qe_design_role for row in plan] == [
+        "coarse", "fine", "doubled_box_control",
+    ]
+    assert all(row.case_duration_myr == 0.1 for row in plan)
+    assert all(row.status_detail == "seed_missing" for row in plan)
 
 
 def _inputs(tmp_path: Path) -> tuple[Path, Path]:

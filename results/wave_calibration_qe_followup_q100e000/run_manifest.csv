@@ -1,0 +1,4 @@
+run_id,case_id,tier,effective_grid_cells,box_size_pc,finest_cell_size_pc,core_cells,plummer_radius_pc,kepler_mean_separation_over_cell_size,pericentre_separation_over_cell_size,pericentre_separation_over_plummer_radius,spatial_acceptance_passed,estimated_uniform_grid_memory_gib,analytic_fdm_drag,required_solver,requires_qe_design
+qe_q100_e000_a020_n256,qe_q100_e000_a020,1,256,26.4,0.103125,21.333333333333336,0.0515625,4.266666666666667,4.266666666666667,8.533333333333333,True,2.0,False,coupled_schrodinger_poisson_with_moving_smbhs,true
+qe_q100_e000_a020_n384,qe_q100_e000_a020,1,384,26.4,0.06875,32.0,0.034375,6.4,6.4,12.8,True,6.75,False,coupled_schrodinger_poisson_with_moving_smbhs,true
+qe_q100_e000_a020_n768,qe_q100_e000_a020,1,768,52.8,0.06875,32.0,0.034375,6.4,6.4,12.8,True,54.0,False,coupled_schrodinger_poisson_with_moving_smbhs,true

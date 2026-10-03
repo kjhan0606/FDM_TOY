@@ -378,6 +378,32 @@ estimate exceeds the design's declared reference GPU memory. Raising that
 declaration without an actual capacity and peak-memory review is not a
 resource validation.
 
+The first prospective follow-up triplet is registered in
+`results/wave_calibration_qe_followup_q100e000/` (design SHA-256
+`23ded7852f5d4b371257254c6b5b72ffdac2b15afff4051e5fdcd1ec1d413c0d`).
+It tests `q=1, e=0, a/r_c=0.20` with a fresh `n=256/384` resolution pair and
+an `n=768` same-cell-size doubled-box control. Its single fixed physical bin
+is `[0.430, 0.438] pc`, prospectively chosen inside the pilot `n=256/512`
+common resolved interval `[0.428703, 0.439566] pc`; that pilot interval is
+planning evidence, not evidence that the unmeasured `n=384` or doubled-box
+trajectories will cover the bin. The registered 0.10 Myr duration is 36.59
+initial Kepler periods, compared with the necessary eight complete orbits in
+the bin. Neither nominal period count nor elapsed duration guarantees eight
+*resolved* orbits in that fixed bin. This one-plane feasibility triplet does
+not complete the required q/e and smaller-separation table extension.
+
+The `n=768` control has 52.8 pc box length and the same 0.06875 pc cell size
+as the `n=384` fine run. The 16-array estimate is 54 GiB, below the design's
+80 GiB reference but **not** a measured peak or a capacity clearance. Prior
+`n=768` work measured 52.32 GiB of allocated device memory for another box;
+reserved CUDA memory, FFT workspace, concurrent users, long-run peak, and
+the CPU wave-response memory still require a new resource review. The
+design-bound planner reports three missing seeds and launches nothing. No
+seed, Torch, or response job is authorized by this registration; the project
+approval rule for heavy wave-response work remains in force. A failed common
+bin, conservation, spatial-rate, or doubled-box gate leaves this plane
+uncalibrated/censored and cannot release a production row.
+
 At the initial Kepler period, the **necessary** 64-orbit duration for complete
 coverage of eight bins is 0.1749 Myr at `a/r_c=0.20`, 0.0618 Myr at 0.10, and
 0.0219 Myr at 0.05. These are not sufficient durations: the smallest
