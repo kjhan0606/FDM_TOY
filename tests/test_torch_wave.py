@@ -12,9 +12,27 @@ from fdm_smbh_delay.torch_wave import (
     plummer_potential_torch,
     sample_potential_and_acceleration,
     spectral_grid,
+    wave_density,
     wave_energy_components,
 )
 from fdm_smbh_delay.wave_response import periodic_poisson_code
+
+
+def test_wave_density_matches_complex_magnitude_without_mutating_input() -> None:
+    rng = np.random.default_rng(2826)
+    original = torch.as_tensor(
+        rng.normal(size=(8, 8, 8)) + 1j * rng.normal(size=(8, 8, 8)),
+        dtype=torch.complex128,
+    )
+    before = original.clone()
+    measured = wave_density(original)
+    expected = original.abs().square()
+    torch.testing.assert_close(measured, expected, rtol=2e-15, atol=2e-15)
+    torch.testing.assert_close(original, before, rtol=0, atol=0)
+    assert measured.dtype == torch.float64
+    assert measured.data_ptr() != original.data_ptr()
+    with pytest.raises(ValueError, match="complex dtype"):
+        wave_density(torch.ones(3, dtype=torch.float64))
 
 
 def test_separable_kinetic_phase_matches_cubic_reference_and_preserves_norm() -> None:

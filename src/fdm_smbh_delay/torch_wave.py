@@ -98,6 +98,16 @@ def apply_kinetic_phase_in_place(
     wavefunction_k.mul_(axis_phase[None, None, :])
 
 
+def wave_density(wavefunction: torch.Tensor) -> torch.Tensor:
+    """Return |psi|^2 with one real-sized allocation and no input mutation."""
+
+    if not wavefunction.is_complex():
+        raise ValueError("wavefunction must have a complex dtype")
+    density = wavefunction.real.square()
+    density.addcmul_(wavefunction.imag, wavefunction.imag)
+    return density
+
+
 def periodic_poisson_torch(
     density: torch.Tensor, inverse_wavenumber_squared: torch.Tensor
 ) -> torch.Tensor:
@@ -442,7 +452,7 @@ def wave_energy_components(
         raise ValueError("wave kinetic axis and cubic field are incompatible")
     wavefunction_k = torch.fft.fftn(wavefunction)
     cells = wavefunction.numel()
-    spectral_power = wavefunction_k.abs().square()
+    spectral_power = wave_density(wavefunction_k)
     marginal_power = (
         spectral_power.sum(dim=(1, 2))
         + spectral_power.sum(dim=(0, 2))

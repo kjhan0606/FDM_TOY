@@ -26,6 +26,7 @@ from fdm_smbh_delay.torch_wave import (
     potential_patches,
     sample_potential_and_acceleration,
     spectral_grid,
+    wave_density,
     wave_energy_components,
 )
 
@@ -396,7 +397,7 @@ def main() -> int:
         time_step=time_step,
         device=device,
     )
-    density = wavefunction.abs().square()
+    density = wave_density(wavefunction)
     wave_potential = periodic_poisson_torch(
         density, grid.poisson_inverse_wavenumber_squared
     )
@@ -477,7 +478,7 @@ def main() -> int:
         apply_kinetic_phase_in_place(wavefunction_k, grid.kinetic_axis_phase)
         wavefunction = torch.fft.ifftn(wavefunction_k)
         del wavefunction_k
-        density = wavefunction.abs().square()
+        density = wave_density(wavefunction)
         wave_potential = periodic_poisson_torch(
             density, grid.poisson_inverse_wavenumber_squared
         )
