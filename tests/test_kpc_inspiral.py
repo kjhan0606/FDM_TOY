@@ -11,16 +11,22 @@ from fdm_smbh_delay.galaxy_environment import (
     CompositePotential,
     DehnenProfile,
     FDMBackground,
+    GasBackground,
     NuclearEnvelope,
     StellarBackground,
 )
 from fdm_smbh_delay.soliton import SchiveSoliton
 from fdm_smbh_delay.profile_table import TabulatedSphericalProfile
+from fdm_smbh_delay.kpc_checkpoint import (
+    read_kpc_to_hard_checkpoint,
+    write_kpc_to_hard_checkpoint,
+)
 from fdm_smbh_delay.kpc_inspiral import (
     KpcInspiralModel,
     KpcIntegrationConfig,
     KpcToHardConfig,
     KpcToHardState,
+    GasFrictionConfig,
     StellarFrictionConfig,
     DualNucleusState,
     force_budget,
@@ -169,6 +175,91 @@ def test_conservative_orbit_closes_energy_without_drag() -> None:
         0.0, abs=2.0e-8
     )
     assert all(sample.drag_work_rate_pc2_myr3 == 0.0 for sample in result.samples)
+
+
+def test_combined_stellar_gas_fdm_drag_closes_orbital_work(tmp_path) -> None:
+    stars = DehnenProfile(1.0e9, 300.0, 1.0)
+    gas = DehnenProfile(5.0e8, 300.0, 1.0)
+    soliton = SchiveSoliton.from_mass(1.0e9, 100.0, "total_profile")
+    model = KpcInspiralModel(
+        host_potential=CompositePotential(
+            (stars, gas, soliton), central_point_mass_msun=1.0e8,
+        ),
+        secondary_bh_mass_msun=1.0e8,
+        stellar_background=StellarBackground(stars, 100.0, np.zeros(3)),
+        stellar_friction=StellarFrictionConfig(minimum_impact_parameter_pc=0.1),
+        gas_background=GasBackground(gas, sound_speed_pc_myr=70.0),
+        gas_friction=GasFrictionConfig(coulomb_logarithm=3.0),
+        fdm_background=FDMBackground(
+            soliton, 1.0e-21, 0.341, np.zeros(3),
+        ),
+    )
+    radius = 100.0
+    speed = np.sqrt(
+        G_INTERNAL * (model.host_potential.enclosed_mass(radius) + 1.0e8)
+        / radius
+    )
+    dynamics = initial_dual_nucleus_state(
+        position_pc=np.array([radius, 0.0, 0.0]),
+        velocity_pc_myr=np.array([0.0, speed, 0.0]),
+        model=model,
+    )
+    budget = force_budget(dynamics, model)
+    for acceleration in (
+        budget.stellar_acceleration_pc_myr2,
+        budget.gas_acceleration_pc_myr2,
+        budget.fdm_acceleration_pc_myr2,
+    ):
+        assert np.dot(dynamics.velocity_pc_myr, acceleration) < 0.0
+    config = KpcToHardConfig(
+        primary_bh_mass_msun=1.0e8,
+        common_nucleus_radius_pc=10.0,
+        sigma_pc_myr=100.0,
+        hard_binary_radius_pc=1.0,
+        maximum_time_myr=0.05,
+        maximum_step_myr=0.0005,
+        timestep_fraction=0.02,
+    )
+    initial = initial_kpc_to_hard_state(
+        event_uid="combined-drag-work", dynamical_state=dynamics,
+        model=model, config=config,
+    )
+    result = integrate_dual_nucleus_to_hard(
+        initial_state=initial, model=model, config=config,
+    )
+    assert result.status == "timeout"
+    times = np.asarray([sample.elapsed_myr for sample in result.samples])
+    work_rates = np.asarray([
+        sample.drag_work_rate_pc2_myr3 for sample in result.samples
+    ])
+    drag_work = np.trapezoid(work_rates, times)
+    orbital_energy_change = (
+        result.samples[-1].specific_orbital_energy_pc2_myr2
+        - result.samples[0].specific_orbital_energy_pc2_myr2
+    )
+    assert drag_work < 0.0
+    assert orbital_energy_change == pytest.approx(drag_work, rel=1.0e-3)
+
+    partial = integrate_dual_nucleus_to_hard(
+        initial_state=initial, model=model, config=config, step_budget=50,
+    )
+    assert partial.status == "checkpoint"
+    checkpoint = tmp_path / "combined-friction.json"
+    write_kpc_to_hard_checkpoint(checkpoint, partial.final_state, model, config)
+    loaded = read_kpc_to_hard_checkpoint(checkpoint, model, config)
+    resumed = integrate_dual_nucleus_to_hard(
+        initial_state=loaded, model=model, config=config,
+    )
+    assert resumed.status == result.status
+    assert resumed.final_state.transition_history == result.final_state.transition_history
+    assert np.array_equal(
+        resumed.final_state.dynamical_state.position_pc,
+        result.final_state.dynamical_state.position_pc,
+    )
+    assert np.array_equal(
+        resumed.final_state.dynamical_state.velocity_pc_myr,
+        result.final_state.dynamical_state.velocity_pc_myr,
+    )
 
 
 def test_tidal_stripping_is_monotonic() -> None:
