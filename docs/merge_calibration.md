@@ -340,6 +340,10 @@ unregistered comparison, or two different designs, cannot be combined. This
 path still does not authorize a GPU run or a
 calibration release. The present 128–432 GiB doubled-box estimates require
 an independently reviewed resource/solver design.
+The seed and comparison path refuse a doubled-box role when its uniform-grid
+estimate exceeds the design's declared reference GPU memory. Raising that
+declaration without an actual capacity and peak-memory review is not a
+resource validation.
 
 At the initial Kepler period, the **necessary** 64-orbit duration for complete
 coverage of eight bins is 0.1749 Myr at `a/r_c=0.20`, 0.0618 Myr at 0.10, and
@@ -349,6 +353,11 @@ zero initially resolved coarse-grid orbits. Doubling the box while preserving
 cell size raises the finest members of the present pairs from `n=512` to
 `n=1024` or from `n=768` to `n=1536`. The existing 16-array uniform-grid model
 estimates 128 and 432 GiB, respectively, above an 80 GiB reference device.
+The hash-verified completed Torch summaries measure peak **allocated** device
+memory of 14.50 GiB at `n=512` and 52.32 GiB at `n=768`. Cubic projection
+to the doubled grids gives 116.0 and 418.5 GiB; the resource planner reports
+these independently of the 16-array estimate. Neither projection includes
+CUDA reserved memory, FFT workspace, or a newly measured large-grid peak.
 These estimates are planning warnings, not measured peak GPU footprints. A
 new release therefore needs an independently reviewed solver/resource design
 for its doubled-box controls; merely extending the current run duration or

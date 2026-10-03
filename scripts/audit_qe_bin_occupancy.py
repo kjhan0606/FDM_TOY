@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 import sys
 import tempfile
@@ -136,6 +137,7 @@ def audit_assessment(
     cases = []
     for case in assessment["cases"]:
         runs = []
+        peak_allocated_bytes = []
         for role in ("fine", "coarse"):
             run = Path(case[f"{role}_run"])
             if not run.is_dir():
@@ -145,6 +147,17 @@ def audit_assessment(
                 _sha256(run / name) != expected[name] for name in RUN_INPUTS
             ):
                 raise ValueError(f"q-e inputs changed since reassessment: {run}")
+            memory_path = run / "torch_run_summary.json"
+            memory_record = json.loads(memory_path.read_text(encoding="utf-8"))
+            peak = memory_record.get("peak_device_memory_bytes")
+            if peak is not None and (
+                isinstance(peak, bool) or not isinstance(peak, (int, float))
+                or not math.isfinite(peak) or peak <= 0.0
+            ):
+                raise ValueError(f"q-e peak device allocation is invalid: {run}")
+            if _sha256(memory_path) != expected["torch_run_summary.json"]:
+                raise ValueError(f"q-e peak allocation source changed during audit: {run}")
+            peak_allocated_bytes.append(peak)
             runs.append(load_convergence_run(role, run))
         diagnostic = pair_occupancy(
             *runs, separation_bins=separation_bins,
@@ -154,6 +167,7 @@ def audit_assessment(
             "case_id": case["case_id"],
             "assessment_status": case["status"],
             "diagnostic": diagnostic,
+            "peak_device_memory_bytes_fine_coarse": peak_allocated_bytes,
         }
         if exploratory_one_bin:
             case_record["exploratory_single_bin"] = exploratory_single_bin_gates(

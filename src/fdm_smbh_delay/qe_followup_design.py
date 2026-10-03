@@ -199,6 +199,14 @@ def verify_qe_design_run_request(
     }
     if role not in roles:
         raise ValueError("q/e design run role is invalid")
+    if (
+        role == "doubled_box_control"
+        and design["doubled_box_control"]["exceeds_reference_gpu_memory"]
+    ):
+        raise ValueError(
+            "q/e doubled-box estimate exceeds the declared GPU memory; "
+            "a different reviewed resource design is required"
+        )
     expected = roles[role]
     if (
         case_id != design["case_id"]

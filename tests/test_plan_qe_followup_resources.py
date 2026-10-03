@@ -86,7 +86,9 @@ def test_followup_plan_distinguishes_pilot_support_from_orbit_budget(
         calls.append((path, separation_bins, minimum_orbits_per_bin))
         return {
             "assessment": str(path), "assessment_sha256": "a" * 64,
-            "cases": [{"case_id": "case_a", "diagnostic": {
+            "cases": [{"case_id": "case_a",
+                       "peak_device_memory_bytes_fine_coarse": [16 * 1024**3, 2 * 1024**3],
+                       "diagnostic": {
                 "status": pilot_status, "resolved_complete_orbits": [12, 11],
                 "common_minimum_separation_pc": 0.4,
                 "common_maximum_separation_pc": 0.5,
@@ -100,6 +102,13 @@ def test_followup_plan_distinguishes_pilot_support_from_orbit_budget(
     assert plan["verified_pilot_assessment"]["sha256"] == "a" * 64
     assert plan["cases"][0]["pilot_support"]["status"] == expected
     assert plan["cases"][0]["minimum_orbits_for_full_bin_coverage"] == 64
+    assert plan["cases"][0]["pilot_support"]["fine_measured_peak_allocated_gib"] == 16.0
+    assert plan["cases"][0]["pilot_support"][
+        "cubic_extrapolated_doubled_box_allocated_gib"
+    ] == 128.0
+    assert plan["cases"][0]["pilot_support"][
+        "cubic_projection_exceeds_reference_gpu"
+    ] is True
 
 
 def test_followup_plan_rejects_assessment_case_mismatch(tmp_path: Path, monkeypatch) -> None:

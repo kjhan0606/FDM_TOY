@@ -57,7 +57,7 @@ def plan_resources(
             case_id = row["case_id"]
             if case_id in pilot_by_case:
                 raise ValueError(f"q-e assessment repeats case: {case_id}")
-            pilot_by_case[case_id] = row["diagnostic"]
+            pilot_by_case[case_id] = row
     minimum_orbits = separation_bins * minimum_orbits_per_bin
     planned_case_ids = set()
     for case_id, fine, coarse in finest_adjacent_pairs(manifest):
@@ -91,7 +91,8 @@ def plan_resources(
         if pilot is not None:
             if case_id not in pilot_by_case:
                 raise ValueError(f"q-e assessment lacks manifest case: {case_id}")
-            diagnostic = pilot_by_case[case_id]
+            audit_row = pilot_by_case[case_id]
+            diagnostic = audit_row["diagnostic"]
             status = diagnostic["status"]
             if status == "insufficient_initially_resolved_orbits":
                 precondition = "initial_resolution_redesign_required"
@@ -114,6 +115,16 @@ def plan_resources(
                     "orbit_count_eligible_bins", 0
                 ),
             }
+            peak_bytes = audit_row.get("peak_device_memory_bytes_fine_coarse")
+            if peak_bytes is not None and peak_bytes[0] is not None:
+                fine_peak_gib = float(peak_bytes[0]) / 1024**3
+                pilot_support["fine_measured_peak_allocated_gib"] = fine_peak_gib
+                pilot_support["cubic_extrapolated_doubled_box_allocated_gib"] = (
+                    fine_peak_gib * box_factor**3
+                )
+                pilot_support["cubic_projection_exceeds_reference_gpu"] = (
+                    fine_peak_gib * box_factor**3 > reference_gpu_memory_gib
+                )
         rows.append({
             "case_id": case_id,
             "nominal_kepler_orbits_in_existing_target": old_duration / period,

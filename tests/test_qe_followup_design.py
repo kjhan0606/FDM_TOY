@@ -34,11 +34,12 @@ def _inputs(tmp_path: Path) -> tuple[Path, Path]:
     return cases, manifest
 
 
-def _design(cases: Path, manifest: Path) -> dict:
+def _design(cases: Path, manifest: Path, *, memory_gib: float = 80.0) -> dict:
     return build_qe_followup_design(
         case_id="qe_test", physical_cases=cases, run_manifest=manifest,
         coarse_resolution=256, fine_resolution=512,
         separation_bin_edges_pc=(0.43, 0.45), duration_myr=0.02,
+        reference_gpu_memory_gib=memory_gib,
     )
 
 
@@ -120,9 +121,15 @@ def test_design_run_binding_rejects_changed_role_geometry_or_duration(tmp_path: 
         design, case_id="qe_test", role="fine", resolution=512,
         box_size_pc=26.4, duration_myr=0.02,
     )
+    with pytest.raises(ValueError, match="exceeds the declared GPU memory"):
+        verify_qe_design_run_request(
+            design, case_id="qe_test", role="doubled_box_control", resolution=1024,
+            box_size_pc=52.8, duration_myr=0.03,
+        )
+    reviewed_capacity = _design(cases, manifest, memory_gib=160.0)
     verify_qe_design_run_request(
-        design, case_id="qe_test", role="doubled_box_control", resolution=1024,
-        box_size_pc=52.8, duration_myr=0.03,
+        reviewed_capacity, case_id="qe_test", role="doubled_box_control",
+        resolution=1024, box_size_pc=52.8, duration_myr=0.03,
     )
     for role, resolution, box, duration in (
         ("fine", 768, 26.4, 0.02),
@@ -132,14 +139,14 @@ def test_design_run_binding_rejects_changed_role_geometry_or_duration(tmp_path: 
     ):
         with pytest.raises(ValueError, match="disagrees"):
             verify_qe_design_run_request(
-                design, case_id="qe_test", role=role, resolution=resolution,
+                reviewed_capacity, case_id="qe_test", role=role, resolution=resolution,
                 box_size_pc=box, duration_myr=duration,
             )
 
 
 def test_design_comparison_requires_both_bound_roles(tmp_path: Path) -> None:
     cases, manifest = _inputs(tmp_path)
-    design = _design(cases, manifest)
+    design = _design(cases, manifest, memory_gib=160.0)
     source = tmp_path / "design.json"
     source.write_text(json.dumps(design), encoding="utf-8")
     _, digest = read_verified_qe_followup_design(
