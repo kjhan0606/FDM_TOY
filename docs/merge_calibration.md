@@ -343,6 +343,13 @@ and three sampled `e` ranges intersect. Rectangular overlap is only a
 joint support, and no interpolation uncertainty has been established.
 These observations are inputs to a future coordinate-mapping convergence test;
 they are not an accepted mapping or permission to apply a rate.
+The package reports the dimensionless ratio
+`<r> / [<a> (1 + <e>^2/2)]` for each run and its coarse/fine and
+doubled-box/fine differences, together with the differences in mean `a` and
+`e`. Because those bin means need not represent the same `(a,e)` state, the
+ratio differences are descriptive diagnostics, **not** a mapping-convergence
+test or a new acceptance threshold. A future test must match joint `(a,e)`
+support and quantify uncertainty before producing a runtime map.
 
 The corresponding resource-design calculation (which launches no solver) is
 

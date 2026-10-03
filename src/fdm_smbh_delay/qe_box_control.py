@@ -96,6 +96,7 @@ def _fixed_bins(summary: dict) -> dict[int, dict]:
             raise ValueError("box-control bin requires two run rows")
         for run_row in run_rows:
             try:
+                mean_r = float(run_row["mean_separation_pc"])
                 mean, lower, upper = (
                     float(run_row[field]) for field in _MAPPING_COORDINATES
                 )
@@ -107,7 +108,11 @@ def _fixed_bins(summary: dict) -> dict[int, dict]:
                     "box-control bin lacks measured osculating coordinates"
                 ) from error
             if (
-                not all(np.isfinite(value) for value in (mean, lower, upper))
+                not np.isfinite(mean_r)
+                or mean_r <= 0.0
+                or mean_r < edges[index] - 1e-12
+                or mean_r > edges[index + 1] + 1e-12
+                or not all(np.isfinite(value) for value in (mean, lower, upper))
                 or lower <= 0.0
                 or mean <= 0.0
                 or (mean < lower and not np.isclose(mean, lower, rtol=0, atol=1e-12))
@@ -135,11 +140,17 @@ def _run_bin(bin_row: dict, label: str) -> dict:
 def _mapping_observation(run_bin: dict) -> dict:
     """Keep measured bin coordinates separate from the rate-release row."""
 
+    mean_r = float(run_bin["mean_separation_pc"])
+    mean_a = float(run_bin["mean_semimajor_axis_osculating_pc"])
+    mean_e = float(run_bin["mean_eccentricity_osculating"])
     return {
         "complete_orbits": run_bin["complete_orbits"],
-        "mean_separation_pc": run_bin["mean_separation_pc"],
+        "mean_separation_pc": mean_r,
         **{field: run_bin[field] for field in _MAPPING_COORDINATES},
         **{field: run_bin[field] for field in _ECCENTRICITY_COORDINATES},
+        "measured_over_kepler_mean_ratio": mean_r / (
+            mean_a * (1.0 + 0.5 * mean_e**2)
+        ),
     }
 
 
@@ -162,6 +173,42 @@ def _necessary_mapping_coordinate_overlap(observations: dict) -> dict:
         "lower_eccentricity": lower_e,
         "upper_eccentricity": upper_e,
         "joint_a_e_support_verified": False,
+        "runtime_mapping_admitted": False,
+    }
+
+
+def _mapping_ratio_diagnostic(observations: dict) -> dict:
+    """Describe, without accepting, differences at unmatched bin-mean states."""
+
+    fine = observations["fine"]
+    coarse = observations["coarse"]
+    doubled = observations["doubled_box"]
+    denominator = fine["measured_over_kepler_mean_ratio"]
+    return {
+        "status": "unmatched_state_diagnostic_only_no_mapping_admitted",
+        "coarse_minus_fine_fraction_of_fine_ratio": (
+            coarse["measured_over_kepler_mean_ratio"] / denominator - 1.0
+        ),
+        "doubled_box_minus_fine_fraction_of_fine_ratio": (
+            doubled["measured_over_kepler_mean_ratio"] / denominator - 1.0
+        ),
+        "coarse_minus_fine_relative_mean_axis": (
+            coarse["mean_semimajor_axis_osculating_pc"]
+            / fine["mean_semimajor_axis_osculating_pc"] - 1.0
+        ),
+        "doubled_box_minus_fine_relative_mean_axis": (
+            doubled["mean_semimajor_axis_osculating_pc"]
+            / fine["mean_semimajor_axis_osculating_pc"] - 1.0
+        ),
+        "coarse_minus_fine_mean_eccentricity": (
+            coarse["mean_eccentricity_osculating"]
+            - fine["mean_eccentricity_osculating"]
+        ),
+        "doubled_box_minus_fine_mean_eccentricity": (
+            doubled["mean_eccentricity_osculating"]
+            - fine["mean_eccentricity_osculating"]
+        ),
+        "same_a_e_state_verified": False,
         "runtime_mapping_admitted": False,
     }
 
@@ -529,6 +576,9 @@ def prepare_qe_calibration_candidate(
     for observation in mapping_observations:
         observation["necessary_coordinate_overlap"] = (
             _necessary_mapping_coordinate_overlap(observation)
+        )
+        observation["unmatched_ratio_diagnostic"] = (
+            _mapping_ratio_diagnostic(observation)
         )
     if (_sha256(pair_path) != assessment["resolution_pair_sha256"]
             or _sha256(box_path) != assessment["doubled_box_sha256"]):

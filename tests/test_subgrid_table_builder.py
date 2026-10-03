@@ -741,6 +741,19 @@ def test_qe_box_control_rejects_invalid_eccentricity_range(tmp_path: Path) -> No
         )
 
 
+def test_qe_box_control_rejects_mean_separation_outside_fixed_bin(
+    tmp_path: Path,
+) -> None:
+    pair_path, box = _write_qe_box_pair(tmp_path)
+    pair = json.loads(pair_path.read_text())
+    pair["matched_separation"]["bins"][0]["runs"][0]["mean_separation_pc"] = 1.3
+    pair_path.write_text(json.dumps(pair))
+    with pytest.raises(ValueError, match="invalid osculating coordinates"):
+        assess_qe_box_control(
+            CalibrationSource("test", pair_path), CalibrationSource("test", box)
+        )
+
+
 def _mock_strict_box_assessment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[Path, Path]:
@@ -792,6 +805,17 @@ def test_qe_candidate_package_retains_only_box_controlled_rows(
         0.52 * (0.4 + 0.8)
     )
     assert observations[0]["doubled_box"]["complete_orbits"] == 20
+    assert observations[0]["fine"]["measured_over_kepler_mean_ratio"] == (
+        pytest.approx(0.6 / (0.624 * (1.0 + 0.5 * 0.23**2)))
+    )
+    ratio_diagnostic = observations[0]["unmatched_ratio_diagnostic"]
+    assert ratio_diagnostic["coarse_minus_fine_fraction_of_fine_ratio"] == (
+        pytest.approx(0.0)
+    )
+    assert ratio_diagnostic["status"] == (
+        "unmatched_state_diagnostic_only_no_mapping_admitted"
+    )
+    assert ratio_diagnostic["runtime_mapping_admitted"] is False
     assert observations[0]["necessary_coordinate_overlap"]["status"] == (
         "rectangular_overlap_necessary_only"
     )
