@@ -619,8 +619,14 @@ def verify_fixed_comparison_summary(path: Path) -> dict:
             if ("run" in run_status
                     and Path(run_status["run"]).resolve() != run):
                 raise ValueError(f"box-control raw run identity differs: {run}/{name}")
-        source_inputs.append({"label": label, "run": str(run), "sha256": hashes})
-        loaded.append(load_convergence_run(label, run))
+        loaded_run = load_convergence_run(label, run)
+        source_inputs.append({
+            "label": label,
+            "run": str(run),
+            "sha256": hashes,
+            "orbit_artifact_provenance": loaded_run["orbit_artifact_provenance"],
+        })
+        loaded.append(loaded_run)
     matched = saved["matched_separation"]
     recomputed = summarize_convergence(
         loaded,
@@ -808,6 +814,13 @@ def prepare_qe_calibration_candidate(
         if actual_runs != expected_runs or len(comparison["raw_inputs"]) != 2:
             raise ValueError("q/e raw verification run identity is invalid")
         for run in comparison["raw_inputs"]:
+            if run.get("orbit_artifact_provenance", {}).get("status") != (
+                "verified_orbit_artifact_provenance_v1"
+            ):
+                raise ValueError(
+                    "q/e calibration release requires versioned verified orbit "
+                    "artifact provenance"
+                )
             if set(run["sha256"]) != set(_RAW_INPUTS):
                 raise ValueError("q/e raw verification input set is incomplete")
             for name, expected_sha256 in run["sha256"].items():

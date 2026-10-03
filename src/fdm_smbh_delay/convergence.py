@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import io
 import json
 from pathlib import Path
 from typing import Iterable
@@ -9,6 +11,7 @@ from typing import Iterable
 import numpy as np
 
 from .secular_exchange import moving_block_bootstrap_rate
+from .pyul import ordered_output_paths
 
 
 _RATE_FIELDS = (
@@ -53,6 +56,95 @@ _COORDINATE_RATIO_BOOTSTRAP_SAMPLES = 2000
 
 def _read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _sha256_bytes(payload: bytes) -> str:
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _state_set_identity(paths: list[Path]) -> dict:
+    digest = hashlib.sha256()
+    for path in paths:
+        file_digest = _sha256(path)
+        digest.update(path.name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(file_digest.encode("ascii"))
+        digest.update(b"\n")
+    return {"count": len(paths), "ordered_name_and_content_sha256": digest.hexdigest()}
+
+
+def validate_orbit_artifact_provenance(
+    run: Path, metadata: dict, orbit_summary: dict,
+    *, artifact_bytes: dict[str, bytes] | None = None,
+) -> dict[str, str]:
+    """Validate v1 orbit bindings, without promoting unbound archival files."""
+
+    binding = orbit_summary.get("artifact_provenance")
+    if binding is None:
+        return {
+            "status": "legacy_unverified_orbit_artifacts",
+            "reason": "orbit summary predates the versioned run/upstream binding",
+        }
+    if not isinstance(binding, dict) or binding.get("schema_version") != 1:
+        raise ValueError("orbit artifact provenance schema is invalid")
+    identity = binding.get("run_identity")
+    upstream = binding.get("upstream")
+    if not isinstance(identity, dict) or not isinstance(upstream, dict):
+        raise ValueError("orbit artifact provenance structure is invalid")
+    expected_identity = {
+        "run_id": metadata.get("run_id"),
+        "case_id": metadata.get("case_id"),
+        "resolution": metadata.get("resolution"),
+    }
+    if identity != expected_identity or not all(
+        value is not None for value in expected_identity.values()
+    ):
+        raise ValueError("orbit artifact provenance run identity differs")
+    resolved = run.expanduser().resolve()
+    if artifact_bytes is None:
+        artifact_bytes = {
+            name: (resolved / name).read_bytes()
+            for name in (
+                "fdm_adapter_metadata.json", "config.uldm",
+                "conservation_summary.json", "conservation_timeseries.csv",
+                "orbit_averaged_exchange.csv",
+            )
+        }
+    expected_upstream = {
+        "fdm_adapter_metadata_sha256": _sha256_bytes(artifact_bytes["fdm_adapter_metadata.json"]),
+        "config_sha256": _sha256_bytes(artifact_bytes["config.uldm"]),
+        "conservation_summary_sha256": _sha256_bytes(artifact_bytes["conservation_summary.json"]),
+        "conservation_timeseries_sha256": _sha256_bytes(artifact_bytes["conservation_timeseries.csv"]),
+    }
+    if upstream != expected_upstream:
+        raise ValueError("orbit artifact provenance upstream digest differs")
+    if binding.get("orbit_csv_sha256") != _sha256_bytes(
+        artifact_bytes["orbit_averaged_exchange.csv"]
+    ):
+        raise ValueError("orbit artifact provenance CSV digest differs")
+    state_paths = ordered_output_paths(resolved / "Outputs" / "NBody", "NTM_#*.npy")
+    state_binding = binding.get("nbody_state_set")
+    if (
+        not isinstance(state_binding, dict)
+        or not isinstance(state_binding.get("count"), int)
+        or state_binding["count"] < 1
+        or len(state_paths) < state_binding["count"]
+        or state_binding
+        != _state_set_identity(state_paths[: state_binding["count"]])
+    ):
+        raise ValueError("orbit artifact provenance N-body state set differs")
+    return {
+        "status": "verified_orbit_artifact_provenance_v1",
+        "reason": "run identity, upstream conservation artifacts, and orbit CSV match",
+    }
 
 
 def _fractional_difference(value: float, reference: float) -> float | None:
@@ -193,12 +285,26 @@ def _bootstrap_orbit_coordinate_ratio(
 def load_convergence_run(label: str, run: Path) -> dict:
     """Load the saved diagnostics needed for a convergence comparison."""
     resolved = run.expanduser().resolve()
-    metadata = _read_json(resolved / "fdm_adapter_metadata.json")
-    config = _read_json(resolved / "config.uldm")
-    conservation = _read_json(resolved / "conservation_summary.json")
-    orbit = _read_json(resolved / "orbit_averaged_exchange_summary.json")
+    artifact_bytes = {
+        name: (resolved / name).read_bytes()
+        for name in (
+            "fdm_adapter_metadata.json", "config.uldm",
+            "conservation_summary.json", "conservation_timeseries.csv",
+            "orbit_averaged_exchange_summary.json",
+        )
+    }
+    orbit_path = resolved / "orbit_averaged_exchange.csv"
+    if orbit_path.exists():
+        artifact_bytes["orbit_averaged_exchange.csv"] = orbit_path.read_bytes()
+    metadata = json.loads(artifact_bytes["fdm_adapter_metadata.json"])
+    config = json.loads(artifact_bytes["config.uldm"])
+    conservation = json.loads(artifact_bytes["conservation_summary.json"])
+    orbit = json.loads(artifact_bytes["orbit_averaged_exchange_summary.json"])
+    orbit_provenance = validate_orbit_artifact_provenance(
+        resolved, metadata, orbit, artifact_bytes=artifact_bytes
+    )
     series = np.genfromtxt(
-        resolved / "conservation_timeseries.csv",
+        io.BytesIO(artifact_bytes["conservation_timeseries.csv"]),
         delimiter=",",
         names=True,
         ndmin=1,
@@ -219,11 +325,10 @@ def load_convergence_run(label: str, run: Path) -> dict:
             )
     if np.any(np.diff(series["time_myr"]) <= 0.0):
         raise ValueError(f"{label}: saved times are not strictly increasing")
-    orbit_path = resolved / "orbit_averaged_exchange.csv"
     orbit_series = None
-    if orbit_path.is_file():
+    if "orbit_averaged_exchange.csv" in artifact_bytes:
         orbit_series = np.genfromtxt(
-            orbit_path,
+            io.BytesIO(artifact_bytes["orbit_averaged_exchange.csv"]),
             delimiter=",",
             names=True,
             ndmin=1,
@@ -293,6 +398,7 @@ def load_convergence_run(label: str, run: Path) -> dict:
         "config": config,
         "conservation": conservation,
         "orbit": orbit,
+        "orbit_artifact_provenance": orbit_provenance,
         "orbit_series": orbit_series,
         "series": series,
     }

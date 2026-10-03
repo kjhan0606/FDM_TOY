@@ -523,6 +523,14 @@ single-resolution diagnostics, not accepted rate rows: the `n=384` spatial
 comparison, `n=768` doubled-box control, conservation and wave-response
 checks, and a separately validated `(a,e) -> <r>` mapping remain required.
 
+New orbit summaries bind the run identity, conservation inputs, the consumed
+ordered N-body state snapshots, and the orbit CSV by content digest. Earlier
+summaries lack this binding and are reported as `legacy_unverified_orbit_artifacts`:
+their orbit counts remain design diagnostics, but q/e candidate packaging
+rejects them until the orbit analysis is regenerated and verified against the
+original run inputs. Regeneration must not be mistaken for a calibration
+release; every physical and convergence gate above still applies.
+
 For the registered `q=1, e=0.3, a/r_c=0.20` follow-up, the completed `n=256`
 run currently has seven initially resolved complete orbit means in the same
 preregistered `[0.430, 0.438] pc` bin. It therefore fails the fixed threshold

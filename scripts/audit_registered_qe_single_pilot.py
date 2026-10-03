@@ -191,6 +191,7 @@ def audit_registered_single_pilot(
     if orbit.size == 0:
         raise ValueError("registered q/e pilot orbit table is empty")
     orbit_summary = loaded["orbit"]
+    orbit_artifact_provenance = loaded["orbit_artifact_provenance"]
     if int(orbit_summary["complete_orbits"]) != int(orbit.size):
         raise ValueError("registered q/e pilot orbit summary disagrees with its table")
     temporal_fields = {
@@ -285,6 +286,7 @@ def audit_registered_single_pilot(
         "role": role,
         "resolution": expected["resolution"],
         "run_input_sha256": input_sha256,
+        "orbit_artifact_provenance": orbit_artifact_provenance,
         "fixed_bin_lower_separation_pc": lo,
         "fixed_bin_upper_separation_pc": hi,
         "initially_resolved_complete_orbits_in_fixed_bin": count,

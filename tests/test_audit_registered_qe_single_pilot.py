@@ -71,6 +71,10 @@ def _loaded(count: int) -> dict:
     orbit["mean_eccentricity_osculating"] = np.linspace(0.25, 0.31, count)
     return {
         "orbit_series": orbit,
+        "orbit_artifact_provenance": {
+            "status": "legacy_unverified_orbit_artifacts",
+            "reason": "test archival fixture",
+        },
         "orbit": {
             "status": "orbit_averaged",
             "complete_orbits": count,
@@ -114,6 +118,9 @@ def test_registered_fixed_bin_n7_fails_n8_passes(
     assert result["measured_eccentricity_duration_weighted_mean"] == pytest.approx(0.28)
     assert result["release_status"] == "no_calibration_release"
     assert result["production_calibration_row_admitted"] is False
+    assert result["orbit_artifact_provenance"]["status"] == (
+        "legacy_unverified_orbit_artifacts"
+    )
 
 
 def test_registered_fixed_bin_rejects_mixed_orbit_summary_and_table(

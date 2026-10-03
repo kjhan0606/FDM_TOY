@@ -834,7 +834,15 @@ def _mock_strict_box_assessment(
                 if not input_path.exists():
                     input_path.write_text("fixture\n")
                 hashes[name] = hashlib.sha256(input_path.read_bytes()).hexdigest()
-            inputs.append({"label": row["label"], "run": str(run), "sha256": hashes})
+            inputs.append({
+                "label": row["label"],
+                "run": str(run),
+                "sha256": hashes,
+                "orbit_artifact_provenance": {
+                    "status": "verified_orbit_artifact_provenance_v1",
+                    "reason": "fixture",
+                },
+            })
         verified[role] = {
             "comparison_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             "raw_inputs": inputs,
@@ -865,6 +873,20 @@ def _mock_strict_box_assessment(
         },
     )
     return pair_path, box_path
+
+
+def test_qe_candidate_package_rejects_legacy_unverified_orbit_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pair, box = _mock_strict_box_assessment(tmp_path, monkeypatch)
+    decision = qe_box_module.assess_qe_box_control()
+    decision["raw_verification"]["resolution_pair"]["raw_inputs"][0][
+        "orbit_artifact_provenance"
+    ] = {"status": "legacy_unverified_orbit_artifacts"}
+    with pytest.raises(ValueError, match="versioned verified orbit artifact"):
+        qe_box_module.prepare_qe_calibration_candidate(
+            CalibrationSource("test", pair), CalibrationSource("test", box)
+        )
 
 
 def test_qe_candidate_package_retains_only_box_controlled_rows(

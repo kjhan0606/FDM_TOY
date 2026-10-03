@@ -4,8 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import io
 import json
+import os
 from pathlib import Path
+import tempfile
 
 import numpy as np
 
@@ -20,6 +24,31 @@ from fdm_smbh_delay.secular_exchange import (
     phase_cycle_average,
     unwrapped_orbital_phase,
 )
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _state_set_identity(paths: list[Path]) -> dict:
+    digest = hashlib.sha256()
+    for path in paths:
+        file_digest = _sha256(path)
+        digest.update(path.name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(file_digest.encode("ascii"))
+        digest.update(b"\n")
+    return {"count": len(paths), "ordered_name_and_content_sha256": digest.hexdigest()}
+
+
+def _staged_path(run: Path, *, prefix: str, suffix: str) -> Path:
+    descriptor, name = tempfile.mkstemp(prefix=prefix, suffix=suffix, dir=run)
+    os.close(descriptor)
+    return Path(name)
 
 
 def _bootstrap_window(
@@ -79,10 +108,23 @@ def main() -> int:
     if args.bootstrap_samples < 0:
         raise ValueError("--bootstrap-samples must be non-negative")
     run = args.run.expanduser().resolve()
-    metadata = json.loads(
-        (run / "fdm_adapter_metadata.json").read_text(encoding="utf-8")
-    )
-    config = json.loads((run / "config.uldm").read_text(encoding="utf-8"))
+    metadata_path = run / "fdm_adapter_metadata.json"
+    config_path = run / "config.uldm"
+    metadata_bytes = metadata_path.read_bytes()
+    config_bytes = config_path.read_bytes()
+    metadata = json.loads(metadata_bytes)
+    config = json.loads(config_bytes)
+    missing_identity = [
+        key for key in ("run_id", "case_id", "resolution")
+        if metadata.get(key) is None
+    ]
+    if missing_identity:
+        raise ValueError(
+            "orbit artifact provenance requires metadata identity fields: "
+            + ", ".join(missing_identity)
+        )
+    metadata_sha256 = hashlib.sha256(metadata_bytes).hexdigest()
+    config_sha256 = hashlib.sha256(config_bytes).hexdigest()
     cell_size_pc = float(metadata["box_size_pc"]) / int(metadata["resolution"])
 
     timeseries_path = run / "conservation_timeseries.csv"
@@ -90,13 +132,19 @@ def main() -> int:
         raise FileNotFoundError(
             "run scripts/analyze_pyul_wave_run.py before the secular analysis"
         )
-    data = np.genfromtxt(timeseries_path, delimiter=",", names=True)
+    timeseries_bytes = timeseries_path.read_bytes()
+    timeseries_sha256 = hashlib.sha256(timeseries_bytes).hexdigest()
+    data = np.genfromtxt(io.BytesIO(timeseries_bytes), delimiter=",", names=True)
     state_paths = ordered_output_paths(run / "Outputs" / "NBody", "NTM_#*.npy")
     if len(state_paths) < data.shape[0]:
         raise ValueError("particle states are shorter than the energy table")
+    consumed_state_paths = state_paths[: data.shape[0]]
+    state_set_identity = _state_set_identity(consumed_state_paths)
     states = np.asarray(
-        [np.load(path).reshape(2, 6) for path in state_paths[: data.shape[0]]]
+        [np.load(path).reshape(2, 6) for path in consumed_state_paths]
     )
+    if _state_set_identity(consumed_state_paths) != state_set_identity:
+        raise ValueError("N-body state files changed while being read")
     displacement = states[:, 0, :3] - states[:, 1, :3]
     relative_velocity = states[:, 0, 3:] - states[:, 1, 3:]
     units = pyul_unit_system(metadata)
@@ -195,13 +243,7 @@ def main() -> int:
     )
 
     output_path = run / "orbit_averaged_exchange.csv"
-    np.savetxt(
-        output_path,
-        np.column_stack(columns),
-        delimiter=",",
-        header=",".join(header),
-        comments="",
-    )
+    output_table = np.column_stack(columns)
     orbital_energy = averaged["binary_orbital_energy"]
     angular_momentum = averaged["binary_angular_momentum_msun_pc2_myr"]
     window_orbits = min(args.rate_window_orbits, reference.cycle_index.size)
@@ -329,6 +371,8 @@ def main() -> int:
                 "in the live FDM wave"
             ),
         }
+    conservation_summary_path = run / "conservation_summary.json"
+    conservation_summary_sha256 = _sha256(conservation_summary_path)
     summary = {
         "status": "orbit_averaged",
         "complete_orbits": int(reference.cycle_index.size),
@@ -408,10 +452,89 @@ def main() -> int:
             "times torque)=1; departures require additional harmonics or radial response"
         ),
     }
-    summary_path = run / "orbit_averaged_exchange_summary.json"
-    summary_path.write_text(
-        json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    staged_csv = _staged_path(
+        run, prefix=".orbit_averaged_exchange.", suffix=".csv.tmp"
     )
+    try:
+        np.savetxt(
+            staged_csv,
+            output_table,
+            delimiter=",",
+            header=",".join(header),
+            comments="",
+        )
+        orbit_csv_sha256 = _sha256(staged_csv)
+        summary["artifact_provenance"] = {
+            "schema_version": 1,
+            "run_identity": {
+                "run_id": metadata["run_id"],
+                "case_id": metadata["case_id"],
+                "resolution": metadata["resolution"],
+            },
+            "upstream": {
+                "fdm_adapter_metadata_sha256": metadata_sha256,
+                "config_sha256": config_sha256,
+                "conservation_summary_sha256": conservation_summary_sha256,
+                "conservation_timeseries_sha256": timeseries_sha256,
+            },
+            "orbit_csv_sha256": orbit_csv_sha256,
+            "nbody_state_set": state_set_identity,
+        }
+    except Exception:
+        staged_csv.unlink(missing_ok=True)
+        raise
+    try:
+        final_state_paths = ordered_output_paths(
+            run / "Outputs" / "NBody", "NTM_#*.npy"
+        )
+        inputs_changed = (
+            _sha256(metadata_path) != metadata_sha256
+            or _sha256(config_path) != config_sha256
+            or _sha256(conservation_summary_path) != conservation_summary_sha256
+            or _sha256(timeseries_path) != timeseries_sha256
+            or len(final_state_paths) < len(consumed_state_paths)
+            or final_state_paths[: len(consumed_state_paths)] != consumed_state_paths
+            or _state_set_identity(consumed_state_paths) != state_set_identity
+            or _sha256(staged_csv) != orbit_csv_sha256
+        )
+    except Exception:
+        staged_csv.unlink(missing_ok=True)
+        raise
+    if inputs_changed:
+        staged_csv.unlink(missing_ok=True)
+        raise ValueError("orbit-analysis inputs changed during production")
+    summary_path = run / "orbit_averaged_exchange_summary.json"
+    staged_summary = None
+    published_csv = False
+    try:
+        old_csv = output_path.read_bytes() if output_path.is_file() else None
+        staged_summary = _staged_path(
+            run, prefix=".orbit_averaged_exchange_summary.", suffix=".json.tmp"
+        )
+        staged_summary.write_text(
+            json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        os.replace(staged_csv, output_path)
+        published_csv = True
+        os.replace(staged_summary, summary_path)
+    except Exception:
+        if published_csv:
+            if old_csv is None:
+                output_path.unlink(missing_ok=True)
+            else:
+                rollback_csv = _staged_path(
+                    run, prefix=".orbit_averaged_exchange.rollback.", suffix=".csv.tmp"
+                )
+                try:
+                    rollback_csv.write_bytes(old_csv)
+                    os.replace(rollback_csv, output_path)
+                finally:
+                    rollback_csv.unlink(missing_ok=True)
+        raise
+    finally:
+        staged_csv.unlink(missing_ok=True)
+        if staged_summary is not None:
+            staged_summary.unlink(missing_ok=True)
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
 

@@ -1,20 +1,96 @@
-import json
 import argparse
 import hashlib
+import json
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 from fdm_smbh_delay.convergence import (
-    _bootstrap_orbit_rates,
     _bootstrap_orbit_coordinate_ratio,
+    _bootstrap_orbit_rates,
     load_convergence_run,
     summarize_convergence,
+    validate_orbit_artifact_provenance,
 )
-from scripts.summarize_pyul_convergence import _parse_edges
 from fdm_smbh_delay.qe_box_control import verify_fixed_comparison_summary
 from fdm_smbh_delay.qe_followup_design import build_qe_followup_design
+from scripts.summarize_pyul_convergence import _parse_edges
+
+
+def _digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _state_identity(paths: list[Path]) -> dict:
+    digest = hashlib.sha256()
+    for path in paths:
+        digest.update(path.name.encode())
+        digest.update(b"\0")
+        digest.update(_digest(path).encode())
+        digest.update(b"\n")
+    return {"count": len(paths), "ordered_name_and_content_sha256": digest.hexdigest()}
+
+
+def test_orbit_artifact_provenance_binds_run_upstream_and_csv(tmp_path: Path) -> None:
+    metadata = {"run_id": "qe_run_a", "case_id": "qe_case", "resolution": 256}
+    (tmp_path / "fdm_adapter_metadata.json").write_text(json.dumps(metadata))
+    (tmp_path / "config.uldm").write_text('{"Duration":1}\n')
+    (tmp_path / "conservation_summary.json").write_text('{"status":"diagnosed"}\n')
+    (tmp_path / "conservation_timeseries.csv").write_text("time_myr\n0\n")
+    (tmp_path / "orbit_averaged_exchange.csv").write_text("cycle\n0\n")
+    state_dir = tmp_path / "Outputs" / "NBody"
+    state_dir.mkdir(parents=True)
+    state_path = state_dir / "NTM_#0.npy"
+    np.save(state_path, np.zeros((2, 6)))
+    summary = {"artifact_provenance": {
+        "schema_version": 1,
+        "run_identity": metadata.copy(),
+        "upstream": {
+            "fdm_adapter_metadata_sha256": _digest(tmp_path / "fdm_adapter_metadata.json"),
+            "config_sha256": _digest(tmp_path / "config.uldm"),
+            "conservation_summary_sha256": _digest(tmp_path / "conservation_summary.json"),
+            "conservation_timeseries_sha256": _digest(tmp_path / "conservation_timeseries.csv"),
+        },
+        "orbit_csv_sha256": _digest(tmp_path / "orbit_averaged_exchange.csv"),
+        "nbody_state_set": _state_identity([state_path]),
+    }}
+    assert validate_orbit_artifact_provenance(tmp_path, metadata, summary)["status"] == (
+        "verified_orbit_artifact_provenance_v1"
+    )
+    copied_metadata = {**metadata, "run_id": "qe_run_b"}
+    with pytest.raises(ValueError, match="run identity differs"):
+        validate_orbit_artifact_provenance(tmp_path, copied_metadata, summary)
+    (tmp_path / "fdm_adapter_metadata.json").write_text(json.dumps(copied_metadata))
+    copied_binding = json.loads(json.dumps(summary))
+    copied_binding["artifact_provenance"]["run_identity"] = copied_metadata
+    with pytest.raises(ValueError, match="upstream digest differs"):
+        validate_orbit_artifact_provenance(tmp_path, copied_metadata, copied_binding)
+    (tmp_path / "fdm_adapter_metadata.json").write_text(json.dumps(metadata))
+    (tmp_path / "conservation_timeseries.csv").write_text("time_myr\n0\n1\n")
+    with pytest.raises(ValueError, match="upstream digest differs"):
+        validate_orbit_artifact_provenance(tmp_path, metadata, summary)
+    (tmp_path / "conservation_timeseries.csv").write_text("time_myr\n0\n")
+    (tmp_path / "orbit_averaged_exchange.csv").write_text("cycle\n1\n")
+    with pytest.raises(ValueError, match="CSV digest differs"):
+        validate_orbit_artifact_provenance(tmp_path, metadata, summary)
+    (tmp_path / "orbit_averaged_exchange.csv").write_text("cycle\n0\n")
+    np.save(state_dir / "NTM_#1.npy", np.full((2, 6), 2.0))
+    assert validate_orbit_artifact_provenance(
+        tmp_path, metadata, summary
+    )["status"] == "verified_orbit_artifact_provenance_v1"
+    np.save(state_path, np.ones((2, 6)))
+    with pytest.raises(ValueError, match="N-body state set differs"):
+        validate_orbit_artifact_provenance(tmp_path, metadata, summary)
+
+
+def test_orbit_artifact_provenance_marks_unbound_archive_unverified(
+    tmp_path: Path,
+) -> None:
+    status = validate_orbit_artifact_provenance(
+        tmp_path, {"run_id": "old"}, {"status": "orbit_averaged"}
+    )
+    assert status["status"] == "legacy_unverified_orbit_artifacts"
 
 
 def _write_run(
