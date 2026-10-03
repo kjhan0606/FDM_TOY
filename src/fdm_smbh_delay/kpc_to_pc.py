@@ -105,6 +105,11 @@ class TransitionRadii:
             raise ValueError("transition radii must be finite and positive")
         if self.hard_binary_radius_pc > self.influence_radius_pc:
             raise ValueError("the hard-binary radius cannot exceed the influence radius")
+        if (
+            self.gw_transition_pc is not None
+            and self.gw_transition_pc > self.hard_binary_radius_pc
+        ):
+            raise ValueError("the GW transition radius cannot exceed the hard-binary radius")
 
 
 @dataclass(frozen=True)

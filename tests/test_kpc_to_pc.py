@@ -100,6 +100,27 @@ def test_event_specific_influence_and_hard_binary_radii() -> None:
     assert hard < influence
 
 
+def test_gw_transition_cannot_bypass_hard_binary_boundary() -> None:
+    sigma = 200.0 * KM_S_TO_PC_MYR
+    hard = hard_binary_radius_pc(1.0e8, 1.0e8, sigma)
+    with pytest.raises(ValueError, match="GW transition radius"):
+        transition_radii(
+            mass1_msun=1.0e8, mass2_msun=1.0e8,
+            sigma_pc_myr=sigma, gw_transition_pc=2.0 * hard,
+        )
+    with pytest.raises(ValueError, match="GW transition radius"):
+        classify_capture_state(
+            _event(separation_pc=0.01),
+            common_nucleus_radius_pc=5.0,
+            sigma_pc_myr=sigma, gw_transition_pc=2.0 * hard,
+        )
+    assert classify_capture_state(
+        _event(separation_pc=0.01),
+        common_nucleus_radius_pc=5.0,
+        sigma_pc_myr=sigma, gw_transition_pc=hard,
+    ).phase is InspiralPhase.GW_DRIVEN
+
+
 def test_capture_outside_common_nucleus_is_not_called_a_binary() -> None:
     event = _event(separation_pc=10.0)
     state = classify_capture_state(
