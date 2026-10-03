@@ -202,3 +202,25 @@ def test_stage_time_reversal_is_rejected(tmp_path) -> None:
     path.write_text(json.dumps(record), encoding="utf-8")
     with pytest.raises(ValueError, match="not physically ordered"):
         read_zoom_result(path, case)
+
+
+def test_zoom_stage_cannot_exceed_integrated_time(tmp_path) -> None:
+    case = build_zoom_grid(_specification()).cases[0]
+    path = tmp_path / "result.json"
+    _write_result(path, case)
+    record = json.loads(path.read_text())
+    record["integration_time_myr"] = 19.0
+    path.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(ValueError, match="exceeds the recorded integration time"):
+        read_zoom_result(path, case)
+
+
+def test_zoom_capture_separation_must_match_manifest_initial_state(tmp_path) -> None:
+    case = build_zoom_grid(_specification()).cases[0]
+    path = tmp_path / "result.json"
+    _write_result(path, case)
+    record = json.loads(path.read_text())
+    record["stages"]["numerical_capture"]["separation_pc"] = 4900.0
+    path.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(ValueError, match="differs from the manifest initial state"):
+        read_zoom_result(path, case)

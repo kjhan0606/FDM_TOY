@@ -468,6 +468,20 @@ def read_zoom_result(path: str | Path, case: GalaxyMergerZoomCase) -> ZoomRunRes
         or values[3] <= 0.0
     ):
         raise ValueError("zoom result diagnostics are invalid")
+    integration_time = float(values[3])
+    if any(
+        stage.elapsed_since_capture_myr is not None
+        and stage.elapsed_since_capture_myr > integration_time
+        for _, stage in stages
+    ):
+        raise ValueError("zoom stage time exceeds the recorded integration time")
+    if not np.isclose(
+        capture_stage.separation_pc,
+        case.physics.initial_separation_pc,
+        rtol=1.0e-10,
+        atol=0.0,
+    ):
+        raise ValueError("zoom capture separation differs from the manifest initial state")
     return ZoomRunResult(
         case=case,
         source_path=resolved,
@@ -478,7 +492,7 @@ def read_zoom_result(path: str | Path, case: GalaxyMergerZoomCase) -> ZoomRunRes
         maximum_relative_energy_error=float(values[0]),
         maximum_relative_angular_momentum_error=float(values[1]),
         minimum_transition_radius_cells=float(values[2]),
-        integration_time_myr=float(values[3]),
+        integration_time_myr=integration_time,
     )
 
 
