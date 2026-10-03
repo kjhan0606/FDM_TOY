@@ -436,6 +436,19 @@ scratch root above. The present n=256 one-step result is 34.5% below the
 is a capacity clearance for n=1024; FFT workspaces, CUDA reserved memory,
 long-run behavior, and the actual large-grid allocation remain unmeasured.
 
+Revision `7436839` (Slurm job `411487`) computes the potential-energy and
+wave-mass scalars first, releases the full-grid density during the saved
+kinetic-energy FFT, and rebuilds density for output. Its n=256 one-step peak
+fell to 1,141,383,680 allocated bytes (1.063 GiB), now at the potential
+kicks; the saved kinetic-energy stage peaked at 1,120,416,768 bytes. Energy,
+mass, and SMBH-state arrays match job `411481` exactly, while the saved
+radial-density profile differs by at most `1.8e-16` relative to its maximum.
+The source snapshot, summary, and stage profile are in
+`/gpfs/kjhan/FDM_TOY_RESULTS/qe_extension/torch/memory_probe_n256_energy_v1_411487/`.
+The measured allocated-memory reduction from baseline job `411438` is 41.4%
+for this one-step n=256 test. That ratio is not an n=1024 capacity prediction
+or a q/e calibration result.
+
 The guarded q-e queue uses observed device-memory profiles rather than the
 uniform-grid estimate alone. An `n=512` stage requires at least 22 GiB total
 and 21 GiB free: this admits a 23,028 MiB A10 while retaining more than 2 GiB
