@@ -146,8 +146,12 @@ the *separately averaged* osculating `a` and `e` in each complete orbit, so
 this diagnostic alone cannot assign the discrepancy uniquely to the soliton
 potential rather than intra-orbit variation of the osculating elements. The
 q/e runtime therefore requires an explicitly supplied, independently validated
-`(a,e) -> <r>` mapping; without one, or if its mapped mean leaves accepted
-bins, it returns uncalibrated/censored. The next release must establish and
+`(a,e) -> <r>` mapping that returns a mean, lower/upper physical-separation
+bounds, and mapping identity. It checks every piece of the uncertainty interval
+against the accepted table support; a missing mapping, unstructured point
+estimate, or interval crossing an unmeasured bin returns uncalibrated/censored.
+The mapping identity records provenance but is not itself validation. The next
+release must establish and
 verify that mapping from accepted orbit diagnostics, not silently substitute
 either `a` or its Kepler estimate.
 The manifest's input eccentricity remains separate provenance because the

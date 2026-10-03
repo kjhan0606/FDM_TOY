@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
@@ -9,6 +11,7 @@ from fdm_smbh_delay.binary_evolution import (
     BoundBinaryState,
     FDMExchangeRates,
     GasMigrationModel,
+    MeanSeparationEstimate,
     StellarHardeningModel,
     UncalibratedBinaryState,
     advance_bound_binary_rk4,
@@ -38,6 +41,13 @@ def _particle_mass_for_similarity(similarity: float, core_radius_pc: float) -> f
         core_radius_pc=core_radius_pc,
     )
     return reference_mass_ev * np.sqrt(reference_similarity / similarity)
+
+
+def _synthetic_kepler_mean(axis_pc: float, eccentricity: float) -> MeanSeparationEstimate:
+    """A zero-width synthetic fixture, not an accepted physical mapping."""
+
+    mean_pc = keplerian_time_mean_separation_pc(axis_pc, eccentricity)
+    return MeanSeparationEstimate(mean_pc, mean_pc, mean_pc, "synthetic-kepler")
 
 
 def _stellar_model() -> BoundBinaryModel:
@@ -274,10 +284,12 @@ def test_qe_fdm_adapter_passes_runtime_e_and_censors_missing_plane() -> None:
         soliton_mass_msun=1.0e9,
         core_radius_pc=5.0,
         particle_mass_ev=_particle_mass_for_similarity(1.0, 5.0),
-        mean_separation_provider=keplerian_time_mean_separation_pc,
+        mean_separation_provider=_synthetic_kepler_mean,
     )
     rates = provider(1.0, 0.3)
-    assert rates.calibration_id == "v4:boey2025:eta=1:q=0.3:e=0.3"
+    assert rates.calibration_id == (
+        "v4:boey2025:eta=1:q=0.3:e=0.3:rmap=synthetic-kepler"
+    )
     with pytest.raises(UncalibratedBinaryState, match="plane is absent"):
         provider(1.0, 0.2)
     with pytest.raises(UncalibratedBinaryState, match="outside"):
@@ -290,7 +302,7 @@ def test_qe_fdm_adapter_passes_runtime_e_and_censors_missing_plane() -> None:
         soliton_mass_msun=1.0e9,
         core_radius_pc=5.0,
         particle_mass_ev=2.0 * _particle_mass_for_similarity(1.0, 5.0),
-        mean_separation_provider=keplerian_time_mean_separation_pc,
+        mean_separation_provider=_synthetic_kepler_mean,
     )
     with pytest.raises(UncalibratedBinaryState, match="similarity parameter"):
         unsupported_similarity(1.0, 0.3)
@@ -348,10 +360,77 @@ def test_qe_provider_requires_mapping_and_checks_measured_bin_boundary() -> None
         soliton_mass_msun=1.0e9,
         core_radius_pc=core_radius,
         particle_mass_ev=particle_mass,
-        mean_separation_provider=keplerian_time_mean_separation_pc,
+        mean_separation_provider=_synthetic_kepler_mean,
     )
     assert provider(1.0, 0.3).orbital_power_msun_pc2_myr3 < 0.0
     with pytest.raises(UncalibratedBinaryState, match="separation"):
         provider(0.95, 0.3)
     with pytest.raises(UncalibratedBinaryState, match="separation"):
         provider(1.05, 0.3)
+
+    def interval(_axis: float, _eccentricity: float) -> MeanSeparationEstimate:
+        return MeanSeparationEstimate(1.045, 1.04, 1.06, "synthetic-interval")
+
+    interval_provider = calibrated_qe_fdm_rate_provider(
+        table,
+        profile_id="test_soliton",
+        mass1_msun=1.0e8,
+        mass2_msun=3.0e7,
+        soliton_mass_msun=1.0e9,
+        core_radius_pc=core_radius,
+        particle_mass_ev=particle_mass,
+        mean_separation_provider=interval,
+    )
+    assert "rmap=synthetic-interval" in interval_provider(1.0, 0.3).calibration_id
+    second_row = replace(
+        row,
+        separation_bin_index=2,
+        lower_separation_over_core_radius=0.225,
+        upper_separation_over_core_radius=0.235,
+        reference_mean_separation_over_core_radius=0.229,
+    )
+    gap_table = SubgridCalibrationTable((row, second_row))
+    gap_provider = calibrated_qe_fdm_rate_provider(
+        gap_table,
+        profile_id="test_soliton",
+        mass1_msun=1.0e8,
+        mass2_msun=3.0e7,
+        soliton_mass_msun=1.0e9,
+        core_radius_pc=core_radius,
+        particle_mass_ev=particle_mass,
+        mean_separation_provider=lambda _a, _e: MeanSeparationEstimate(
+            1.045, 1.04, 1.15, "synthetic-cross-gap"
+        ),
+    )
+    with pytest.raises(UncalibratedBinaryState, match="gap"):
+        gap_provider(1.0, 0.3)
+    result = integrate_bound_binary(
+        initial_state=BoundBinaryState(0.0, 1.0, 0.3**2),
+        model=BoundBinaryModel(1.0e8, 3.0e7, fdm_rate_provider=gap_provider),
+        config=BinaryEvolutionConfig(10.0, 0.1, 0.01),
+    )
+    assert result.status == "uncalibrated"
+    assert result.environment_fdm_segment.status == "censored"
+
+
+def test_qe_provider_rejects_unstructured_mapping_and_invalid_envelope() -> None:
+    with pytest.raises(ValueError, match="invalid"):
+        MeanSeparationEstimate(1.0, 1.1, 1.2, "synthetic")
+    with pytest.raises(ValueError, match="invalid"):
+        MeanSeparationEstimate(1.0, 1.0, np.inf, "synthetic")
+    with pytest.raises(ValueError, match="invalid"):
+        MeanSeparationEstimate(1.0, 1.0, 1.0, "")
+    with pytest.raises(ValueError, match="invalid"):
+        MeanSeparationEstimate(True, 1.0, 1.0, "synthetic")
+    provider = calibrated_qe_fdm_rate_provider(
+        object(),  # The invalid mapper must be rejected before table lookup.
+        profile_id="test",
+        mass1_msun=1.0e8,
+        mass2_msun=1.0e8,
+        soliton_mass_msun=1.0e9,
+        core_radius_pc=5.0,
+        particle_mass_ev=1.0e-21,
+        mean_separation_provider=lambda _a, _e: 1.0,
+    )
+    with pytest.raises(UncalibratedBinaryState, match="validated interval"):
+        provider(1.0, 0.0)

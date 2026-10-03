@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -89,6 +90,38 @@ class FDMExchangeRates:
 
 
 FDMRateProvider = Callable[[float, float], FDMExchangeRates]
+
+
+@dataclass(frozen=True)
+class MeanSeparationEstimate:
+    """A mapping-provided mean and uncertainty interval in physical pc.
+
+    ``mapping_id`` identifies the independently checked mapping artifact; this
+    value alone is provenance, not evidence that the artifact passed its gates.
+    """
+
+    mean_pc: float
+    lower_pc: float
+    upper_pc: float
+    mapping_id: str
+
+    def __post_init__(self) -> None:
+        values = np.asarray([self.mean_pc, self.lower_pc, self.upper_pc], dtype=float)
+        if (
+            np.any(~np.isfinite(values))
+            or any(
+                isinstance(value, (bool, np.bool_))
+                for value in (self.mean_pc, self.lower_pc, self.upper_pc)
+            )
+            or self.lower_pc <= 0.0
+            or not self.lower_pc <= self.mean_pc <= self.upper_pc
+            or not isinstance(self.mapping_id, str)
+            or not self.mapping_id.strip()
+        ):
+            raise ValueError("orbit-mean separation estimate is invalid")
+
+
+MeanSeparationProvider = Callable[[float, float], MeanSeparationEstimate]
 
 
 def legacy_circular_fdm_rate_provider(
@@ -181,7 +214,7 @@ def calibrated_qe_fdm_rate_provider(
     soliton_mass_msun: float,
     core_radius_pc: float,
     particle_mass_ev: float,
-    mean_separation_provider: Callable[[float, float], float] | None = None,
+    mean_separation_provider: MeanSeparationProvider | None = None,
 ) -> FDMRateProvider:
     """Adapt an accepted schema-v4 table without q, e, or a extrapolation.
 
@@ -189,8 +222,10 @@ def calibrated_qe_fdm_rate_provider(
     bracket the state and share mass/separation support. Its separation bins
     are measured orbit-mean distances, which can differ materially from the
     Kepler mean in a disturbed soliton. The caller must supply a separately
-    validated mapping from secular ``(a,e)`` to orbit-mean separation; an
-    absent mapping censors the state rather than assuming Kepler motion.
+    validated mapping from secular ``(a,e)`` to orbit-mean separation with
+    a bounded uncertainty interval. An absent mapping, an unsupported
+    interval, or an unstructured point estimate censors the state rather
+    than assuming Kepler motion.
     Converting a failure to
     ``UncalibratedBinaryState`` makes the orbit integrator return a censored
     calibration gap instead of silently substituting another plane.
@@ -202,21 +237,33 @@ def calibrated_qe_fdm_rate_provider(
     )
     if np.any(~np.isfinite(controls)) or np.any(controls <= 0.0):
         raise ValueError("calibrated FDM provider scales must be positive")
+    from .subgrid_calibration import SubgridCalibrationTable, physical_subgrid_rates
+
+    profile_boundaries_pc = None
+    if isinstance(table, SubgridCalibrationTable):
+        profile_boundaries_pc = tuple(sorted({
+            ratio * core_radius_pc
+            for row in table.rows
+            if row.profile_id == profile_id
+            for ratio in (
+                row.lower_separation_over_core_radius,
+                row.reference_mean_separation_over_core_radius,
+                row.upper_separation_over_core_radius,
+            )
+        }))
 
     def provider(semimajor_axis_pc: float, eccentricity: float) -> FDMExchangeRates:
-        from .subgrid_calibration import physical_subgrid_rates
-
         try:
             if mean_separation_provider is None:
                 raise UncalibratedBinaryState(
                     "validated orbit-mean separation mapping is unavailable"
                 )
             mapped = mean_separation_provider(semimajor_axis_pc, eccentricity)
-            if isinstance(mapped, bool):
-                raise ValueError("orbit-mean separation mapping returned a boolean")
-            mean_separation_pc = float(mapped)
-            if not np.isfinite(mean_separation_pc) or mean_separation_pc <= 0.0:
-                raise ValueError("orbit-mean separation mapping is invalid")
+            if not isinstance(mapped, MeanSeparationEstimate):
+                raise ValueError(
+                    "orbit-mean separation mapping lacks a validated interval"
+                )
+            mean_separation_pc = mapped.mean_pc
             rates = physical_subgrid_rates(
                 table,
                 profile_id=profile_id,
@@ -228,6 +275,36 @@ def calibrated_qe_fdm_rate_provider(
                 separation_pc=mean_separation_pc,
                 eccentricity=eccentricity,
             )
+            # Interpolation support is piecewise in the accepted row edges and
+            # centres. Check every interval segment, not just the mean: a
+            # narrow missing bin can otherwise hide between supported ends.
+            if mapped.lower_pc != mapped.upper_pc:
+                if profile_boundaries_pc is None:
+                    raise ValueError("orbit-mean interval requires a calibration table")
+                critical = {mapped.lower_pc, mean_separation_pc, mapped.upper_pc}
+                critical.update(profile_boundaries_pc[
+                    bisect_right(profile_boundaries_pc, mapped.lower_pc):
+                    bisect_left(profile_boundaries_pc, mapped.upper_pc)
+                ])
+                boundaries = sorted(critical)
+                probes = boundaries + [
+                    (lower + upper) / 2.0
+                    for lower, upper in zip(boundaries, boundaries[1:])
+                ]
+                for separation_pc in probes:
+                    if separation_pc == mean_separation_pc:
+                        continue
+                    physical_subgrid_rates(
+                        table,
+                        profile_id=profile_id,
+                        mass1_msun=mass1_msun,
+                        mass2_msun=mass2_msun,
+                        soliton_mass_msun=soliton_mass_msun,
+                        core_radius_pc=core_radius_pc,
+                        particle_mass_ev=particle_mass_ev,
+                        separation_pc=separation_pc,
+                        eccentricity=eccentricity,
+                    )
         except (TypeError, ValueError) as error:
             raise UncalibratedBinaryState(str(error)) from error
         dimensionless = rates.dimensionless
@@ -235,7 +312,8 @@ def calibrated_qe_fdm_rate_provider(
             f"v4:{profile_id}:"
             f"eta={dimensionless.schrodinger_poisson_similarity_parameter:.12g}:"
             f"q={dimensionless.mass_ratio_q:.12g}:"
-            f"e={dimensionless.reference_eccentricity:.12g}"
+            f"e={dimensionless.reference_eccentricity:.12g}:"
+            f"rmap={mapped.mapping_id}"
         )
         return FDMExchangeRates(
             rates.orbital_power,
