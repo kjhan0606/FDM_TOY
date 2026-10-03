@@ -37,6 +37,7 @@ from fdm_smbh_delay.dual_soliton_seed import (
     load_pure_fdm_dual_soliton_seed,
     materialize_pure_fdm_dual_soliton_seed,
 )
+from capture_protocol_fixture import write_committed_capture
 
 
 def _rows() -> list[dict[str, object]]:
@@ -44,7 +45,7 @@ def _rows() -> list[dict[str, object]]:
     unit_velocity = (1.0 * u.pc / u.Myr).to_value(u.cm / u.s)
     unit_mass = (1.0 * u.Msun).to_value(u.g)
     relative_speed = np.sqrt(G_INTERNAL * 2.0e8)
-    uid = "capture-7-9"
+    uid = "10-1-7-9-2"
     rows: list[dict[str, object]] = [
         {
             "schema_version": 1,
@@ -143,10 +144,7 @@ def _rows() -> list[dict[str, object]]:
 
 def _event(tmp_path: Path, rows: list[dict[str, object]] | None = None):
     ledger = tmp_path / "capture.jsonl"
-    ledger.write_text(
-        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows or _rows()),
-        encoding="utf-8",
-    )
+    write_committed_capture(ledger, rows or _rows())
     return read_capture_ledger(ledger).events[0], ledger
 
 
@@ -172,7 +170,7 @@ def _projection(
     *, source_path: str = "catalogs/smbh_masses.json", source_sha256: str = "a" * 64
 ) -> CaptureSMBHMassProjection:
     return CaptureSMBHMassProjection(
-        event_uid="capture-7-9",
+        event_uid="10-1-7-9-2",
         member_ids=(7, 9),
         smbh_masses_msun=(0.9e8, 0.8e8),
         source_case_id="hr5-smbh-catalog-case",
@@ -250,7 +248,13 @@ def test_capture_seed_rejects_sparse_legacy_ledger_without_native_conservation(
         "legacy_binding_proxy_1overr2_code",
     ):
         rows[3].pop(field)
-    event, _ = _event(tmp_path, rows)
+    # Historical sparse events are inspectable only with explicit legacy opt-in.
+    ledger = tmp_path / "legacy_capture.jsonl"
+    ledger.write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    event = read_capture_ledger(ledger, allow_legacy_events=True).events[0]
     assert not event.native_conservation_verified
     with pytest.raises(ValueError, match="verified native ledger conservation"):
         derive_dual_smbh_sink_pair_from_capture(
@@ -283,7 +287,7 @@ def test_capture_pair_rejects_mass_projection_for_another_event_or_member_order(
             frame=_frame(),
             assignment=_assignment(),
             mass_projection=CaptureSMBHMassProjection(
-                event_uid="capture-7-9",
+                event_uid="10-1-7-9-2",
                 member_ids=(9, 7),
                 smbh_masses_msun=(0.8e8, 0.9e8),
                 source_case_id="catalog",
@@ -311,7 +315,7 @@ def test_mass_projection_source_requires_the_recorded_hash(tmp_path: Path) -> No
 def test_frame_specification_binds_projection_to_event_and_member_order() -> None:
     with pytest.raises(ValueError, match="event_uid must match"):
         CaptureFDMSeedFrameSpecification(
-            event_uid="capture-7-9",
+            event_uid="10-1-7-9-2",
             frame=_frame(),
             assignment=_assignment(),
             mass_projection=CaptureSMBHMassProjection(
@@ -325,11 +329,11 @@ def test_frame_specification_binds_projection_to_event_and_member_order() -> Non
         )
     with pytest.raises(ValueError, match="member_ids must match"):
         CaptureFDMSeedFrameSpecification(
-            event_uid="capture-7-9",
+            event_uid="10-1-7-9-2",
             frame=_frame(),
             assignment=_assignment(),
             mass_projection=CaptureSMBHMassProjection(
-                event_uid="capture-7-9",
+                event_uid="10-1-7-9-2",
                 member_ids=(9, 7),
                 smbh_masses_msun=(0.8e8, 0.9e8),
                 source_case_id="catalog",
@@ -468,7 +472,7 @@ def test_capture_sink_pair_cli_writes_atomic_provenance_bound_output(tmp_path: P
     catalog = tmp_path / "catalog.json"
     catalog.write_text('{"masses":[90000000.0,80000000.0]}\n', encoding="utf-8")
     specification = CaptureFDMSeedFrameSpecification(
-        event_uid="capture-7-9",
+        event_uid="10-1-7-9-2",
         frame=_frame(),
         assignment=_assignment(),
         mass_projection=_projection(
@@ -504,7 +508,7 @@ def test_capture_seed_assembly_cli_writes_loadable_seed_and_pair_evidence(
     catalog = tmp_path / "catalog.json"
     catalog.write_text('{"masses":[90000000.0,80000000.0]}\n', encoding="utf-8")
     specification = CaptureFDMSeedFrameSpecification(
-        event_uid="capture-7-9",
+        event_uid="10-1-7-9-2",
         frame=_frame(),
         assignment=_assignment(),
         mass_projection=_projection(

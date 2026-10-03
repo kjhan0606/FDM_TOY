@@ -11,6 +11,7 @@ from fdm_smbh_delay.cdm_zoom_materialization import (
     materialize_cdm_noncompacting_zoom_run_contract,
 )
 from fdm_smbh_delay.cdm_zoom_plan import load_cdm_noncompacting_zoom_plan
+from capture_protocol_fixture import write_committed_capture
 from fdm_smbh_delay.cdm_zoom_runtime_identity import (
     assess_cdm_noncompacting_zoom_runtime_identity,
 )
@@ -89,10 +90,7 @@ def _capture_binding(root: Path) -> Path:
             "complete": True,
         },
     ]
-    ledger.write_text(
-        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
-        encoding="utf-8",
-    )
+    write_committed_capture(ledger, rows)
     event = read_capture_ledger(ledger).events[0]
     binding = root / "capture_dm_run_binding.json"
     binding.write_text(
@@ -159,7 +157,7 @@ def _arguments(tmp_path: Path) -> dict[str, object]:
         "specification_path": "configs/cdm_noncompacting_zoom_grid.yaml",
         "case_id": plan.grid.cases[0].case_id,
         "capture_binding_path": binding,
-        "capture_event_uid": "capture-1-2",
+        "capture_event_uid": "1-1-1-2-2",
         "primary_sink_id": 1,
         "secondary_sink_id": 2,
         "run_namelist_path": namelist,
@@ -268,7 +266,7 @@ def test_materializes_exact_cdm_case_capture_and_noncompacting_namelist(
     assert record == written
     assert record["status"] == "ready_for_operator_submission"
     assert record["case"]["case_id"] == arguments["case_id"]
-    assert record["capture_binding"]["capture_event_uid"] == "capture-1-2"
+    assert record["capture_binding"]["capture_event_uid"] == "1-1-1-2-2"
     assert record["capture_binding"]["primary_sink_id"] == 1
     assert record["plan"]["manifest_sha256"]
     assert record["sampling_requirements"]["minimum_complete_outputs"] == 15

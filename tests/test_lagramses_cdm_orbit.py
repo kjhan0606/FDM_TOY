@@ -15,6 +15,7 @@ from fdm_smbh_delay.cdm_zoom_runtime_identity import (
     assess_cdm_noncompacting_zoom_runtime_identity,
 )
 from fdm_smbh_delay.lagramses_cdm_orbit import extract_lagramses_cdm_pair_orbit_track
+from capture_protocol_fixture import write_committed_capture
 
 
 def _write_output(
@@ -102,7 +103,7 @@ def _runtime_identity(root: Path, binding: Path, outputs: list[Path]) -> Path:
         specification_path="configs/cdm_noncompacting_zoom_grid.yaml",
         case_id=plan.grid.cases[0].case_id,
         capture_binding_path=binding,
-        capture_event_uid="capture-1-2",
+        capture_event_uid="1-1-1-2-2",
         primary_sink_id=1,
         secondary_sink_id=2,
         run_namelist_path=namelist,
@@ -239,10 +240,7 @@ def _write_capture_binding(root: Path) -> Path:
             "complete": True,
         },
     ]
-    ledger_path.write_text(
-        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
-        encoding="utf-8",
-    )
+    write_committed_capture(ledger_path, rows)
     event = read_capture_ledger(ledger_path).events[0]
     binding = root / "capture_dm_run_binding.json"
     binding.write_text(

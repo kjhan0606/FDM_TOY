@@ -40,6 +40,7 @@ from fdm_smbh_delay.zoom_calibration import (
     ZoomPhysicsPoint,
     build_zoom_grid,
 )
+from capture_protocol_fixture import write_committed_capture
 
 
 def _sha256(path: Path) -> str:
@@ -127,10 +128,7 @@ def _capture_rows() -> list[dict[str, object]]:
 
 
 def _write_capture_ledger(path: Path) -> None:
-    path.write_text(
-        "".join(json.dumps(row, sort_keys=True) + "\n" for row in _capture_rows()),
-        encoding="utf-8",
-    )
+    write_committed_capture(path, _capture_rows())
 
 
 def _physics(model: str) -> ZoomPhysicsPoint:
@@ -535,7 +533,7 @@ def _physics_input(
                     "ledger_path": str(
                         (path.parent / "smbh_capture_ledger_v1.jsonl").relative_to(tmp_path)
                     ),
-                    "event_uid": "capture-7-9",
+                    "event_uid": "10-1-7-9-2",
                 }
                 for model, path in provenance_paths.items()
             },
@@ -630,7 +628,7 @@ def _result_record(
             "path": str(runtime_identity_path.resolve()),
             "sha256": _sha256(runtime_identity_path),
         },
-        "capture_event_uid": "capture-7-9",
+        "capture_event_uid": "10-1-7-9-2",
         "physics_input_path": str(physics_input),
         "physics_input_sha256": _sha256(physics_input),
         "environment_channels": _channels(),

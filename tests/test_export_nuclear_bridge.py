@@ -14,9 +14,10 @@ from fdm_smbh_delay.nuclear_bridge import (
     NuclearBridgeInput,
 )
 from scripts.export_nuclear_bridge import export_bridge_input
+from capture_protocol_fixture import write_committed_capture
 
 
-def _ledger_rows(uid: str = "event-1") -> list[dict]:
+def _ledger_rows(uid: str = "10-1-7-9-2") -> list[dict]:
     unit_length = (1.0 * u.pc).to_value(u.cm)
     unit_velocity = (1.0 * u.pc / u.Myr).to_value(u.cm / u.s)
     unit_mass = (1.0 * u.Msun).to_value(u.g)
@@ -86,13 +87,16 @@ def _ledger_rows(uid: str = "event-1") -> list[dict]:
 
 
 def _write_ledger(path: Path, rows: list[dict]) -> None:
+    if rows[-1]["record_type"] == "event_end":
+        write_committed_capture(path, rows)
+        return
     path.write_text(
         "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
         encoding="utf-8",
     )
 
 
-def _write_environment(path: Path, event_uid: str = "event-1") -> None:
+def _write_environment(path: Path, event_uid: str = "10-1-7-9-2") -> None:
     snapshot = EnvironmentSnapshot(
         event_uid=event_uid,
         time_myr=1000.0,
@@ -143,7 +147,7 @@ def test_exporter_builds_bridge_from_complete_ledger(tmp_path: Path) -> None:
     result = export_bridge_input(
         ledger_path=ledger,
         environment_path=environment,
-        event_uid="event-1",
+        event_uid="10-1-7-9-2",
         run_id="run-1",
         capture_time_myr=1000.0,
         output_path=output,
@@ -163,7 +167,7 @@ def test_exporter_rejects_environment_uid_mismatch(tmp_path: Path) -> None:
         export_bridge_input(
             ledger_path=ledger,
             environment_path=environment,
-            event_uid="event-1",
+            event_uid="10-1-7-9-2",
             run_id="run-1",
             capture_time_myr=1000.0,
             output_path=tmp_path / "bridge.json",
@@ -191,7 +195,7 @@ def test_exporter_rejects_environment_from_different_epoch(
         export_bridge_input(
             ledger_path=ledger,
             environment_path=environment,
-            event_uid="event-1",
+            event_uid="10-1-7-9-2",
             run_id="run-1",
             capture_time_myr=1000.0,
             output_path=tmp_path / "bridge.json",
@@ -207,7 +211,7 @@ def test_exporter_never_promotes_incomplete_ledger_tail(tmp_path: Path) -> None:
         export_bridge_input(
             ledger_path=ledger,
             environment_path=environment,
-            event_uid="event-1",
+            event_uid="10-1-7-9-2",
             run_id="run-1",
             capture_time_myr=1000.0,
             output_path=tmp_path / "bridge.json",

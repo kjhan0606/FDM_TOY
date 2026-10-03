@@ -20,6 +20,7 @@ from fdm_smbh_delay.nuclear_bridge import (
     NuclearBridgeInput,
 )
 from fdm_smbh_delay.pta_delay_cli import main
+from capture_protocol_fixture import write_committed_capture
 
 
 def _sha(path: Path) -> str:
@@ -39,7 +40,7 @@ def _track(path: Path, scale: float = 1.0) -> None:
 
 def _capture_bridge(tmp_path: Path) -> Path:
     speed = np.sqrt(G_INTERNAL * 2.0e8 / 8.0)
-    uid = "capture-1"
+    uid = "10-1-7-9-2"
     begin = {
         "schema_version": 1, "record_type": "event_begin", "event_uid": uid,
         "classification": "BINARY", "nstep_coarse": 10, "ilevel": 1,
@@ -66,17 +67,14 @@ def _capture_bridge(tmp_path: Path) -> Path:
     pair = {
         "schema_version": 1, "record_type": "pair", "event_uid": uid,
         "pair_index": 1, "sink_id_1": 7, "sink_id_2": 9,
-        "within_rmerge": True, "two_body_bound": True, "legacy_pair_bound": True,
+        "within_rmerge": True, "two_body_bound": True, "legacy_pair_bound": False,
     }
     end = {
         "schema_version": 1, "record_type": "event_end", "event_uid": uid,
         "nmember": 2, "npair": 1, "complete": True,
     }
     ledger_path = tmp_path / "capture.jsonl"
-    ledger_path.write_text(
-        "".join(json.dumps(row) + "\n" for row in (begin, *members, pair, end)),
-        encoding="utf-8",
-    )
+    write_committed_capture(ledger_path, [begin, *members, pair, end])
     event = read_capture_ledger(ledger_path).events[0]
     absent_stars = EnvironmentChannel(
         "stellar", "absent", density_msun_pc3=0.0, enclosed_mass_msun=0.0,
@@ -157,7 +155,7 @@ def _make_inputs(
                 "delay_myr": 12.5,
                 "start_separation_pc": 8.0,
                 "end_separation_pc": 1.0,
-                "source_case_id": "capture-1",
+                "source_case_id": "10-1-7-9-2",
                 "source": {"path": integrated.name, "sha256": _sha(integrated)},
             }
         ),
@@ -270,7 +268,7 @@ def test_pta_driver_rejects_changed_capture_ledger_and_sink_time(tmp_path) -> No
         main(["--sink-time", "1001 Myr", *arguments])
     ledger = tmp_path / "capture.jsonl"
     records = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
-    records[0]["t_code"] = -0.21
+    records[2]["t_code"] = -0.21
     ledger.write_text("".join(json.dumps(row) + "\n" for row in records), encoding="utf-8")
     with pytest.raises(ValueError, match="SHA-256 differs"):
         main(["--sink-time", "1 Gyr", *arguments])

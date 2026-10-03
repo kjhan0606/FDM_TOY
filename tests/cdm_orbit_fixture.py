@@ -20,6 +20,7 @@ from fdm_smbh_delay.cdm_zoom_runtime_identity import (
 )
 from fdm_smbh_delay.constants import G_INTERNAL
 from fdm_smbh_delay.lagramses_cdm_orbit import extract_lagramses_cdm_pair_orbit_track
+from capture_protocol_fixture import write_committed_capture
 
 
 _PC_CGS = float((1.0 * u.pc).to_value(u.cm))
@@ -101,7 +102,7 @@ def _write_output(
 def _write_capture_binding(
     root: Path,
     *,
-    capture_event_uid: str = "capture-7-9",
+    capture_event_uid: str = "10-1-7-9-2",
 ) -> Path:
     ledger_path = root / "smbh_capture_ledger_v1.jsonl"
     unit_velocity = (1.0 * u.pc / u.Myr).to_value(u.cm / u.s)
@@ -177,10 +178,7 @@ def _write_capture_binding(
             "complete": True,
         },
     ]
-    ledger_path.write_text(
-        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
-        encoding="utf-8",
-    )
+    write_committed_capture(ledger_path, rows)
     event = read_capture_ledger(ledger_path).events[0]
     binding_path = root / "capture_dm_run_binding.json"
     binding_path.write_text(
@@ -354,7 +352,7 @@ def make_attested_raw_track(
     stalled: bool = False,
     include_unit_d: bool = True,
     density_msun_pc3: float = 1.0e12,
-    capture_event_uid: str = "capture-7-9",
+    capture_event_uid: str = "10-1-7-9-2",
     case_id: str | None = None,
     model_physics_input: Path | None = None,
 ) -> Path:

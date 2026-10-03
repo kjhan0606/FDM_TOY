@@ -19,6 +19,7 @@ from fdm_smbh_delay.dm_comparison import (
     read_dm_comparison_physics_input,
     register_dm_comparison_capture_ensemble,
 )
+from capture_protocol_fixture import write_committed_capture
 
 
 MODELS = ("cdm", "sidm", "fdm")
@@ -107,10 +108,7 @@ def _capture_rows() -> list[dict[str, object]]:
 
 
 def _write_ledger(path: Path) -> None:
-    path.write_text(
-        "".join(json.dumps(row, sort_keys=True) + "\n" for row in _capture_rows()),
-        encoding="utf-8",
-    )
+    write_committed_capture(path, _capture_rows())
 
 
 def _provenance_records(model: str) -> dict[str, str]:
@@ -215,7 +213,7 @@ def _fixture(tmp_path: Path) -> dict[str, Path]:
             "captures": {
                 model: {
                     "ledger_path": str(path.relative_to(tmp_path)),
-                    "event_uid": "capture-7-9",
+                    "event_uid": "10-1-7-9-2",
                 }
                 for model, path in ledger_paths.items()
             },

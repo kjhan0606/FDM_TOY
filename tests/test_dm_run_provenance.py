@@ -15,6 +15,7 @@ from fdm_smbh_delay.dm_run_provenance import (
     bind_capture_event_to_dark_matter_run,
     read_dark_matter_run_provenance,
 )
+from capture_protocol_fixture import write_committed_capture
 
 
 def _capture_rows() -> list[dict[str, object]]:
@@ -22,7 +23,7 @@ def _capture_rows() -> list[dict[str, object]]:
     unit_velocity = (1.0 * u.pc / u.Myr).to_value(u.cm / u.s)
     unit_mass = (1.0 * u.Msun).to_value(u.g)
     speed = np.sqrt(G_INTERNAL * 2.0e8)
-    uid = "capture-7-9"
+    uid = "10-1-7-9-2"
     rows: list[dict[str, object]] = [
         {
             "schema_version": 1,
@@ -91,7 +92,7 @@ def _capture_rows() -> list[dict[str, object]]:
 
 def _event(tmp_path: Path):
     path = tmp_path / "smbh_capture_ledger_v1.jsonl"
-    path.write_text("".join(json.dumps(row) + "\n" for row in _capture_rows()), encoding="utf-8")
+    write_committed_capture(path, _capture_rows())
     return read_capture_ledger(path).events[0], path
 
 
@@ -282,7 +283,7 @@ def test_cli_writes_atomic_capture_run_binding(tmp_path: Path) -> None:
             sys.executable,
             "scripts/bind_capture_dm_run.py",
             str(ledger),
-            "capture-7-9",
+            "10-1-7-9-2",
             str(provenance),
             str(output),
         ],

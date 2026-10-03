@@ -13,6 +13,7 @@ from fdm_smbh_delay.model_zoom_materialization import (
     read_verified_model_zoom_execution_contract,
 )
 from fdm_smbh_delay.zoom_calibration import load_zoom_grid
+from capture_protocol_fixture import write_committed_capture
 
 
 def _capture_ledger(path: Path) -> str:
@@ -87,9 +88,7 @@ def _capture_ledger(path: Path) -> str:
             "complete": True,
         },
     ]
-    path.write_text(
-        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8"
-    )
+    write_committed_capture(path, rows)
     return read_capture_ledger(path).events[0].event_sha256
 
 
@@ -203,7 +202,7 @@ def test_materializes_common_identity_for_each_dark_matter_model(
         specification_path=specification,
         case_id=grid.cases[0].case_id,
         capture_ledger_path=ledger,
-        capture_event_uid="capture-1-2",
+        capture_event_uid="4-18-1-2-2",
         shared_input_paths=inputs,
         run_namelist_path=namelist,
         output_directory=tmp_path / "contract",
@@ -253,7 +252,7 @@ def test_rejects_missing_shared_input_and_existing_destination(tmp_path: Path) -
             specification_path=specification,
             case_id=grid.cases[0].case_id,
             capture_ledger_path=ledger,
-            capture_event_uid="capture-1-2",
+            capture_event_uid="4-18-1-2-2",
             shared_input_paths={"initial_conditions": inputs["initial_conditions"]},
             run_namelist_path=namelist,
             output_directory=tmp_path / "contract",
@@ -262,7 +261,7 @@ def test_rejects_missing_shared_input_and_existing_destination(tmp_path: Path) -
         specification_path=specification,
         case_id=grid.cases[0].case_id,
         capture_ledger_path=ledger,
-        capture_event_uid="capture-1-2",
+        capture_event_uid="4-18-1-2-2",
         shared_input_paths=inputs,
         run_namelist_path=namelist,
         output_directory=tmp_path / "contract",
@@ -272,7 +271,7 @@ def test_rejects_missing_shared_input_and_existing_destination(tmp_path: Path) -
             specification_path=specification,
             case_id=grid.cases[0].case_id,
             capture_ledger_path=ledger,
-            capture_event_uid="capture-1-2",
+            capture_event_uid="4-18-1-2-2",
             shared_input_paths=inputs,
             run_namelist_path=namelist,
             output_directory=tmp_path / "contract",
@@ -299,7 +298,7 @@ def test_rejects_a_second_physics_params_group(tmp_path: Path) -> None:
             specification_path=specification,
             case_id=grid.cases[0].case_id,
             capture_ledger_path=ledger,
-            capture_event_uid="capture-1-2",
+            capture_event_uid="4-18-1-2-2",
             shared_input_paths=inputs,
             run_namelist_path=namelist,
             output_directory=tmp_path / "contract",

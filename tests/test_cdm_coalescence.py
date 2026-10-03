@@ -159,7 +159,7 @@ def _accepted_phase_ensemble(tmp_path: Path, *, model: str = "cdm") -> Path:
                 Path("configs/cdm_noncompacting_zoom_grid.yaml").resolve()
             ),
             "capture_event": {
-                "event_uid": "capture-7-9",
+                "event_uid": "10-1-7-9-2",
                 "event_sha256": "a" * 64,
             },
             "replicates": [0, 1],
@@ -176,7 +176,7 @@ def _rate_track(
     delay_myr: float,
     start_pc: float,
     end_pc: float,
-    capture_event_uid: str = "capture-7-9",
+    capture_event_uid: str = "10-1-7-9-2",
     capture_event_sha256: str = "a" * 64,
     raw_path: Path | None = None,
 ) -> Path:
@@ -231,7 +231,7 @@ def _complete_stage(
     end_pc: float,
     phase_path: Path,
     method: str = "resolved_cdm_rate_integration",
-    capture_event_uid: str = "capture-7-9",
+    capture_event_uid: str = "10-1-7-9-2",
     capture_event_sha256: str = "a" * 64,
 ) -> Path:
     rate_track = _rate_track(
@@ -474,7 +474,7 @@ def test_cdm_rate_track_records_orbit_coverage_and_delay_uncertainty(
         expected_stage="capture_to_hard_binary",
         expected_physics_id="zoomphys-88aec2c614c5bbb0",
     )
-    assert parsed.capture_event_uid == "capture-7-9"
+    assert parsed.capture_event_uid == "10-1-7-9-2"
     assert parsed.integrated_delay_uncertainty_myr == pytest.approx(
         record["integrated_delay_uncertainty_myr"]
     )
@@ -688,9 +688,11 @@ def test_cdm_composition_requires_unbroken_environmental_and_gw_handoffs(
         start_pc=1.0,
         end_pc=0.01,
         phase_path=different_phase,
-        capture_event_uid="capture-other",
-        capture_event_sha256="b" * 64,
     )
+    mismatched_record = json.loads(different_capture_stage.read_text(encoding="utf-8"))
+    mismatched_record["calibration"]["capture_event_uid"] = "capture-other"
+    mismatched_record["calibration"]["capture_event_sha256"] = "b" * 64
+    _write_json(different_capture_stage, mismatched_record)
     with pytest.raises(ValueError, match="capture event"):
         read_cdm_delay_stage_summary(
             different_capture_stage,

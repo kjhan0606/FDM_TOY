@@ -43,6 +43,7 @@ from fdm_smbh_delay.model_zoom_materialization import (
     materialize_model_zoom_execution_contract,
 )
 from fdm_smbh_delay.zoom_calibration import load_zoom_grid
+from capture_protocol_fixture import write_committed_capture
 
 
 def _sha256(path: Path) -> str:
@@ -142,7 +143,7 @@ def _capture_event(tmp_path: Path):
         legacy_binding_proxy_1overr2_code=G_INTERNAL * 5.0e15,
     )
     path = tmp_path / "capture.jsonl"
-    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    write_committed_capture(path, rows)
     return read_capture_ledger(path).events[0], path
 
 
