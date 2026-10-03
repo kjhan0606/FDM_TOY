@@ -17,11 +17,15 @@ def main() -> int:
     parser.add_argument("model_zoom_execution_contract", type=Path)
     parser.add_argument("capture_seed_binding", type=Path)
     parser.add_argument("output_directory", type=Path)
+    parser.add_argument("--capture-output-root", type=Path)
+    parser.add_argument("--capture-checkpoint-uid")
     args = parser.parse_args()
     record = materialize_fdm_capture_seed_zoom_binding(
         model_zoom_contract_path=args.model_zoom_execution_contract,
         capture_seed_binding_path=args.capture_seed_binding,
         output_directory=args.output_directory,
+        output_root=args.capture_output_root,
+        selected_checkpoint_uid=args.capture_checkpoint_uid,
     )
     print(json.dumps(record, indent=2, sort_keys=True))
     return 0 if record["status"] == "fdm_capture_seed_zoom_identity_verified" else 2

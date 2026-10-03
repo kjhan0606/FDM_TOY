@@ -27,10 +27,15 @@ def _write_json_atomic(path: Path, record: dict[str, object]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--capture-output-root", type=Path)
+    parser.add_argument("--capture-checkpoint-uid")
     parser.add_argument("contract", type=Path)
     parser.add_argument("outputs", nargs="+", type=Path)
     args = parser.parse_args()
-    decision = assess_cdm_noncompacting_zoom_runtime_identity(args.contract, args.outputs)
+    decision = assess_cdm_noncompacting_zoom_runtime_identity(
+        args.contract, args.outputs, output_root=args.capture_output_root,
+        selected_checkpoint_uid=args.capture_checkpoint_uid,
+    )
     record = decision.as_dict()
     _write_json_atomic(args.output.expanduser().resolve(), record)
     print(json.dumps(record, indent=2, sort_keys=True))

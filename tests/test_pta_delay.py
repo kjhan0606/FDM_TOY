@@ -20,7 +20,29 @@ from fdm_smbh_delay.nuclear_bridge import (
     NuclearBridgeInput,
 )
 from fdm_smbh_delay.pta_delay_cli import main
+import fdm_smbh_delay.pta_delay_cli as pta_delay_cli
 from capture_protocol_fixture import write_committed_capture
+
+
+def test_pta_cli_forwards_capture_lineage_selector(monkeypatch, tmp_path: Path) -> None:
+    received: dict[str, object] = {}
+
+    def fake_compose(**kwargs):
+        received.update(kwargs)
+        from fdm_smbh_delay.delay_budget import TrueMergeEstimate
+        return TrueMergeEstimate("censored", 1.0, None, None, 0.0, ("fdm",))
+
+    monkeypatch.setattr(pta_delay_cli, "compose_verified_pta_delay", fake_compose)
+    code = pta_delay_cli.main([
+        "--sink-time", "1 Myr", "--capture-bridge", "bridge.json",
+        "--backreaction-decision", "decision.json",
+        "--backreaction-delay-record", "delay.json", "--fdm-summary", "fdm.json",
+        "--gw-record", "gw.json", "--capture-output-root", str(tmp_path),
+        "--capture-checkpoint-uid", "attempt-a-output-00001",
+    ])
+    assert code == 2
+    assert received["output_root"] == tmp_path
+    assert received["selected_checkpoint_uid"] == "attempt-a-output-00001"
 
 
 def _sha(path: Path) -> str:

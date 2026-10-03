@@ -22,7 +22,7 @@ from .lagramses_cdm_orbit import read_bound_cdm_capture
 from .zoom_calibration import GalaxyMergerZoomCase
 
 
-CDM_NONCOMPACTING_ZOOM_RUNTIME_IDENTITY_SCHEMA_VERSION = 2
+CDM_NONCOMPACTING_ZOOM_RUNTIME_IDENTITY_SCHEMA_VERSION = 3
 _OUTPUT_DIRECTORY = re.compile(r"output_(\d{5})$")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _MYR_SECONDS = 3.15576e13
@@ -55,6 +55,28 @@ def _sha256(path: Path) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _lineage_marker(
+    output_root: str | Path | None, selected_checkpoint_uid: str | None,
+) -> dict[str, str] | None:
+    if output_root is not None and selected_checkpoint_uid is None:
+        raise ValueError("output_root requires an explicit selected_checkpoint_uid")
+    if selected_checkpoint_uid is None:
+        return None
+    if output_root is None:
+        raise ValueError("selected_checkpoint_uid requires output_root")
+    root = Path(output_root).expanduser().resolve()
+    matches = []
+    for path in root.glob("output_*/SMBH_CAPTURE_LINEAGE"):
+        try:
+            if f"checkpoint_uid={selected_checkpoint_uid}" in path.read_text(encoding="utf-8").splitlines():
+                matches.append(path.resolve())
+        except OSError:
+            continue
+    if len(matches) != 1:
+        raise ValueError("selected checkpoint must identify exactly one lineage marker")
+    return {"path": str(matches[0]), "sha256": _sha256(matches[0])}
 
 
 def _sha256_field(value: Any, label: str) -> str:
@@ -139,7 +161,10 @@ class _VerifiedCDMZoomContract:
     model_execution_identity: dict[str, str]
 
 
-def _read_verified_contract(path: str | Path) -> _VerifiedCDMZoomContract:
+def _read_verified_contract(
+    path: str | Path, *, output_root: str | Path | None = None,
+    selected_checkpoint_uid: str | None = None,
+) -> _VerifiedCDMZoomContract:
     source = Path(path).expanduser().resolve()
     try:
         record = json.loads(source.read_text(encoding="utf-8"))
@@ -205,6 +230,8 @@ def _read_verified_contract(path: str | Path) -> _VerifiedCDMZoomContract:
         capture_event_uid=capture_uid,
         primary_sink_id=primary_id,
         secondary_sink_id=secondary_id,
+        output_root=output_root,
+        selected_checkpoint_uid=selected_checkpoint_uid,
     ) != dict(binding):
         raise ValueError("CDM zoom capture binding no longer matches its ledger event")
 
@@ -302,6 +329,8 @@ def _read_verified_contract(path: str | Path) -> _VerifiedCDMZoomContract:
         secondary_sink_id=secondary_id,
         run_namelist_path=namelist_path,
         capture_ledger_file=ledger_file,
+        output_root=output_root,
+        selected_checkpoint_uid=selected_checkpoint_uid,
         expected_build_git_hash=expected_build,
         expected_compilation_path=compilation_path,
         case_input_artifact_paths=artifact_paths,
@@ -332,6 +361,9 @@ class CDMNonCompactingZoomRuntimeIdentity:
     outputs: tuple[dict[str, Any], ...]
     status: str
     reasons: tuple[str, ...]
+    capture_output_root: Path | None = None
+    selected_checkpoint_uid: str | None = None
+    capture_lineage_marker: Mapping[str, str] | None = None
 
     @property
     def verified(self) -> bool:
@@ -352,6 +384,16 @@ class CDMNonCompactingZoomRuntimeIdentity:
                 "sha256": self.contract.source_sha256,
                 "case_id": self.contract.case.case_id,
                 "manifest_sha256": self.contract.plan.grid.manifest_sha256,
+            },
+            "capture_lineage": {
+                "output_root": (
+                    None if self.capture_output_root is None else str(self.capture_output_root)
+                ),
+                "selected_checkpoint_uid": self.selected_checkpoint_uid,
+                "checkpoint_marker": (
+                    None if self.capture_lineage_marker is None
+                    else dict(self.capture_lineage_marker)
+                ),
             },
             "complete_outputs": list(self.outputs),
             "listed_output_count": {
@@ -396,12 +438,17 @@ def read_verified_cdm_noncompacting_zoom_runtime_identity(
         record = json.loads(source.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise ValueError(f"cannot read CDM zoom runtime identity: {error}") from error
+    if isinstance(record, Mapping) and record.get("schema_version") == 2:
+        raise ValueError(
+            "CDM zoom runtime identity schema v2 lacks capture-lineage binding; rematerialize"
+        )
     expected_fields = {
         "schema_version",
         "status",
         "interpretation",
         "dark_matter_model",
         "contract",
+        "capture_lineage",
         "complete_outputs",
         "listed_output_count",
         "reasons",
@@ -423,7 +470,33 @@ def read_verified_cdm_noncompacting_zoom_runtime_identity(
         contract_record.get("sha256"), "CDM zoom runtime identity contract SHA-256"
     ):
         raise ValueError("CDM zoom runtime identity contract SHA-256 no longer matches")
-    contract = _read_verified_contract(contract_path)
+    lineage = record.get("capture_lineage")
+    if not isinstance(lineage, Mapping) or set(lineage) != {
+        "output_root", "selected_checkpoint_uid", "checkpoint_marker"
+    }:
+        raise ValueError("CDM zoom runtime identity lineage selector is invalid")
+    output_root = lineage.get("output_root")
+    checkpoint_uid = lineage.get("selected_checkpoint_uid")
+    marker = lineage.get("checkpoint_marker")
+    if output_root is not None and (not isinstance(output_root, str) or not output_root.strip()):
+        raise ValueError("CDM zoom runtime identity output_root is invalid")
+    if checkpoint_uid is not None and (
+        not isinstance(checkpoint_uid, str) or not checkpoint_uid.strip()
+    ):
+        raise ValueError("CDM zoom runtime identity selected checkpoint is invalid")
+    if checkpoint_uid is not None and output_root is None:
+        raise ValueError("CDM zoom runtime identity selected checkpoint requires output_root")
+    expected_marker = _lineage_marker(output_root, checkpoint_uid)
+    if marker != expected_marker:
+        raise ValueError("CDM zoom runtime identity checkpoint marker binding differs")
+    if isinstance(marker, Mapping):
+        marker_path = Path(str(marker.get("path"))).expanduser().resolve()
+        if _sha256(marker_path) != marker.get("sha256"):
+            raise ValueError("CDM zoom runtime identity checkpoint marker SHA-256 differs")
+    contract = _read_verified_contract(
+        contract_path, output_root=output_root,
+        selected_checkpoint_uid=checkpoint_uid,
+    )
     if contract_record != {
         "path": str(contract.source_path),
         "sha256": contract.source_sha256,
@@ -590,10 +663,15 @@ def _output_set_reasons(
 def assess_cdm_noncompacting_zoom_runtime_identity(
     contract_path: str | Path,
     output_directories: Iterable[str | Path],
+    *, output_root: str | Path | None = None,
+    selected_checkpoint_uid: str | None = None,
 ) -> CDMNonCompactingZoomRuntimeIdentity:
     """Verify every complete output against its immutable ready run contract."""
 
-    contract = _read_verified_contract(contract_path)
+    contract = _read_verified_contract(
+        contract_path, output_root=output_root,
+        selected_checkpoint_uid=selected_checkpoint_uid,
+    )
     prepared: list[dict[str, Any]] = []
     reasons: list[str] = []
     seen_numbers: set[str] = set()
@@ -618,4 +696,9 @@ def assess_cdm_noncompacting_zoom_runtime_identity(
         outputs=tuple(prepared),
         status="runtime_identity_verified" if not reasons else "runtime_identity_not_verified",
         reasons=tuple(reasons),
+        capture_output_root=(
+            None if output_root is None else Path(output_root).expanduser().resolve()
+        ),
+        selected_checkpoint_uid=selected_checkpoint_uid,
+        capture_lineage_marker=_lineage_marker(output_root, selected_checkpoint_uid),
     )

@@ -62,6 +62,24 @@ def _resolve(reference: str, base: Path) -> Path:
     return (path if path.is_absolute() else base / path).resolve()
 
 
+def _lineage_marker(output_root: str | None, checkpoint_uid: str | None) -> dict[str, str] | None:
+    if output_root is not None and checkpoint_uid is None:
+        raise ValueError("output_root requires an explicit selected checkpoint")
+    if checkpoint_uid is None:
+        return None
+    assert output_root is not None
+    matches = []
+    for path in Path(output_root).glob("output_*/SMBH_CAPTURE_LINEAGE"):
+        try:
+            if f"checkpoint_uid={checkpoint_uid}" in path.read_text(encoding="utf-8").splitlines():
+                matches.append(path.resolve())
+        except OSError:
+            continue
+    if len(matches) != 1:
+        raise ValueError("selected checkpoint must identify exactly one lineage marker")
+    return {"path": str(matches[0]), "sha256": _file_sha256(matches[0])}
+
+
 def _normal_output_directory(path: Path, label: str) -> Path:
     """Return the enclosing output directory for grouped or ungrouped evidence."""
 
@@ -311,12 +329,16 @@ class DMComparisonCaptureRegistration:
     family_manifest_path: str
     family_manifest_sha256: str
     captures: tuple[tuple[str, tuple[str, str]], ...]
+    lineage_selectors: tuple[tuple[str, tuple[str | None, str | None]], ...] = (
+        ("cdm", (None, None)), ("sidm", (None, None)), ("fdm", (None, None))
+    )
 
 
 def read_dm_comparison_capture_registration(path: str | Path) -> DMComparisonCaptureRegistration:
     source = Path(path).expanduser().resolve()
     record = _json_object(source, "DM comparison capture registration")
-    if record.get("schema_version") != 1 or set(record) != {
+    schema_version = record.get("schema_version")
+    if schema_version not in {1, 2} or set(record) != {
         "schema_version", "family_manifest_path", "family_manifest_sha256", "captures"
     }:
         raise ValueError("DM comparison capture-registration fields are invalid")
@@ -326,7 +348,10 @@ def read_dm_comparison_capture_registration(path: str | Path) -> DMComparisonCap
     parsed: list[tuple[str, tuple[str, str]]] = []
     for model in _MODELS:
         value = captures[model]
-        if not isinstance(value, Mapping) or set(value) != {"ledger_path", "event_uid"}:
+        expected_capture_fields = {"ledger_path", "event_uid"}
+        if schema_version == 2:
+            expected_capture_fields |= {"output_root", "selected_checkpoint_uid"}
+        if not isinstance(value, Mapping) or set(value) != expected_capture_fields:
             raise ValueError(f"{model} capture-registration fields are invalid")
         parsed.append(
             (
@@ -337,11 +362,31 @@ def read_dm_comparison_capture_registration(path: str | Path) -> DMComparisonCap
                 ),
             )
         )
+    selectors: list[tuple[str, tuple[str | None, str | None]]] = []
+    for model in _MODELS:
+        value = captures[model]
+        root = value.get("output_root") if schema_version == 2 else None
+        checkpoint = value.get("selected_checkpoint_uid") if schema_version == 2 else None
+        if root is not None and (not isinstance(root, str) or not root.strip()):
+            raise ValueError(f"{model} capture output_root is invalid")
+        if checkpoint is not None and (
+            not isinstance(checkpoint, str) or not checkpoint.strip()
+        ):
+            raise ValueError(f"{model} selected checkpoint is invalid")
+        if checkpoint is not None and root is None:
+            raise ValueError(f"{model} selected checkpoint requires output_root")
+        if root is not None and checkpoint is None:
+            raise ValueError(f"{model} output_root requires an explicit selected checkpoint")
+        resolved_root = (
+            None if root is None else str(_resolve(root, source.parent))
+        )
+        selectors.append((model, (resolved_root, checkpoint)))
     return DMComparisonCaptureRegistration(
         source_path=source,
         family_manifest_path=_nonempty(record.get("family_manifest_path"), "family_manifest_path"),
         family_manifest_sha256=_sha256(record.get("family_manifest_sha256"), "family_manifest_sha256"),
         captures=tuple(parsed),
+        lineage_selectors=tuple(selectors),
     )
 
 
@@ -351,6 +396,8 @@ class DMComparisonCaptureEnsemble:
     bindings: tuple[tuple[str, CaptureDMRunBinding | None], ...]
     status: str
     reasons: tuple[str, ...]
+    lineage_selectors: tuple[tuple[str, tuple[str | None, str | None]], ...] = ()
+    lineage_markers: tuple[tuple[str, Mapping[str, str] | None], ...] = ()
 
     @property
     def registered(self) -> bool:
@@ -358,7 +405,7 @@ class DMComparisonCaptureEnsemble:
 
     def as_dict(self) -> dict[str, Any]:
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "status": self.status,
             "interpretation": (
                 "numerical-capture ensemble registration only; model events need not "
@@ -367,6 +414,15 @@ class DMComparisonCaptureEnsemble:
             "smoke": self.smoke.as_dict(),
             "capture_bindings": {
                 model: None if item is None else item.as_dict() for model, item in self.bindings
+            },
+            "capture_lineage": {
+                model: {
+                    "output_root": root,
+                    "selected_checkpoint_uid": checkpoint,
+                    "checkpoint_marker": dict(markers[model]) if markers[model] else None,
+                }
+                for model, (root, checkpoint) in self.lineage_selectors
+                for markers in (dict(self.lineage_markers),)
             },
             "reasons": list(self.reasons),
         }
@@ -405,6 +461,14 @@ def register_dm_comparison_capture_ensemble(
         )
         reasons.append(str(error))
     bindings: list[tuple[str, CaptureDMRunBinding | None]] = []
+    selectors = dict(registration.lineage_selectors)
+    try:
+        markers = tuple(
+            (model, _lineage_marker(*selectors[model])) for model in _MODELS
+        )
+    except ValueError as error:
+        markers = tuple((model, None) for model in _MODELS)
+        reasons.append(str(error))
     if smoke.verified:
         for model, (ledger_reference, event_uid) in registration.captures:
             provenance = smoke.preflight.provenance_for(model)
@@ -413,7 +477,9 @@ def register_dm_comparison_capture_ensemble(
                 events = [
                     item
                     for item in read_capture_ledger(
-                        _resolve(ledger_reference, registration.source_path.parent)
+                        _resolve(ledger_reference, registration.source_path.parent),
+                        output_root=selectors[model][0],
+                        selected_checkpoint_uid=selectors[model][1],
                     ).events
                     if item.event_uid == event_uid
                 ]
@@ -433,6 +499,8 @@ def register_dm_comparison_capture_ensemble(
         bindings=tuple(bindings),
         status="dm_comparison_capture_ensemble_registered" if not reasons else "dm_comparison_capture_ensemble_not_registered",
         reasons=tuple(reasons),
+        lineage_selectors=registration.lineage_selectors,
+        lineage_markers=markers,
     )
 
 
@@ -453,11 +521,12 @@ def read_verified_dm_comparison_capture_ensemble(
         "interpretation",
         "smoke",
         "capture_bindings",
+        "capture_lineage",
         "reasons",
     }
     if (
         set(record) != expected_fields
-        or record.get("schema_version") != 1
+        or record.get("schema_version") != 2
         or record.get("status") != "dm_comparison_capture_ensemble_registered"
         or record.get("reasons") != []
     ):
@@ -484,7 +553,33 @@ def read_verified_dm_comparison_capture_ensemble(
     if not isinstance(saved_bindings, Mapping) or set(saved_bindings) != set(_MODELS):
         raise ValueError("DM comparison capture ensemble bindings are invalid")
     bindings: list[tuple[str, CaptureDMRunBinding]] = []
+    lineage = record.get("capture_lineage")
+    if not isinstance(lineage, Mapping) or set(lineage) != set(_MODELS):
+        raise ValueError("DM comparison capture lineage selectors are invalid")
+    selectors: list[tuple[str, tuple[str | None, str | None]]] = []
     for model in _MODELS:
+        selector = lineage[model]
+        if not isinstance(selector, Mapping) or set(selector) != {
+            "output_root", "selected_checkpoint_uid", "checkpoint_marker"
+        }:
+            raise ValueError(f"{model} capture lineage selector is invalid")
+        root = selector.get("output_root")
+        checkpoint = selector.get("selected_checkpoint_uid")
+        marker = selector.get("checkpoint_marker")
+        if root is not None and (not isinstance(root, str) or not root.strip()):
+            raise ValueError(f"{model} capture output_root is invalid")
+        if root is not None and not Path(root).is_absolute():
+            raise ValueError(f"{model} saved capture output_root must be absolute")
+        if checkpoint is not None and (
+            not isinstance(checkpoint, str) or not checkpoint.strip()
+        ):
+            raise ValueError(f"{model} selected checkpoint is invalid")
+        if checkpoint is not None and root is None:
+            raise ValueError(f"{model} selected checkpoint requires output_root")
+        expected_marker = _lineage_marker(root, checkpoint)
+        if marker != expected_marker:
+            raise ValueError(f"{model} checkpoint marker binding differs")
+        selectors.append((model, (root, checkpoint)))
         saved = saved_bindings[model]
         capture = saved.get("capture_event") if isinstance(saved, Mapping) else None
         run = saved.get("run_provenance") if isinstance(saved, Mapping) else None
@@ -496,7 +591,9 @@ def read_verified_dm_comparison_capture_ensemble(
             _nonempty(capture.get("ledger_path"), f"{model} capture ledger path"), source.parent
         )
         events = [
-            event for event in read_capture_ledger(ledger_path).events if event.event_uid == event_uid
+            event for event in read_capture_ledger(
+                ledger_path, output_root=root, selected_checkpoint_uid=checkpoint,
+            ).events if event.event_uid == event_uid
         ]
         if len(events) != 1 or events[0].event_sha256 != event_sha256:
             raise ValueError(f"{model} capture event differs from its registered binding")
@@ -519,6 +616,10 @@ def read_verified_dm_comparison_capture_ensemble(
         bindings=tuple(bindings),
         status="dm_comparison_capture_ensemble_registered",
         reasons=(),
+        lineage_selectors=tuple(selectors),
+        lineage_markers=tuple(
+            (model, lineage[model]["checkpoint_marker"]) for model in _MODELS
+        ),
     )
 
 
@@ -637,7 +738,7 @@ def assess_dm_comparison_physics_inputs(
         if _file_sha256(ensemble_path) != physics_input.capture_ensemble_sha256:
             reasons.append("capture ensemble SHA-256 differs")
         ensemble = _json_object(ensemble_path, "capture ensemble")
-        if ensemble.get("schema_version") != 1:
+        if ensemble.get("schema_version") not in {1, 2}:
             reasons.append("capture ensemble schema is unsupported")
         if ensemble.get("status") != "dm_comparison_capture_ensemble_registered":
             reasons.append("capture ensemble is not registered")

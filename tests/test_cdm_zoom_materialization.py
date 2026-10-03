@@ -14,6 +14,7 @@ from fdm_smbh_delay.cdm_zoom_plan import load_cdm_noncompacting_zoom_plan
 from capture_protocol_fixture import write_committed_capture
 from fdm_smbh_delay.cdm_zoom_runtime_identity import (
     assess_cdm_noncompacting_zoom_runtime_identity,
+    read_verified_cdm_noncompacting_zoom_runtime_identity,
 )
 
 
@@ -390,6 +391,41 @@ def test_runtime_identity_requires_completed_output_namelist_copy_to_match_contr
     )
     assert not rejected.verified
     assert any("namelist copy SHA-256 differs" in reason for reason in rejected.reasons)
+
+
+def test_saved_cdm_v3_selector_swap_rejects_sibling_marker(tmp_path: Path) -> None:
+    arguments = _arguments(tmp_path)
+    contract_directory = tmp_path / "contract"
+    materialize_cdm_noncompacting_zoom_run_contract(
+        **arguments, output_directory=contract_directory,
+    )
+    output = _write_runtime_output(
+        tmp_path, number=1,
+        namelist=Path(arguments["run_namelist_path"]).read_text(encoding="utf-8"),
+    )
+    for index, uid in ((10, "attempt-a-output-00010"), (11, "attempt-b-output-00011")):
+        marker_output = tmp_path / f"output_{index:05d}"
+        marker_output.mkdir()
+        (marker_output / "SMBH_CAPTURE_LINEAGE").write_text(
+            f"checkpoint_uid={uid}\n", encoding="utf-8"
+        )
+    decision = assess_cdm_noncompacting_zoom_runtime_identity(
+        contract_directory / "cdm_noncompacting_zoom_run_contract.json", [output],
+        output_root=tmp_path,
+        selected_checkpoint_uid="attempt-a-output-00010",
+    )
+    record = decision.as_dict()
+    assert record["schema_version"] == 3
+    record["capture_lineage"]["selected_checkpoint_uid"] = "attempt-b-output-00011"
+    identity = tmp_path / "cdm-runtime.json"
+    identity.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(ValueError, match="checkpoint marker binding differs"):
+        read_verified_cdm_noncompacting_zoom_runtime_identity(identity)
+
+    record["schema_version"] = 2
+    identity.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(ValueError, match="schema v2 lacks capture-lineage binding; rematerialize"):
+        read_verified_cdm_noncompacting_zoom_runtime_identity(identity)
 
 
 def test_runtime_identity_rejects_changed_output_ledger_setting(tmp_path: Path) -> None:

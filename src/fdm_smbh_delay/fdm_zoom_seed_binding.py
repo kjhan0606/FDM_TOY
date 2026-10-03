@@ -36,7 +36,7 @@ from .model_zoom_materialization import (
 )
 
 
-FDM_CAPTURE_SEED_ZOOM_BINDING_SCHEMA_VERSION = 1
+FDM_CAPTURE_SEED_ZOOM_BINDING_SCHEMA_VERSION = 2
 FDM_DECLARED_RUN_INPUT_BINDING_SCHEMA_VERSION = 2
 _GIT_REVISION = re.compile(r"[0-9a-f]{40}")
 
@@ -55,6 +55,30 @@ def _artifact(path: Path) -> dict[str, str | None]:
     except OSError:
         digest = None
     return {"path": str(path), "sha256": digest}
+
+
+def _lineage_marker(
+    output_root: str | Path | None, selected_checkpoint_uid: str | None,
+) -> dict[str, str] | None:
+    if output_root is not None and selected_checkpoint_uid is None:
+        raise ValueError("output_root requires an explicit selected_checkpoint_uid")
+    if selected_checkpoint_uid is None:
+        return None
+    if output_root is None:
+        raise ValueError("selected_checkpoint_uid requires output_root")
+    root = Path(output_root).expanduser().resolve()
+    matches = []
+    for path in root.glob("output_*/SMBH_CAPTURE_LINEAGE"):
+        try:
+            if f"checkpoint_uid={selected_checkpoint_uid}" in path.read_text(encoding="utf-8").splitlines():
+                matches.append(path.resolve())
+        except OSError:
+            continue
+    if len(matches) != 1:
+        raise ValueError("selected checkpoint must identify exactly one lineage marker")
+    marker = _artifact(matches[0])
+    assert isinstance(marker["sha256"], str)
+    return {"path": marker["path"], "sha256": marker["sha256"]}
 
 
 def _write_atomic(path: Path, content: str) -> None:
@@ -82,6 +106,9 @@ class FDMCaptureSeedZoomBinding:
     capture_event_sha256: str | None
     zoom_case_id: str | None
     seed_case_id: str | None
+    capture_output_root: Path | None
+    selected_checkpoint_uid: str | None
+    capture_lineage_marker: Mapping[str, str] | None
     status: str
     reasons: tuple[str, ...]
 
@@ -107,6 +134,16 @@ class FDMCaptureSeedZoomBinding:
             "capture_event_sha256": self.capture_event_sha256,
             "zoom_case_id": self.zoom_case_id,
             "seed_case_id": self.seed_case_id,
+            "capture_lineage": {
+                "output_root": (
+                    None if self.capture_output_root is None else str(self.capture_output_root)
+                ),
+                "selected_checkpoint_uid": self.selected_checkpoint_uid,
+                "checkpoint_marker": (
+                    None if self.capture_lineage_marker is None
+                    else dict(self.capture_lineage_marker)
+                ),
+            },
             "reasons": list(self.reasons),
         }
 
@@ -164,6 +201,8 @@ def assess_fdm_capture_seed_zoom_binding(
     *,
     model_zoom_contract_path: str | Path,
     capture_seed_binding_path: str | Path,
+    output_root: str | Path | None = None,
+    selected_checkpoint_uid: str | None = None,
 ) -> FDMCaptureSeedZoomBinding:
     """Return a fail-closed FDM seed/zoom declaration decision."""
 
@@ -175,18 +214,29 @@ def assess_fdm_capture_seed_zoom_binding(
     zoom_case_id: str | None = None
     seed_case_id: str | None = None
     reasons: list[str] = []
+    marker: dict[str, str] | None = None
+    try:
+        marker = _lineage_marker(output_root, selected_checkpoint_uid)
+    except ValueError as error:
+        reasons.append(str(error))
     contract: VerifiedModelZoomExecutionContract | None = None
     capture_seed: CaptureSeedMaterializationBinding | None = None
     seed: PureFDMDualSolitonSeed | None = None
     try:
-        contract = read_verified_model_zoom_execution_contract(contract_path)
+        contract = read_verified_model_zoom_execution_contract(
+            contract_path, output_root=output_root,
+            selected_checkpoint_uid=selected_checkpoint_uid,
+        )
         event_uid = contract.capture_event.event_uid
         event_sha256 = contract.capture_event.event_sha256
         zoom_case_id = contract.case.case_id
     except (OSError, ValueError) as error:
         reasons.append(str(error))
     try:
-        capture_seed = read_verified_capture_seed_materialization_binding(capture_path)
+        capture_seed = read_verified_capture_seed_materialization_binding(
+            capture_path, output_root=output_root,
+            selected_checkpoint_uid=selected_checkpoint_uid,
+        )
         seed_path = capture_seed.seed_manifest_path
         seed_case_id = capture_seed.seed_case_id
     except (OSError, ValueError) as error:
@@ -212,6 +262,11 @@ def assess_fdm_capture_seed_zoom_binding(
         capture_event_sha256=event_sha256,
         zoom_case_id=zoom_case_id,
         seed_case_id=seed_case_id,
+        capture_output_root=(
+            None if output_root is None else Path(output_root).expanduser().resolve()
+        ),
+        selected_checkpoint_uid=selected_checkpoint_uid,
+        capture_lineage_marker=marker,
         status=status,
         reasons=tuple(reasons),
     )
@@ -236,6 +291,7 @@ def read_verified_fdm_capture_seed_zoom_binding(
         "capture_event_sha256",
         "zoom_case_id",
         "seed_case_id",
+        "capture_lineage",
         "reasons",
     }
     if (
@@ -270,9 +326,34 @@ def read_verified_fdm_capture_seed_zoom_binding(
         except OSError as error:
             raise ValueError(f"cannot re-read FDM capture-seed-zoom {name}: {error}") from error
         resolved[name] = candidate
+    lineage = record.get("capture_lineage")
+    if not isinstance(lineage, Mapping) or set(lineage) != {
+        "output_root", "selected_checkpoint_uid", "checkpoint_marker"
+    }:
+        raise ValueError("FDM capture-seed-zoom lineage selector is invalid")
+    output_root = lineage.get("output_root")
+    checkpoint_uid = lineage.get("selected_checkpoint_uid")
+    marker = lineage.get("checkpoint_marker")
+    if output_root is not None and (not isinstance(output_root, str) or not output_root.strip()):
+        raise ValueError("FDM capture-seed-zoom output_root is invalid")
+    if checkpoint_uid is not None and (
+        not isinstance(checkpoint_uid, str) or not checkpoint_uid.strip()
+    ):
+        raise ValueError("FDM capture-seed-zoom selected checkpoint is invalid")
+    if checkpoint_uid is not None and output_root is None:
+        raise ValueError("FDM capture-seed-zoom selected checkpoint requires output_root")
+    expected_marker = _lineage_marker(output_root, checkpoint_uid)
+    if marker != expected_marker:
+        raise ValueError("FDM capture-seed-zoom checkpoint marker binding differs")
+    if isinstance(marker, Mapping):
+        marker_path = Path(str(marker.get("path"))).expanduser().resolve()
+        if _sha256(marker_path) != marker.get("sha256"):
+            raise ValueError("FDM capture-seed-zoom checkpoint marker SHA-256 differs")
     decision = assess_fdm_capture_seed_zoom_binding(
         model_zoom_contract_path=resolved["model_zoom_execution_contract"],
         capture_seed_binding_path=resolved["capture_seed_binding"],
+        output_root=output_root,
+        selected_checkpoint_uid=checkpoint_uid,
     )
     if (
         not decision.verified
@@ -288,12 +369,16 @@ def materialize_fdm_capture_seed_zoom_binding(
     model_zoom_contract_path: str | Path,
     capture_seed_binding_path: str | Path,
     output_directory: str | Path,
+    output_root: str | Path | None = None,
+    selected_checkpoint_uid: str | None = None,
 ) -> dict[str, Any]:
     """Write one non-submitting FDM capture-to-seed-to-zoom decision."""
 
     decision = assess_fdm_capture_seed_zoom_binding(
         model_zoom_contract_path=model_zoom_contract_path,
         capture_seed_binding_path=capture_seed_binding_path,
+        output_root=output_root,
+        selected_checkpoint_uid=selected_checkpoint_uid,
     )
     destination = Path(output_directory).expanduser().resolve()
     try:

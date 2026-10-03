@@ -42,6 +42,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--backreaction-delay-record", type=Path, required=True)
     parser.add_argument("--fdm-summary", type=Path, required=True)
     parser.add_argument("--gw-record", type=Path, required=True)
+    parser.add_argument("--capture-output-root", type=Path)
+    parser.add_argument("--capture-checkpoint-uid")
     parser.add_argument("--h0", type=float, default=67.66, help="H0 [km/s/Mpc]")
     parser.add_argument("--omega-m", type=float, default=0.3111)
     parser.add_argument("--output", type=Path)
@@ -66,6 +68,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         backreaction_delay_record_path=args.backreaction_delay_record,
         fdm_summary_path=args.fdm_summary,
         gravitational_wave_record_path=args.gw_record,
+        output_root=args.capture_output_root,
+        selected_checkpoint_uid=args.capture_checkpoint_uid,
     )
     output: dict[str, Any] = {
         "schema_version": 1,

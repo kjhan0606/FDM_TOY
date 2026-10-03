@@ -29,6 +29,8 @@ def compose_verified_pta_delay(
     backreaction_delay_record_path: str | Path,
     fdm_summary_path: str | Path,
     gravitational_wave_record_path: str | Path,
+    output_root: str | Path | None = None,
+    selected_checkpoint_uid: str | None = None,
 ) -> TrueMergeEstimate:
     """Compose kpc, FDM, and GW intervals from verified records only.
 
@@ -39,7 +41,10 @@ def compose_verified_pta_delay(
     command-line delay enters this path.
     """
 
-    bridge = read_ledger_bound_bridge(capture_bridge_path)
+    bridge = read_ledger_bound_bridge(
+        capture_bridge_path, output_root=output_root,
+        selected_checkpoint_uid=selected_checkpoint_uid,
+    )
     if not bridge.ready_for_integration:
         raise ValueError("capture bridge lacks a ready environment")
     if not math.isclose(

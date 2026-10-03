@@ -8,6 +8,7 @@ import sys
 
 from astropy import units as u
 import numpy as np
+import pytest
 
 from fdm_smbh_delay.constants import G_INTERNAL
 from fdm_smbh_delay.dm_comparison import (
@@ -15,6 +16,7 @@ from fdm_smbh_delay.dm_comparison import (
     assess_dm_comparison_smoke_outputs,
     preflight_dm_comparison_family,
     read_dm_comparison_capture_registration,
+    read_verified_dm_comparison_capture_ensemble,
     read_dm_comparison_family_manifest,
     read_dm_comparison_physics_input,
     register_dm_comparison_capture_ensemble,
@@ -23,6 +25,35 @@ from capture_protocol_fixture import write_committed_capture
 
 
 MODELS = ("cdm", "sidm", "fdm")
+
+
+def test_v2_capture_registration_persists_per_model_lineage_selectors(tmp_path: Path) -> None:
+    registration_path = tmp_path / "registration.json"
+    for model in MODELS:
+        marker = tmp_path / "runs" / model / "output_00001" / "SMBH_CAPTURE_LINEAGE"
+        marker.parent.mkdir(parents=True)
+        marker.write_text(
+            f"checkpoint_uid=attempt-{model}-output-00001\n", encoding="utf-8"
+        )
+    captures = {
+        model: {
+            "ledger_path": f"{model}.jsonl",
+            "event_uid": f"event-{model}",
+            "output_root": f"runs/{model}",
+            "selected_checkpoint_uid": f"attempt-{model}-output-00001",
+        }
+        for model in MODELS
+    }
+    _write_json(registration_path, {
+        "schema_version": 2,
+        "family_manifest_path": "family.json",
+        "family_manifest_sha256": "a" * 64,
+        "captures": captures,
+    })
+    registration = read_dm_comparison_capture_registration(registration_path)
+    assert dict(registration.lineage_selectors)["fdm"] == (
+        str((tmp_path / "runs/fdm").resolve()), "attempt-fdm-output-00001"
+    )
 
 
 def _sha256(path: Path) -> str:
@@ -282,6 +313,20 @@ def test_v1_physics_input_is_not_ready_without_normal_output_inventory_attestati
     )
     assert not assessment.ready_for_model_specific_analysis
     assert assessment.reasons == ("physics input schema lacks normal-output inventory assessments",)
+
+
+def test_saved_ensemble_rejects_relative_output_root(tmp_path: Path) -> None:
+    paths = _fixture(tmp_path)
+    ensemble = register_dm_comparison_capture_ensemble(
+        read_dm_comparison_capture_registration(paths["registration"])
+    )
+    assert ensemble.registered
+    record = ensemble.as_dict()
+    record["capture_lineage"]["fdm"]["output_root"] = "relative/run-root"
+    path = tmp_path / "relative-root-ensemble.json"
+    _write_json(path, record)
+    with pytest.raises(ValueError, match="saved capture output_root must be absolute"):
+        read_verified_dm_comparison_capture_ensemble(path)
 
 
 def test_preflight_and_smoke_fail_closed_on_changed_input_or_incomplete_output(tmp_path: Path) -> None:

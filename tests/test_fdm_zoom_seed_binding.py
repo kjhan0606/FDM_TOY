@@ -385,6 +385,29 @@ def test_materializes_and_rechecks_fdm_capture_seed_zoom_identity(tmp_path: Path
         )
 
 
+def test_saved_fdm_v2_selector_swap_rejects_sibling_marker(tmp_path: Path) -> None:
+    contract, capture_binding = _prepare(tmp_path)
+    for index, uid in ((1, "attempt-a-output-00001"), (2, "attempt-b-output-00002")):
+        output = tmp_path / f"output_{index:05d}"
+        output.mkdir()
+        (output / "SMBH_CAPTURE_LINEAGE").write_text(
+            f"checkpoint_uid={uid}\n", encoding="utf-8"
+        )
+    record = materialize_fdm_capture_seed_zoom_binding(
+        model_zoom_contract_path=contract,
+        capture_seed_binding_path=capture_binding,
+        output_directory=tmp_path / "lineage-binding",
+        output_root=tmp_path,
+        selected_checkpoint_uid="attempt-a-output-00001",
+    )
+    assert record["schema_version"] == 2
+    record["capture_lineage"]["selected_checkpoint_uid"] = "attempt-b-output-00002"
+    path = tmp_path / "lineage-binding" / "fdm_capture_seed_zoom_binding.json"
+    path.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(ValueError, match="checkpoint marker binding differs"):
+        read_verified_fdm_capture_seed_zoom_binding(path)
+
+
 def test_censors_a_seed_with_the_wrong_axion_mass(tmp_path: Path) -> None:
     contract, capture_binding = _prepare(tmp_path, seed_axion_mass_ev=2.0e-21)
     record = materialize_fdm_capture_seed_zoom_binding(
