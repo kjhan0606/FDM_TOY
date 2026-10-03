@@ -122,11 +122,25 @@ def _close_code(actual: float, expected: float) -> bool:
     return bool(np.isclose(actual, expected, rtol=2.0e-12, atol=1.0e-14))
 
 
-def _minimum_image_code(delta: np.ndarray, boxlen_code: float) -> np.ndarray:
+def _periodic_box_code(begin: dict[str, Any]) -> np.ndarray:
+    """Use the writer's axis lengths, retaining cubic legacy-ledger support."""
+
+    boxlen = _finite_float(begin, "boxlen", positive=True)
+    if "periodic_box_size_code" not in begin:
+        return np.full(3, boxlen)
+    box = _vector(begin, "periodic_box_size_code")
+    if np.any(box <= 0.0):
+        raise CaptureLedgerError("periodic_box_size_code must be positive")
+    return box
+
+
+def _minimum_image_code(delta: np.ndarray, box_size_code: np.ndarray) -> np.ndarray:
     # Match the Fortran writer at the exactly half-box tie as well.
     result = delta.copy()
-    result[result > 0.5 * boxlen_code] -= boxlen_code
-    result[result < -0.5 * boxlen_code] += boxlen_code
+    above = result > 0.5 * box_size_code
+    result[above] -= box_size_code[above]
+    below = result < -0.5 * box_size_code
+    result[below] += box_size_code[below]
     return result
 
 
@@ -147,7 +161,7 @@ def _validate_native_conservation(
         "factG_code", "total_mass_code", "com_position_code",
         "com_velocity_code", "max_pair_separation_code",
     )
-    if not any(field in begin for field in event_fields):
+    if not any(field in begin for field in (*event_fields, "periodic_box_size_code")):
         return False
     if any(field not in begin for field in event_fields):
         raise CaptureLedgerError(f"{uid}: incomplete native event conservation diagnostics")
@@ -161,7 +175,7 @@ def _validate_native_conservation(
     if any(any(field not in row for field in pair_fields) for row in pair_rows):
         raise CaptureLedgerError(f"{uid}: incomplete native pair conservation diagnostics")
 
-    box = _finite_float(begin, "boxlen", positive=True)
+    box = _periodic_box_code(begin)
     fact_g = _finite_float(begin, "factG_code", positive=True)
     masses = np.array([_finite_float(row, "mass_code", positive=True) for row in member_rows])
     positions = np.array([_vector(row, "position_code") for row in member_rows])
@@ -269,9 +283,9 @@ def _build_event(
     uid = block.uid
     if not uid or end.get("event_uid") != uid:
         raise CaptureLedgerError("capture transaction has a missing or mismatched UID")
-    if (
-        begin.get("schema_version") != CAPTURE_LEDGER_SCHEMA_VERSION
-        or end.get("schema_version") != CAPTURE_LEDGER_SCHEMA_VERSION
+    if any(
+        row.get("schema_version") != CAPTURE_LEDGER_SCHEMA_VERSION
+        for row in (*block.rows, end)
     ):
         raise CaptureLedgerError(f"{uid}: unsupported ledger schema")
     if begin.get("complete") is not False or end.get("complete") is not True:
@@ -337,8 +351,8 @@ def _build_event(
         member_by_id[sink_id] = member
         position_code_by_id[sink_id] = _vector(row, "position_code")
 
-    boxlen_code = _finite_float(begin, "boxlen", positive=True)
-    box_size_pc = boxlen_code * length_per_code
+    box_size_code = _periodic_box_code(begin)
+    box_size_pc = box_size_code * length_per_code
     pairs = []
     seen_pairs: set[tuple[int, int]] = set()
     merge_radius_code = _finite_float(begin, "merge_radius_code", positive=True)
@@ -351,8 +365,9 @@ def _build_event(
         seen_pairs.add(key)
         first = member_by_id[id1]
         second = member_by_id[id2]
-        delta_code = position_code_by_id[id2] - position_code_by_id[id1]
-        delta_code -= boxlen_code * np.floor(delta_code / boxlen_code + 0.5)
+        delta_code = _minimum_image_code(
+            position_code_by_id[id2] - position_code_by_id[id1], box_size_code
+        )
         source_separation_code = float(np.linalg.norm(delta_code))
         within_merge = _boolean(row, "within_rmerge")
         if within_merge != (source_separation_code <= merge_radius_code):

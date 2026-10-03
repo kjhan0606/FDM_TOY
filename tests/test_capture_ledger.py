@@ -271,6 +271,40 @@ def test_complete_native_conservation_diagnostics_are_checked(tmp_path) -> None:
     assert read_capture_ledger(path).events[0].binary_orbital_state is not None
 
 
+def test_native_capture_uses_axis_specific_periodic_extents(tmp_path) -> None:
+    rows = _native_binary_rows()
+    begin, first, second, pair, _ = rows
+    begin["periodic_box_size_code"] = [100.0, 20.0, 30.0]
+    begin["com_position_code"] = [0.0, 0.0, 0.0]
+    first["position_code"] = [0.0, 19.5, 0.0]
+    second["position_code"] = [0.0, 0.5, 0.0]
+    pair["delta_position_code"] = [0.0, 1.0, 0.0]
+    pair["specific_angular_momentum_code"] = [0.0, 0.0, 0.0]
+    pair["relative_angular_momentum_code"] = [0.0, 0.0, 0.0]
+    path = tmp_path / "ledger.jsonl"
+    _write_rows(path, rows)
+    event = read_capture_ledger(path).events[0]
+    assert event.native_conservation_verified
+    assert event.pairs[0].orbital_state is not None
+    assert event.pairs[0].orbital_state.separation_pc == pytest.approx(1.0)
+    com_y = event.pairs[0].orbital_state.centre_of_mass_position_pc[1]
+    assert min(abs(com_y), abs(com_y - 20.0)) < 1.0e-12
+
+    begin["periodic_box_size_code"] = [100.0, 10.0, 30.0]
+    _write_rows(path, rows)
+    with pytest.raises(CaptureLedgerError, match="source geometry|native"):
+        read_capture_ledger(path)
+
+
+def test_capture_ledger_rejects_child_schema_mismatch(tmp_path) -> None:
+    rows = _binary_rows()
+    rows[1]["schema_version"] = 2
+    path = tmp_path / "ledger.jsonl"
+    _write_rows(path, rows)
+    with pytest.raises(CaptureLedgerError, match="unsupported ledger schema"):
+        read_capture_ledger(path)
+
+
 @pytest.mark.parametrize(("row_index", "field", "replacement", "expected"), [
     (0, "total_mass_code", 3.0e8, "total-mass"),
     (0, "com_position_code", [1.0, 0.0, 0.0], "centre-of-mass position"),
@@ -299,4 +333,13 @@ def test_capture_ledger_rejects_partial_native_diagnostics(tmp_path) -> None:
     path = tmp_path / "ledger.jsonl"
     _write_rows(path, rows)
     with pytest.raises(CaptureLedgerError, match="incomplete native pair"):
+        read_capture_ledger(path)
+
+
+def test_capture_ledger_rejects_periodic_extents_without_native_diagnostics(tmp_path) -> None:
+    rows = _binary_rows()
+    rows[0]["periodic_box_size_code"] = [100.0, 100.0, 100.0]
+    path = tmp_path / "ledger.jsonl"
+    _write_rows(path, rows)
+    with pytest.raises(CaptureLedgerError, match="incomplete native event"):
         read_capture_ledger(path)
