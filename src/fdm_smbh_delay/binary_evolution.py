@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from bisect import bisect_left, bisect_right
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as dataclass_replace
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -145,6 +145,16 @@ def legacy_circular_fdm_rate_provider(
     the next schema replaces this compatibility adapter.
     """
 
+    from .subgrid_calibration import SubgridCalibrationTable
+
+    if (
+        not isinstance(table, SubgridCalibrationTable)
+        or table.release_schema_version != 2
+        or not isinstance(table.release_table_sha256, str)
+        or len(table.release_table_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in table.release_table_sha256)
+    ):
+        raise ValueError("legacy FDM rates require a verified schema-v2 release")
     controls = np.asarray(
         [
             mass1_msun,
@@ -239,9 +249,15 @@ def calibrated_qe_fdm_rate_provider(
         raise ValueError("calibrated FDM provider scales must be positive")
     from .subgrid_calibration import SubgridCalibrationTable, physical_subgrid_rates
 
-    profile_boundaries_pc = None
-    if isinstance(table, SubgridCalibrationTable):
-        profile_boundaries_pc = tuple(sorted({
+    if (
+        not isinstance(table, SubgridCalibrationTable)
+        or table.release_schema_version != 5
+        or not isinstance(table.release_table_sha256, str)
+        or len(table.release_table_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in table.release_table_sha256)
+    ):
+        raise ValueError("q/e FDM rates require a verified schema-v5 release")
+    profile_boundaries_pc = tuple(sorted({
             ratio * core_radius_pc
             for row in table.rows
             if row.profile_id == profile_id
@@ -279,8 +295,6 @@ def calibrated_qe_fdm_rate_provider(
             # centres. Check every interval segment, not just the mean: a
             # narrow missing bin can otherwise hide between supported ends.
             if mapped.lower_pc != mapped.upper_pc:
-                if profile_boundaries_pc is None:
-                    raise ValueError("orbit-mean interval requires a calibration table")
                 critical = {mapped.lower_pc, mean_separation_pc, mapped.upper_pc}
                 critical.update(profile_boundaries_pc[
                     bisect_right(profile_boundaries_pc, mapped.lower_pc):
@@ -308,17 +322,10 @@ def calibrated_qe_fdm_rate_provider(
         except (TypeError, ValueError) as error:
             raise UncalibratedBinaryState(str(error)) from error
         dimensionless = rates.dimensionless
-        release_identity = (
+        calibration_id = (
             f"v5:{profile_id}:table={table.release_table_sha256}:"
-            if isinstance(table, SubgridCalibrationTable)
-            and table.release_schema_version == 5
-            and table.release_table_sha256 is not None
-            else f"v4:{profile_id}:"
-        )
-        calibration_id = release_identity + (
             f"eta={dimensionless.schrodinger_poisson_similarity_parameter:.12g}:"
             f"q={dimensionless.mass_ratio_q:.12g}:"
-            f"e={dimensionless.reference_eccentricity:.12g}:"
             f"rmap={mapped.mapping_id}"
         )
         return FDMExchangeRates(
@@ -369,6 +376,7 @@ class BinaryRateBudget:
     total_semimajor_axis_rate_pc_myr: float
     total_eccentricity_squared_rate_per_myr: float
     environmental_channels_present: bool = False
+    fdm_calibration_id: str | None = None
 
     @property
     def environmental_semimajor_axis_rate_pc_myr(self) -> float:
@@ -402,6 +410,10 @@ class BoundBinaryState:
         0.0,
     )
     completed_steps: int = 0
+    model_identity: str | None = None
+    fdm_calibration_id: str | None = None
+    reference_energy_total: float | None = None
+    reference_angular_momentum_total: float | None = None
 
     def __post_init__(self) -> None:
         scalars = np.asarray(
@@ -423,6 +435,23 @@ class BoundBinaryState:
             array = np.asarray(values, dtype=float)
             if array.shape != (4,) or np.any(~np.isfinite(array)):
                 raise ValueError("binary exchange reservoirs must contain four finite values")
+        references = (self.reference_energy_total, self.reference_angular_momentum_total)
+        if any(value is not None and not np.isfinite(value) for value in references):
+            raise ValueError("binary closure references must be finite when supplied")
+        if (self.reference_energy_total is None) != (
+            self.reference_angular_momentum_total is None
+        ):
+            raise ValueError("binary closure references must be supplied together")
+        is_restart = (
+            self.completed_steps > 0
+            or self.elapsed_myr > 0.0
+            or any(self.extracted_energy_by_channel)
+            or any(self.extracted_angular_momentum_by_channel)
+        )
+        if is_restart and (
+            self.model_identity is None or self.reference_energy_total is None
+        ):
+            raise ValueError("restart state lacks model identity or closure references")
 
     @property
     def eccentricity(self) -> float:
@@ -431,6 +460,11 @@ class BoundBinaryState:
 
 @dataclass(frozen=True)
 class BinaryEvolutionConfig:
+    """Integration controls with conservative per-step conservation gates.
+
+    The default 1e-6 relative limits match the established integration tests
+    while leaving substantial margin above their usual roundoff-level closure.
+    """
     maximum_time_myr: float
     maximum_step_myr: float
     target_semimajor_axis_pc: float
@@ -438,6 +472,8 @@ class BinaryEvolutionConfig:
     maximum_steps: int = 1_000_000
     sample_interval_steps: int = 1
     stop_at_gw_transition: bool = True
+    maximum_relative_energy_closure_error: float = 1.0e-6
+    maximum_relative_angular_momentum_closure_error: float = 1.0e-6
 
     def __post_init__(self) -> None:
         values = np.asarray(
@@ -446,6 +482,8 @@ class BinaryEvolutionConfig:
                 self.maximum_step_myr,
                 self.target_semimajor_axis_pc,
                 self.timestep_fraction,
+                self.maximum_relative_energy_closure_error,
+                self.maximum_relative_angular_momentum_closure_error,
             ]
         )
         if np.any(~np.isfinite(values)) or np.any(values <= 0.0):
@@ -653,8 +691,10 @@ def binary_rate_budget(
         )
 
     fdm = _zero_rates()
+    fdm_calibration_id = None
     if model.fdm_rate_provider is not None:
         exchange = model.fdm_rate_provider(semimajor_axis_pc, eccentricity)
+        fdm_calibration_id = exchange.calibration_id
         converted = keplerian_exchange_rates(
             mass1_msun=model.mass1_msun,
             mass2_msun=model.mass2_msun,
@@ -699,6 +739,7 @@ def binary_rate_budget(
             channel is not None
             for channel in (model.stellar, model.gas, model.fdm_rate_provider)
         ),
+        fdm_calibration_id=fdm_calibration_id,
     )
 
 
@@ -807,6 +848,17 @@ def advance_bound_binary_rk4(
     rates1 = binary_rate_budget(
         model, semimajor_axis_pc=a0, eccentricity_squared=y0
     )
+    if state.model_identity is None:
+        initial_energy, initial_angular_momentum = orbital_invariants(model, a0, y0)
+        state = dataclass_replace(
+            state,
+            model_identity=_model_identity(model),
+            fdm_calibration_id=rates1.fdm_calibration_id,
+            reference_energy_total=initial_energy
+            + sum(state.extracted_energy_by_channel),
+            reference_angular_momentum_total=initial_angular_momentum
+            + sum(state.extracted_angular_momentum_by_channel),
+        )
     k1a = rates1.total_semimajor_axis_rate_pc_myr
     k1y = rates1.total_eccentricity_squared_rate_per_myr
     rates2 = binary_rate_budget(
@@ -836,6 +888,13 @@ def advance_bound_binary_rk4(
         raise ValueError("finite binary step left the bound-orbit domain")
 
     stage_rates = (rates1, rates2, rates3, rates4)
+    calibration_ids = {rate.fdm_calibration_id for rate in stage_rates}
+    if state.fdm_calibration_id is not None:
+        calibration_ids.add(state.fdm_calibration_id)
+    if len(calibration_ids) > 1:
+        raise UncalibratedBinaryState(
+            "FDM calibration identity changed within a binary step"
+        )
     powers = np.asarray(
         [
             time_step_myr
@@ -875,6 +934,10 @@ def advance_bound_binary_rk4(
             np.asarray(state.extracted_angular_momentum_by_channel) + angular_increment
         ),
         completed_steps=state.completed_steps + 1,
+        model_identity=state.model_identity,
+        fdm_calibration_id=state.fdm_calibration_id,
+        reference_energy_total=state.reference_energy_total,
+        reference_angular_momentum_total=state.reference_angular_momentum_total,
     )
 
 
@@ -919,6 +982,38 @@ def _samples_with_final(
     return tuple(samples)
 
 
+def _model_identity(model: BoundBinaryModel) -> str:
+    return (
+        f"m1={model.mass1_msun:.17g}:m2={model.mass2_msun:.17g}:"
+        f"stellar={model.stellar!r}:gas={model.gas!r}"
+    )
+
+
+def _closure_failure_reason(
+    state: BoundBinaryState,
+    model: BoundBinaryModel,
+    config: BinaryEvolutionConfig,
+) -> str | None:
+    energy, angular_momentum = orbital_invariants(
+        model, state.semimajor_axis_pc, state.eccentricity_squared
+    )
+    energy_error = abs(
+        energy
+        + sum(state.extracted_energy_by_channel)
+        - state.reference_energy_total
+    ) / max(abs(energy), np.finfo(float).tiny)
+    angular_error = abs(
+        angular_momentum
+        + sum(state.extracted_angular_momentum_by_channel)
+        - state.reference_angular_momentum_total
+    ) / max(abs(angular_momentum), np.finfo(float).tiny)
+    if energy_error > config.maximum_relative_energy_closure_error:
+        return f"energy closure gate failed ({energy_error:.6g})"
+    if angular_error > config.maximum_relative_angular_momentum_closure_error:
+        return f"angular-momentum closure gate failed ({angular_error:.6g})"
+    return None
+
+
 def integrate_bound_binary(
     *,
     initial_state: BoundBinaryState,
@@ -933,15 +1028,37 @@ def integrate_bound_binary(
     if initial_state.elapsed_myr > config.maximum_time_myr:
         raise ValueError("initial binary state lies beyond maximum time")
     state = initial_state
+    identity = _model_identity(model)
+    try:
+        initial_rates = binary_rate_budget(
+            model,
+            semimajor_axis_pc=state.semimajor_axis_pc,
+            eccentricity_squared=state.eccentricity_squared,
+        )
+    except UncalibratedBinaryState as error:
+        return BinaryEvolutionResult("uncalibrated", state, (), str(error), None)
     initial_energy, initial_angular_momentum = orbital_invariants(
         model, state.semimajor_axis_pc, state.eccentricity_squared
     )
-    reference_energy_total = initial_energy + sum(
-        state.extracted_energy_by_channel
-    )
-    reference_angular_momentum_total = initial_angular_momentum + sum(
-        state.extracted_angular_momentum_by_channel
-    )
+    if state.model_identity is None:
+        state = dataclass_replace(
+            state,
+            model_identity=identity,
+            fdm_calibration_id=initial_rates.fdm_calibration_id,
+            reference_energy_total=initial_energy
+            + sum(state.extracted_energy_by_channel),
+            reference_angular_momentum_total=initial_angular_momentum
+            + sum(state.extracted_angular_momentum_by_channel),
+        )
+    elif state.model_identity != identity:
+        raise ValueError("restart model identity does not match the binary model")
+    elif state.fdm_calibration_id != initial_rates.fdm_calibration_id:
+        raise ValueError("restart FDM calibration identity does not match the rate model")
+    reference_energy_total = state.reference_energy_total
+    reference_angular_momentum_total = state.reference_angular_momentum_total
+    closure_failure = _closure_failure_reason(state, model, config)
+    if closure_failure is not None:
+        return BinaryEvolutionResult("invalid", state, (), closure_failure, None)
     try:
         samples = [
             _sample(
@@ -1093,11 +1210,15 @@ def integrate_bound_binary(
             # lands outside a narrow measured (a,e) domain. Reject that
             # endpoint before it becomes a restartable accepted state, even
             # when no sample is due on this step.
-            binary_rate_budget(
+            endpoint_rates = binary_rate_budget(
                 model,
                 semimajor_axis_pc=candidate.semimajor_axis_pc,
                 eccentricity_squared=candidate.eccentricity_squared,
             )
+            if endpoint_rates.fdm_calibration_id != state.fdm_calibration_id:
+                raise UncalibratedBinaryState(
+                    "FDM calibration identity changed at a binary-step endpoint"
+                )
         except UncalibratedBinaryState as error:
             return BinaryEvolutionResult(
                 "uncalibrated",
@@ -1110,6 +1231,21 @@ def integrate_bound_binary(
                     reference_angular_momentum_total,
                 ),
                 str(error),
+                None,
+            )
+        closure_failure = _closure_failure_reason(candidate, model, config)
+        if closure_failure is not None:
+            return BinaryEvolutionResult(
+                "invalid",
+                state,
+                _samples_with_final(
+                    samples,
+                    state,
+                    model,
+                    reference_energy_total,
+                    reference_angular_momentum_total,
+                ),
+                closure_failure,
                 None,
             )
         state = candidate

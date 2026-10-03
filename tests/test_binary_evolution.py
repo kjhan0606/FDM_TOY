@@ -52,6 +52,43 @@ def _synthetic_kepler_mean(axis_pc: float, eccentricity: float) -> MeanSeparatio
     return MeanSeparationEstimate(mean_pc, mean_pc, mean_pc, "synthetic-kepler")
 
 
+def _test_release(table: SubgridCalibrationTable, schema: int) -> SubgridCalibrationTable:
+    """Mark a synthetic table as release-loaded within this test module only."""
+
+    table.release_schema_version = schema
+    table.release_table_sha256 = "a" * 64
+    return table
+
+
+def _synthetic_row(
+    *, profile_id: str, similarity: float, mass_ratio: float, eccentricity: float
+) -> SubgridCalibrationRow:
+    return SubgridCalibrationRow(
+        profile_id=profile_id,
+        source_case_id="synthetic-test-only",
+        schrodinger_poisson_similarity_parameter=similarity,
+        binary_to_soliton_mass=0.2 if mass_ratio == 1.0 else 0.13,
+        separation_bin_index=0,
+        lower_separation_over_core_radius=0.19,
+        upper_separation_over_core_radius=0.22,
+        reference_mean_separation_over_core_radius=0.209,
+        dimensionless_orbital_power=-1.0e-3,
+        dimensionless_orbital_torque=-2.0e-3,
+        dimensionless_wave_total_energy_rate=1.0e-3,
+        orbital_power_spatial_systematic_fraction=0.1,
+        orbital_torque_spatial_systematic_fraction=0.1,
+        wave_total_spatial_systematic_fraction=0.1,
+        reference_resolution=512,
+        comparison_resolution=384,
+        reference_complete_orbits=12,
+        comparison_complete_orbits=12,
+        reference_minimum_half_density_radius_over_cell_size=8.0,
+        comparison_minimum_half_density_radius_over_cell_size=6.0,
+        mass_ratio_q=mass_ratio,
+        reference_eccentricity=eccentricity,
+    )
+
+
 def _stellar_model() -> BoundBinaryModel:
     return BoundBinaryModel(
         1.0e8,
@@ -213,23 +250,23 @@ def test_expanding_environment_is_not_relabelled_as_gw_dominated() -> None:
 
 
 def test_legacy_fdm_adapter_rejects_unmeasured_q_and_e() -> None:
-    class OnePointTable:
-        def interpolate(self, **_coordinates):
-            return InterpolatedSubgridRates(
-                profile_id="koo",
-                schrodinger_poisson_similarity_parameter=1.0,
-                binary_to_soliton_mass=0.2,
-                separation_over_core_radius=0.2,
-                dimensionless_orbital_power=-1.0e-3,
-                dimensionless_orbital_torque=-1.0e-3,
-                dimensionless_wave_total_energy_rate=1.0e-3,
-                orbital_power_spatial_systematic_fraction=0.1,
-                orbital_torque_spatial_systematic_fraction=0.1,
-                wave_total_spatial_systematic_fraction=0.1,
-            )
+    table = SubgridCalibrationTable(
+        (_synthetic_row(profile_id="koo", similarity=1.0, mass_ratio=1.0, eccentricity=0.0),)
+    )
+    with pytest.raises(ValueError, match="verified schema-v2 release"):
+        legacy_circular_fdm_rate_provider(
+            table,
+            profile_id="koo",
+            mass1_msun=1.0e8,
+            mass2_msun=1.0e8,
+            soliton_mass_msun=1.0e9,
+            core_radius_pc=5.0,
+            particle_mass_ev=_particle_mass_for_similarity(1.0, 5.0),
+        )
+    table = _test_release(table, 2)
 
     unequal = legacy_circular_fdm_rate_provider(
-        OnePointTable(),
+        table,
         profile_id="koo",
         mass1_msun=1.0e8,
         mass2_msun=5.0e7,
@@ -241,7 +278,7 @@ def test_legacy_fdm_adapter_rejects_unmeasured_q_and_e() -> None:
         unequal(1.0, 0.0)
 
     circular = legacy_circular_fdm_rate_provider(
-        OnePointTable(),
+        table,
         profile_id="koo",
         mass1_msun=1.0e8,
         mass2_msun=1.0e8,
@@ -255,31 +292,15 @@ def test_legacy_fdm_adapter_rejects_unmeasured_q_and_e() -> None:
 
 
 def test_qe_fdm_adapter_passes_runtime_e_and_censors_missing_plane() -> None:
-    class ExactPlaneTable:
-        def interpolate(self, **coordinates):
-            if coordinates["mass_ratio_q"] != pytest.approx(0.3):
-                raise ValueError("requested mass-ratio/eccentricity plane is absent")
-            if coordinates["eccentricity"] != pytest.approx(0.3):
-                raise ValueError("requested mass-ratio/eccentricity plane is absent")
-            if coordinates["separation_over_core_radius"] != pytest.approx(0.209):
-                raise ValueError("separation lies outside the calibrated range")
-            return InterpolatedSubgridRates(
-                profile_id="boey2025",
-                schrodinger_poisson_similarity_parameter=1.0,
-                binary_to_soliton_mass=0.13,
-                separation_over_core_radius=0.209,
-                dimensionless_orbital_power=-1.0e-3,
-                dimensionless_orbital_torque=-2.0e-3,
-                dimensionless_wave_total_energy_rate=1.0e-3,
-                orbital_power_spatial_systematic_fraction=0.1,
-                orbital_torque_spatial_systematic_fraction=0.1,
-                wave_total_spatial_systematic_fraction=0.1,
-                mass_ratio_q=0.3,
-                reference_eccentricity=0.3,
-            )
+    table = _test_release(
+        SubgridCalibrationTable(
+            (_synthetic_row(profile_id="boey2025", similarity=1.0, mass_ratio=0.3, eccentricity=0.3),)
+        ),
+        5,
+    )
 
     provider = calibrated_qe_fdm_rate_provider(
-        ExactPlaneTable(),
+        table,
         profile_id="boey2025",
         mass1_msun=1.0e8,
         mass2_msun=3.0e7,
@@ -290,14 +311,14 @@ def test_qe_fdm_adapter_passes_runtime_e_and_censors_missing_plane() -> None:
     )
     rates = provider(1.0, 0.3)
     assert rates.calibration_id == (
-        "v4:boey2025:eta=1:q=0.3:e=0.3:rmap=synthetic-kepler"
+        f"v5:boey2025:table={'a' * 64}:eta=1:q=0.3:rmap=synthetic-kepler"
     )
-    with pytest.raises(UncalibratedBinaryState, match="plane is absent"):
+    with pytest.raises(UncalibratedBinaryState, match="calibrated range"):
         provider(1.0, 0.2)
     with pytest.raises(UncalibratedBinaryState, match="outside"):
         provider(0.5, 0.3)
     unsupported_similarity = calibrated_qe_fdm_rate_provider(
-        ExactPlaneTable(),
+        table,
         profile_id="boey2025",
         mass1_msun=1.0e8,
         mass2_msun=3.0e7,
@@ -342,7 +363,7 @@ def test_qe_provider_requires_mapping_and_checks_measured_bin_boundary() -> None
         mass_ratio_q=0.3,
         reference_eccentricity=0.3,
     )
-    table = SubgridCalibrationTable((row,))
+    table = _test_release(SubgridCalibrationTable((row,)), 5)
     provider_without_mapping = calibrated_qe_fdm_rate_provider(
         table,
         profile_id="test_soliton",
@@ -391,7 +412,7 @@ def test_qe_provider_requires_mapping_and_checks_measured_bin_boundary() -> None
         upper_separation_over_core_radius=0.235,
         reference_mean_separation_over_core_radius=0.229,
     )
-    gap_table = SubgridCalibrationTable((row, second_row))
+    gap_table = _test_release(SubgridCalibrationTable((row, second_row)), 5)
     gap_provider = calibrated_qe_fdm_rate_provider(
         gap_table,
         profile_id="test_soliton",
@@ -424,8 +445,26 @@ def test_qe_provider_rejects_unstructured_mapping_and_invalid_envelope() -> None
         MeanSeparationEstimate(1.0, 1.0, 1.0, "")
     with pytest.raises(ValueError, match="invalid"):
         MeanSeparationEstimate(True, 1.0, 1.0, "synthetic")
+    with pytest.raises(ValueError, match="verified schema-v5 release"):
+        calibrated_qe_fdm_rate_provider(
+            SubgridCalibrationTable(
+                (_synthetic_row(profile_id="test", similarity=1.0, mass_ratio=1.0, eccentricity=0.0),)
+            ),
+            profile_id="test",
+            mass1_msun=1.0e8,
+            mass2_msun=1.0e8,
+            soliton_mass_msun=1.0e9,
+            core_radius_pc=5.0,
+            particle_mass_ev=1.0e-21,
+        )
+    table = _test_release(
+        SubgridCalibrationTable(
+            (_synthetic_row(profile_id="test", similarity=1.0, mass_ratio=1.0, eccentricity=0.0),)
+        ),
+        5,
+    )
     provider = calibrated_qe_fdm_rate_provider(
-        object(),  # The invalid mapper must be rejected before table lookup.
+        table,
         profile_id="test",
         mass1_msun=1.0e8,
         mass2_msun=1.0e8,
@@ -471,6 +510,83 @@ def test_unsupported_rk_endpoint_is_not_accepted_or_checkpointed(monkeypatch) ->
         step_budget=1,
     )
     assert result.status == "uncalibrated"
-    assert result.final_state == initial
+    assert result.final_state.semimajor_axis_pc == initial.semimajor_axis_pc
     assert result.samples[-1].semimajor_axis_pc == pytest.approx(1.0)
     assert "outside measured axis support" in result.reason
+
+
+def test_rate_budget_and_restart_preserve_fdm_calibration_identity() -> None:
+    def rate_a(_axis: float, _eccentricity: float) -> FDMExchangeRates:
+        return FDMExchangeRates(-1.0e8, -1.0e6, "release-a:rmap=map-a")
+
+    def rate_b(_axis: float, _eccentricity: float) -> FDMExchangeRates:
+        return FDMExchangeRates(-1.0e8, -1.0e6, "release-a:rmap=map-b")
+
+    model_a = BoundBinaryModel(1.0e8, 1.0e8, fdm_rate_provider=rate_a)
+    budget = binary_rate_budget(model_a, semimajor_axis_pc=1.0, eccentricity_squared=0.0)
+    assert budget.fdm_calibration_id == "release-a:rmap=map-a"
+    config = BinaryEvolutionConfig(1.0, 1.0e-4, 0.01, stop_at_gw_transition=False)
+    checkpoint = integrate_bound_binary(
+        initial_state=BoundBinaryState(0.0, 1.0, 0.0),
+        model=model_a,
+        config=config,
+        step_budget=1,
+    )
+    assert checkpoint.status == "checkpoint"
+    assert checkpoint.final_state.fdm_calibration_id == "release-a:rmap=map-a"
+    with pytest.raises(ValueError, match="calibration identity"):
+        integrate_bound_binary(
+            initial_state=checkpoint.final_state,
+            model=BoundBinaryModel(1.0e8, 1.0e8, fdm_rate_provider=rate_b),
+            config=config,
+        )
+
+
+@pytest.mark.parametrize(
+    ("reservoir", "reason"),
+    [
+        ("extracted_energy_by_channel", "energy closure"),
+        ("extracted_angular_momentum_by_channel", "angular-momentum closure"),
+    ],
+)
+def test_restart_closure_baseline_is_not_reset(
+    reservoir: str, reason: str
+) -> None:
+    model = _stellar_model()
+    config = BinaryEvolutionConfig(1.0, 1.0e-4, 0.01, stop_at_gw_transition=False)
+    checkpoint = integrate_bound_binary(
+        initial_state=BoundBinaryState(0.0, 1.0, 0.0),
+        model=model,
+        config=config,
+        step_budget=1,
+    ).final_state
+    corrupted = replace(checkpoint, **{reservoir: (1.0e30, 0.0, 0.0, 0.0)})
+    result = integrate_bound_binary(initial_state=corrupted, model=model, config=config)
+    assert result.status == "invalid"
+    assert reason in result.reason
+    assert result.environment_fdm_segment.status == "invalid"
+
+
+def test_unsampled_candidate_must_pass_closure_gate(monkeypatch) -> None:
+    model = _stellar_model()
+
+    def corrupt_step(state, _model, time_step):
+        return replace(
+            state,
+            elapsed_myr=state.elapsed_myr + time_step,
+            completed_steps=state.completed_steps + 1,
+            extracted_energy_by_channel=(1.0e30, 0.0, 0.0, 0.0),
+        )
+
+    monkeypatch.setattr(binary_evolution, "advance_bound_binary_rk4", corrupt_step)
+    result = integrate_bound_binary(
+        initial_state=BoundBinaryState(0.0, 1.0, 0.0),
+        model=model,
+        config=BinaryEvolutionConfig(
+            1.0, 1.0e-4, 0.01, sample_interval_steps=100, stop_at_gw_transition=False
+        ),
+        step_budget=1,
+    )
+    assert result.status == "invalid"
+    assert "energy closure gate failed" in result.reason
+    assert result.final_state.completed_steps == 0
