@@ -188,12 +188,70 @@ def audit_registered_single_pilot(
     orbit = loaded["orbit_series"]
     if orbit is None:
         raise ValueError("registered q/e pilot lacks orbit-averaged output")
+    if orbit.size == 0:
+        raise ValueError("registered q/e pilot orbit table is empty")
     orbit_summary = loaded["orbit"]
     if int(orbit_summary["complete_orbits"]) != int(orbit.size):
         raise ValueError("registered q/e pilot orbit summary disagrees with its table")
+    temporal_fields = {
+        "cycle",
+        "start_time_myr",
+        "end_time_myr",
+        "mean_time_myr",
+        "orbital_period_myr",
+    }
+    missing_temporal = sorted(temporal_fields - set(orbit.dtype.names or ()))
+    if missing_temporal:
+        raise ValueError(
+            "registered q/e pilot orbit table lacks temporal fields: "
+            + ", ".join(missing_temporal)
+        )
+    summary_start = float(orbit_summary.get("start_time_myr", math.nan))
+    summary_end = float(orbit_summary.get("end_time_myr", math.nan))
+    starts = np.asarray(orbit["start_time_myr"], dtype=float)
+    ends = np.asarray(orbit["end_time_myr"], dtype=float)
+    means = np.asarray(orbit["mean_time_myr"], dtype=float)
+    cycles = np.asarray(orbit["cycle"], dtype=float)
+    periods = np.asarray(orbit["orbital_period_myr"], dtype=float)
+    table_start = float(starts[0])
+    table_end = float(ends[-1])
+    duration_myr = float(metadata["duration_myr"])
+    conservation_time = np.asarray(loaded["series"]["time_myr"], dtype=float)
+    resolved_duration_myr = float(
+        loaded["conservation"]["initial_spatially_resolved_duration_myr"]
+    )
+    if (
+        np.any(~np.isfinite(starts))
+        or np.any(~np.isfinite(ends))
+        or np.any(~np.isfinite(means))
+        or np.any(~np.isfinite(cycles))
+        or np.any(~np.isfinite(periods))
+        or np.any(ends <= starts)
+        or np.any(periods <= 0.0)
+        or not np.allclose(periods, ends - starts, rtol=1.0e-10, atol=1.0e-12)
+        or conservation_time.size < 2
+        or np.any(~np.isfinite(conservation_time))
+        or np.any(np.diff(conservation_time) <= 0.0)
+        or not math.isclose(summary_start, table_start, rel_tol=0.0, abs_tol=1.0e-12)
+        or not math.isclose(summary_end, table_end, rel_tol=0.0, abs_tol=1.0e-12)
+        or not np.array_equal(cycles, np.arange(orbit.size, dtype=float))
+        or not np.allclose(starts[1:], ends[:-1], rtol=0.0, atol=1.0e-12)
+        or not np.allclose(means, 0.5 * (starts + ends), rtol=0.0, atol=1.0e-12)
+        or table_start < -1.0e-12
+        or table_end > duration_myr + 1.0e-12
+        or table_start < float(conservation_time[0]) - 1.0e-12
+        or table_end > float(conservation_time[-1]) + 1.0e-12
+        or not math.isfinite(resolved_duration_myr)
+        or resolved_duration_myr < 0.0
+        or resolved_duration_myr > duration_myr + 1.0e-12
+        or resolved_duration_myr > float(conservation_time[-1]) + 1.0e-12
+    ):
+        raise ValueError(
+            "registered q/e pilot orbit summary and table times are inconsistent"
+        )
     valid = _initial_resolved_orbit_indices(
         orbit,
-        float(loaded["conservation"]["initial_spatially_resolved_duration_myr"]),
+        resolved_duration_myr,
     )
     edges = design["separation_bin_edges_pc"]
     if len(edges) != 2:

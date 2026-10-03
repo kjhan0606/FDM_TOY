@@ -51,24 +51,36 @@ def _run(tmp_path: Path, *, identity: str = "valid") -> Path:
 
 def _loaded(count: int) -> dict:
     dtype = [
+        ("cycle", float),
         ("start_time_myr", float),
         ("end_time_myr", float),
+        ("mean_time_myr", float),
         ("orbital_period_myr", float),
         ("mean_separation_pc", float),
         ("mean_separation_over_cell_size", float),
         ("mean_eccentricity_osculating", float),
     ]
     orbit = np.zeros(count, dtype=dtype)
-    orbit["start_time_myr"] = np.arange(count)
-    orbit["end_time_myr"] = np.arange(1, count + 1)
-    orbit["orbital_period_myr"] = 1.0
+    orbit["cycle"] = np.arange(count)
+    orbit["start_time_myr"] = np.arange(count) * 0.01
+    orbit["end_time_myr"] = np.arange(1, count + 1) * 0.01
+    orbit["mean_time_myr"] = (np.arange(count) + 0.5) * 0.01
+    orbit["orbital_period_myr"] = 0.01
     orbit["mean_separation_pc"] = np.linspace(0.431, 0.437, count)
     orbit["mean_separation_over_cell_size"] = 4.2
     orbit["mean_eccentricity_osculating"] = np.linspace(0.25, 0.31, count)
     return {
         "orbit_series": orbit,
-        "orbit": {"status": "orbit_averaged", "complete_orbits": count},
-        "conservation": {"initial_spatially_resolved_duration_myr": float(count)},
+        "orbit": {
+            "status": "orbit_averaged",
+            "complete_orbits": count,
+            "start_time_myr": 0.0,
+            "end_time_myr": count * 0.01,
+        },
+        "conservation": {"initial_spatially_resolved_duration_myr": count * 0.01},
+        "series": np.array(
+            [(0.0,), (0.1,)], dtype=[("time_myr", float)]
+        ),
     }
 
 
@@ -78,7 +90,12 @@ def test_registered_fixed_bin_n7_fails_n8_passes(
 ) -> None:
     run = _run(tmp_path)
     (run / "orbit_averaged_exchange_summary.json").write_text(
-        json.dumps({"status": "orbit_averaged", "complete_orbits": count})
+        json.dumps({
+            "status": "orbit_averaged",
+            "complete_orbits": count,
+            "start_time_myr": 0.0,
+            "end_time_myr": count * 0.01,
+        })
     )
     monkeypatch.setattr(
         audit, "_require_pilot_complete",
@@ -97,6 +114,109 @@ def test_registered_fixed_bin_n7_fails_n8_passes(
     assert result["measured_eccentricity_duration_weighted_mean"] == pytest.approx(0.28)
     assert result["release_status"] == "no_calibration_release"
     assert result["production_calibration_row_admitted"] is False
+
+
+def test_registered_fixed_bin_rejects_mixed_orbit_summary_and_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = _run(tmp_path)
+    (run / "orbit_averaged_exchange_summary.json").write_text(json.dumps({
+        "status": "orbit_averaged",
+        "complete_orbits": 8,
+        "start_time_myr": 0.0,
+        "end_time_myr": 7.5,
+    }))
+    monkeypatch.setattr(
+        audit, "_require_pilot_complete",
+        lambda *args, **kwargs: {
+            "fdm_adapter_metadata.json": audit._sha256(
+                run / "fdm_adapter_metadata.json"
+            )
+        },
+    )
+    loaded = _loaded(8)
+    loaded["orbit"]["end_time_myr"] = 7.5
+    monkeypatch.setattr(audit, "load_convergence_run", lambda *args: loaded)
+    with pytest.raises(ValueError, match="summary and table times"):
+        audit.audit_registered_single_pilot(*_paths(), run)
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "gap",
+        "cycle",
+        "midpoint",
+        "nonfinite_time",
+        "nonpositive_interval",
+        "nonfinite_period",
+        "period_mismatch",
+        "conservation",
+        "nonfinite_conservation",
+        "nonmonotone_conservation",
+        "resolved_duration_out_of_range",
+    ],
+)
+def test_registered_fixed_bin_rejects_invalid_orbit_temporal_structure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, defect: str
+) -> None:
+    run = _run(tmp_path)
+    loaded = _loaded(8)
+    if defect == "gap":
+        loaded["orbit_series"]["start_time_myr"][4] += 1.0e-4
+    elif defect == "cycle":
+        loaded["orbit_series"]["cycle"][4] = 5
+    elif defect == "midpoint":
+        loaded["orbit_series"]["mean_time_myr"][4] += 1.0e-4
+    elif defect == "nonfinite_time":
+        loaded["orbit_series"]["start_time_myr"][4] = np.nan
+    elif defect == "nonpositive_interval":
+        loaded["orbit_series"]["end_time_myr"][4] = 0.04
+    elif defect == "nonfinite_period":
+        loaded["orbit_series"]["orbital_period_myr"][4] = np.nan
+    elif defect == "period_mismatch":
+        loaded["orbit_series"]["orbital_period_myr"][4] = 0.02
+    elif defect == "conservation":
+        loaded["series"]["time_myr"][-1] = 0.07
+    elif defect == "nonfinite_conservation":
+        loaded["series"]["time_myr"][-1] = np.nan
+    elif defect == "nonmonotone_conservation":
+        loaded["series"] = np.array(
+            [(0.0,), (0.1,), (0.09,)], dtype=[("time_myr", float)]
+        )
+    else:
+        loaded["conservation"]["initial_spatially_resolved_duration_myr"] = 0.11
+    monkeypatch.setattr(
+        audit, "_require_pilot_complete",
+        lambda *args, **kwargs: {
+            "fdm_adapter_metadata.json": audit._sha256(
+                run / "fdm_adapter_metadata.json"
+            )
+        },
+    )
+    monkeypatch.setattr(audit, "load_convergence_run", lambda *args: loaded)
+    with pytest.raises(ValueError, match="summary and table times"):
+        audit.audit_registered_single_pilot(*_paths(), run)
+
+
+def test_registered_fixed_bin_rejects_empty_orbit_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = _run(tmp_path)
+    loaded = _loaded(1)
+    loaded["orbit_series"] = loaded["orbit_series"][:0]
+    loaded["orbit"]["complete_orbits"] = 0
+    monkeypatch.setattr(
+        audit, "_require_pilot_complete",
+        lambda *args, **kwargs: {
+            "fdm_adapter_metadata.json": audit._sha256(
+                run / "fdm_adapter_metadata.json"
+            )
+        },
+    )
+    monkeypatch.setattr(audit, "load_convergence_run", lambda *args: loaded)
+    with pytest.raises(ValueError, match="orbit table is empty"):
+        audit.audit_registered_single_pilot(*_paths(), run)
 
 
 def test_pilot_stage_does_not_require_wave_response_files(
