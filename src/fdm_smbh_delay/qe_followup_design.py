@@ -8,7 +8,11 @@ import json
 import math
 from pathlib import Path
 
-from .calibration import estimated_uniform_grid_memory_gib
+from .calibration import (
+    WaveCalibrationCase,
+    estimated_uniform_grid_memory_gib,
+    run_specifications,
+)
 from .subgrid_calibration import MINIMUM_ACCEPTED_COMPLETE_ORBITS, is_qe_extension_case
 
 
@@ -38,6 +42,60 @@ def _run_rows(path: Path, case_id: str) -> dict[int, dict[str, str]]:
             raise ValueError("q/e design has duplicate or invalid run resolution")
         by_resolution[resolution] = row
     return by_resolution
+
+
+def build_qe_followup_run_manifest(
+    *,
+    case_id: str,
+    physical_cases: Path,
+    coarse_resolution: int,
+    fine_resolution: int,
+    box_size_pc: float,
+) -> list[dict]:
+    """Build one prospective pair and a same-cell doubled-box control."""
+
+    if (
+        not is_qe_extension_case(case_id)
+        or type(coarse_resolution) is not int
+        or type(fine_resolution) is not int
+        or coarse_resolution < 1
+        or fine_resolution <= coarse_resolution
+        or not math.isfinite(box_size_pc)
+        or box_size_pc <= 0.0
+    ):
+        raise ValueError("q/e follow-up manifest geometry is invalid")
+    source = _unique_case(physical_cases, case_id)
+    fields = WaveCalibrationCase.__dataclass_fields__
+    try:
+        case = WaveCalibrationCase(**{
+            name: (
+                source[name] if name in {"case_id", "origin"}
+                else int(source[name]) if name == "tier"
+                else float(source[name])
+            )
+            for name in fields
+        })
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("q/e physical case cannot define a run manifest") from error
+    ratio = box_size_pc / case.core_radius_pc
+    if not math.isfinite(ratio) or ratio <= 0.0:
+        raise ValueError("q/e box/core ratio is invalid")
+    pair = run_specifications(
+        [case], box_over_core_radius=ratio,
+        resolutions_by_tier={case.tier: [coarse_resolution, fine_resolution]},
+        minimum_kepler_mean_separation_cells=2.0,
+        minimum_pericentre_separation_plummer_radii=2.0,
+    )
+    box = run_specifications(
+        [case], box_over_core_radius=2.0 * ratio,
+        resolutions_by_tier={case.tier: [2 * fine_resolution]},
+        minimum_kepler_mean_separation_cells=2.0,
+        minimum_pericentre_separation_plummer_radii=2.0,
+    )
+    return [
+        {**specification.as_dict(), "requires_qe_design": True}
+        for specification in (*pair, *box)
+    ]
 
 
 def build_qe_followup_design(

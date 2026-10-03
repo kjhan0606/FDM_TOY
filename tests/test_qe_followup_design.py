@@ -9,6 +9,7 @@ import pytest
 
 from fdm_smbh_delay.qe_followup_design import (
     build_qe_followup_design,
+    build_qe_followup_run_manifest,
     read_verified_qe_followup_design,
     verify_qe_design_comparison_runs,
     verify_qe_design_run_request,
@@ -37,6 +38,85 @@ def test_registered_q100e000_followup_is_bound_but_has_no_results(tmp_path: Path
     ]
     assert all(row.case_duration_myr == 0.1 for row in plan)
     assert all(row.status_detail == "seed_missing" for row in plan)
+
+
+def test_followup_manifest_reproduces_registered_triplet_geometry() -> None:
+    root = Path(__file__).resolve().parents[1]
+    cases = root / "results/wave_calibration_qe_extension/physical_cases.csv"
+    rows = build_qe_followup_run_manifest(
+        case_id="qe_q100_e000_a020", physical_cases=cases,
+        coarse_resolution=256, fine_resolution=384, box_size_pc=26.4,
+    )
+    assert [row["effective_grid_cells"] for row in rows] == [256, 384, 768]
+    assert [row["box_size_pc"] for row in rows] == pytest.approx(
+        [26.4, 26.4, 52.8]
+    )
+    assert rows[1]["finest_cell_size_pc"] == pytest.approx(
+        rows[2]["finest_cell_size_pc"]
+    )
+    assert all(row["spatial_acceptance_passed"] for row in rows)
+    assert all(row["requires_qe_design"] for row in rows)
+
+
+def test_followup_manifest_rejects_unresolved_smaller_separation() -> None:
+    root = Path(__file__).resolve().parents[1]
+    cases = root / "results/wave_calibration_qe_extension/physical_cases.csv"
+    with pytest.raises(ValueError, match="spatial gates"):
+        build_qe_followup_run_manifest(
+            case_id="qe_q100_e000_a005", physical_cases=cases,
+            coarse_resolution=128, fine_resolution=256, box_size_pc=26.4,
+        )
+
+
+@pytest.mark.parametrize(
+    ("suffix", "case_id", "edges"),
+    [
+        ("q030e000_a020", "qe_q030_e000_a020", [0.43, 0.438]),
+        ("q100e030_a020", "qe_q100_e030_a020", [0.43, 0.438]),
+        ("q100e000_a010", "qe_q100_e000_a010", [0.215, 0.219]),
+    ],
+)
+def test_next_axis_designs_are_bound_not_released(
+    tmp_path: Path, suffix: str, case_id: str, edges: list[float]
+) -> None:
+    root = Path(__file__).resolve().parents[1]
+    cases = root / "results/wave_calibration_qe_extension/physical_cases.csv"
+    design_root = root / f"results/wave_calibration_qe_followup_{suffix}"
+    design, _ = read_verified_qe_followup_design(
+        design_root / "design.json", physical_cases=cases,
+        run_manifest=design_root / "run_manifest.csv",
+    )
+    assert design["case_id"] == case_id
+    assert design["separation_bin_edges_pc"] == edges
+    assert design["production_calibration_row_admitted"] is False
+    assert design["doubled_box_control"]["resolution"] == 768
+    assert design["doubled_box_control"]["exceeds_reference_gpu_memory"] is False
+    plan = build_plan(
+        design_root / "run_manifest.csv", cases,
+        tmp_path / "initial", tmp_path / "torch", tmp_path / "pyul",
+        qe_design_path=design_root / "design.json",
+    )
+    assert [row.qe_design_role for row in plan] == [
+        "coarse", "fine", "doubled_box_control",
+    ]
+    assert all(row.status_detail == "seed_missing" for row in plan)
+
+
+def test_followup_manifest_cli_refuses_overwrite(tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[1]
+    output = tmp_path / "run_manifest.csv"
+    command = [
+        sys.executable, "scripts/register_qe_followup_manifest.py",
+        "--case-id", "qe_q030_e000_a020",
+        "--cases", str(root / "results/wave_calibration_qe_extension/physical_cases.csv"),
+        "--coarse-resolution", "256", "--fine-resolution", "384",
+        "--box-size-pc", "26.4", "--output", str(output),
+    ]
+    subprocess.run(command, cwd=root, check=True, capture_output=True, text=True)
+    original = output.read_bytes()
+    repeated = subprocess.run(command, cwd=root, capture_output=True, text=True)
+    assert repeated.returncode != 0
+    assert output.read_bytes() == original
 
 
 def test_registered_followup_refuses_unbound_pilot_and_accepts_fresh_roots(

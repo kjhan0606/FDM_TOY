@@ -1,0 +1,44 @@
+{
+  "case_id": "qe_q030_e000_a020",
+  "core_radius_pc": 2.2,
+  "design_sha256": "da71b8f1eeb963d323e2c90cde7c6a0d34bd2f86357f2c6444d09e6e95db9936",
+  "doubled_box_control": {
+    "box_size_pc": 52.8,
+    "cell_size_pc": 0.06874999999999999,
+    "exceeds_reference_gpu_memory": false,
+    "resolution": 768,
+    "uniform_grid_memory_estimate_gib": 54.0
+  },
+  "initial_eccentricity": 0.0,
+  "initial_kepler_period_myr": 0.002733276935931289,
+  "initial_separation_pc": 0.44000000000000006,
+  "interpretation": "A prospective numerical design only. Resolved orbit coverage, conservation, convergence, doubled-box agreement, and resource feasibility must be demonstrated by new runs.",
+  "mass_ratio_q": 0.3,
+  "minimum_orbits_per_bin": 8,
+  "necessary_nominal_orbits": 8,
+  "physical_cases_sha256": "108485d9c99284078a14c2f8222daddc40b9e5b2303432a3f7d2fd85a3a785c4",
+  "planned_duration_myr": 0.1,
+  "production_calibration_row_admitted": false,
+  "reference_gpu_memory_gib": 80.0,
+  "resolution_pair": {
+    "coarse": {
+      "box_size_pc": 26.4,
+      "cell_size_pc": 0.103125,
+      "resolution": 256,
+      "run_id": "qe_q030_e000_a020_n256"
+    },
+    "fine": {
+      "box_size_pc": 26.4,
+      "cell_size_pc": 0.06874999999999999,
+      "resolution": 384,
+      "run_id": "qe_q030_e000_a020_n384"
+    }
+  },
+  "run_manifest_sha256": "81d71d0041ad5f577be38811e738d773cbf4267ae7a50fd2a2d49aabeee75f60",
+  "schema_version": 1,
+  "separation_bin_edges_pc": [
+    0.43,
+    0.438
+  ],
+  "status": "qe_prospective_fixed_bin_design_not_a_run_or_release"
+}
