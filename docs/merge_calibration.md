@@ -276,6 +276,10 @@ edges, SMBH/soliton initial conditions, numerical settings, and measured
 fine-run rates. The result reports candidate or censored bins only;
 `production_calibration_row_admitted` stays false until release provenance and
 the full calibration gates are implemented and verified.
+The assessor requires matching timestep factor, particle RK4 substeps, backend,
+and kinetic-phase layout across the coarse, fine, and doubled-box runs. A
+missing legacy layout tag cannot be mixed with the current separable-axis
+layout, even though the two implement the same spectral drift mathematically.
 The command also recomputes each fixed-bin comparison from its named raw
 orbit and conservation diagnostics, verifies their checksums before and after
 the audit, and refuses any diagnostic larger than 16 MiB on the login node.

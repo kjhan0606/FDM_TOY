@@ -497,6 +497,58 @@ def test_qe_box_control_compares_same_fixed_bin_without_releasing(
     assert result["production_calibration_row_admitted"] is False
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("kinetic_phase_layout", "separable_axis_v1"),
+     ("backend", "pytorch_cuda")],
+)
+def test_qe_box_control_rejects_mixed_solver_settings(
+    tmp_path: Path, field: str, value: str,
+) -> None:
+    pair, box = _write_qe_box_pair(tmp_path)
+    fine_path = tmp_path / "n512" / "fdm_adapter_metadata.json"
+    fine = json.loads(fine_path.read_text())
+    fine[field] = value
+    fine_path.write_text(json.dumps(fine))
+    with pytest.raises(ValueError, match="numerical settings differ"):
+        assess_qe_box_control(
+            CalibrationSource("test", pair), CalibrationSource("test", box)
+        )
+
+
+def test_qe_box_control_accepts_matching_separable_solver_layout(
+    tmp_path: Path,
+) -> None:
+    pair, box = _write_qe_box_pair(tmp_path)
+    for run in ("n384", "n512", "n1024"):
+        path = tmp_path / run / "fdm_adapter_metadata.json"
+        metadata = json.loads(path.read_text())
+        metadata["backend"] = "pytorch_cuda"
+        metadata["kinetic_phase_layout"] = "separable_axis_v1"
+        path.write_text(json.dumps(metadata))
+    result = assess_qe_box_control(
+        CalibrationSource("test", pair), CalibrationSource("test", box)
+    )
+    assert result["box_controlled_candidate_bins"] == [0]
+
+
+def test_qe_box_control_rejects_changed_coarse_time_step(
+    tmp_path: Path,
+) -> None:
+    pair, box = _write_qe_box_pair(tmp_path)
+    coarse_path = tmp_path / "n384" / "fdm_adapter_metadata.json"
+    coarse = json.loads(coarse_path.read_text())
+    coarse["time_step_factor"] = 2.0
+    coarse_path.write_text(json.dumps(coarse))
+    summary = json.loads(pair.read_text())
+    summary["runs"][1]["time_step_factor"] = 2.0
+    pair.write_text(json.dumps(summary))
+    with pytest.raises(ValueError, match="numerical settings"):
+        assess_qe_box_control(
+            CalibrationSource("test", pair), CalibrationSource("test", box)
+        )
+
+
 def test_qe_box_control_requires_raw_diagnostics_by_default(
     tmp_path: Path,
 ) -> None:

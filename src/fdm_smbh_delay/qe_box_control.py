@@ -92,18 +92,25 @@ def _run_bin(bin_row: dict, label: str) -> dict:
     return rows[0]
 
 
-def _numerical_settings(run: Path, summary_row: dict, definition: dict) -> tuple[float, int]:
+def _numerical_settings(
+    run: Path, summary_row: dict, definition: dict,
+) -> tuple[float, int, str | None, str | None]:
     metadata = json.loads((run / "fdm_adapter_metadata.json").read_text())
     config = json.loads((run / "config.uldm").read_text())
     step = float(metadata.get("time_step_factor", config["Temporal Step Factor"]))
     rk = int(metadata.get("nbody_rk4_substeps_per_wave_step", int(config["RK Steps"]) // 4))
+    backend = metadata.get("backend")
+    kinetic_phase_layout = metadata.get("kinetic_phase_layout")
     if (not np.isfinite(step) or step <= 0 or rk < 1
+            or (backend is not None and backend not in ("pytorch_cpu", "pytorch_cuda"))
+            or (kinetic_phase_layout is not None
+                and kinetic_phase_layout != "separable_axis_v1")
             or summary_row.get("time_step_factor") != step
             or summary_row.get("nbody_rk4_substeps_per_wave_step") != rk
             or summary_row.get("resolution") != definition["resolution"]
             or not np.isclose(summary_row.get("cell_size_pc"), definition["cell_size_pc"], rtol=1e-12, atol=0)):
         raise ValueError("box-control numerical settings disagree with run inputs")
-    return step, rk
+    return step, rk, backend, kinetic_phase_layout
 
 
 def _initial_conditions(run: Path, definition: dict) -> tuple[str, str]:
@@ -293,10 +300,11 @@ def assess_qe_box_control(
         raise ValueError("box-control initial SMBH and soliton conditions differ")
     settings = [
         _numerical_settings(fine_run, pair_ref, fine),
+        _numerical_settings(Path(pair_other["run"]).resolve(), pair_other, coarse),
         _numerical_settings(larger_run, box_ref, larger),
         _numerical_settings(fine_run, box_other, fine),
     ]
-    if settings[0] != settings[1] or settings[0] != settings[2]:
+    if any(setting != settings[0] for setting in settings[1:]):
         raise ValueError("box-control numerical settings differ")
     pair_result = build_source_rows(resolution_pair) if pair_bins else None
     box_result = build_source_rows(doubled_box) if box_bins else None
