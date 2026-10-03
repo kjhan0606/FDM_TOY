@@ -441,6 +441,28 @@ def test_gpu_index_lock_rejects_a_duplicate_runner(tmp_path: Path) -> None:
         first.close()
 
 
+def test_slurm_locks_distinguish_physical_gpus_on_one_node(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("SLURM_JOB_ID", "12345")
+    monkeypatch.setenv("SLURMD_NODENAME", "syn01")
+    monkeypatch.setenv("SLURM_JOB_GPUS", "1")
+    first = acquire_gpu_lock(tmp_path, 0)
+    try:
+        with pytest.raises(DuplicateRunner, match="physical GPU 1"):
+            acquire_gpu_lock(tmp_path, 0)
+        monkeypatch.setenv("SLURM_JOB_GPUS", "4")
+        second = acquire_gpu_lock(tmp_path, 0)
+        try:
+            assert first.name != second.name
+            assert "syn01_gpu1" in first.name
+            assert "syn01_gpu4" in second.name
+        finally:
+            second.close()
+    finally:
+        first.close()
+
+
 def test_wait_for_path_ignores_normal_solver_exit_status(tmp_path: Path) -> None:
     target = tmp_path / "ready"
     status = tmp_path / "legacy_guard.json"

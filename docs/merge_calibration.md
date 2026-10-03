@@ -559,6 +559,11 @@ syn01, 2026-10-04) measured `CUDA_VISIBLE_DEVICES=0`, `SLURM_JOB_GPUS=1`, and
 only NVML index 0 visible within the allocation. The runner preserves Slurm's
 device selection instead of overriding it; ambiguous or mismatched visible
 devices fail before opening the NVML monitor or launching a solver.
+The guarded-runner lock is keyed by node name and Slurm's physical GPU ID,
+not by the cgroup-local CUDA ordinal. Slurm jobs 411930 and 411931 showed why:
+two different physical GPUs on syn01 were both visible as CUDA device 0, and
+the older ordinal-only lock rejected the second job before computation. NVML
+collision checks remain per visible allocated device.
 
 A bounded read of the completed pilot
 `qe_q100_e060_a020_n768/torch_run_summary.json` (SHA-256

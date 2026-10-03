@@ -11,8 +11,10 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import signal
+import socket
 import subprocess
 import sys
 from threading import Thread
@@ -125,17 +127,26 @@ def _atomic_json(path: Path, payload: dict[str, object]) -> None:
 
 
 def acquire_gpu_lock(log_root: Path, gpu_index: int):
-    """Acquire the one nonblocking runner lock for a physical GPU index."""
+    """Lock one physical GPU on one node, not a cgroup-local CUDA ordinal."""
 
     log_root.mkdir(parents=True, exist_ok=True)
-    path = log_root / f"qe_guard_gpu{gpu_index}.lock"
+    if "SLURM_JOB_ID" in os.environ:
+        node = os.environ.get("SLURMD_NODENAME", "")
+        physical = os.environ.get("SLURM_JOB_GPUS", "")
+    else:
+        node = socket.gethostname().split(".", maxsplit=1)[0]
+        physical = str(gpu_index)
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", node) or not physical.isdecimal():
+        raise ValueError("cannot identify one node and physical GPU for guarded lock")
+    path = log_root / f"qe_guard_{node}_gpu{physical}.lock"
     stream = path.open("a", encoding="utf-8")
     try:
         fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError as error:
         stream.close()
         raise DuplicateRunner(
-            f"another guarded q-e runner holds GPU {gpu_index}"
+            f"another guarded q-e runner holds GPU {gpu_index} "
+            f"({node} physical GPU {physical})"
         ) from error
     return stream
 
@@ -769,7 +780,11 @@ def main() -> int:
 
     log_root = arguments.log_root.expanduser().resolve()
     failure_status = log_root / f"qe_gpu{arguments.gpu_index}_guard_failure.json"
-    lock_stream = acquire_gpu_lock(log_root, arguments.gpu_index)
+    try:
+        lock_stream = acquire_gpu_lock(log_root, arguments.gpu_index)
+    except ValueError as error:
+        print(str(error), file=sys.stderr, flush=True)
+        return EX_CONFIG
     try:
         if arguments.wait_for_path is not None:
             explicit_statuses = tuple(
