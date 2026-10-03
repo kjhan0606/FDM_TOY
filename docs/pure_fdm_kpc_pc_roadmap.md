@@ -278,17 +278,30 @@ numerical trajectory for the outer response.  It uses the existing
 primary--secondary relative RK4 force operator for the static host, stellar
 and gas drag, and tidal envelope truncation, applies one coherence-gated FDM
 kick at each step midpoint, and rejects analytic FDM drag in the same model.
-Start, midpoint, and endpoint q/e/r/coherence checks discard an unsupported proposed
-step, preserving the last accepted state.  The accepted-step number keys the
+Start, midpoint, and endpoint q/e/r/coherence checks discard an unsupported
+proposed step, preserving the last accepted state.  The accepted-step number keys the
 random draw, so an in-memory or disk restart reproduces the same trajectory.
 `write_candidate_fdm_checkpoint` and `read_candidate_fdm_checkpoint` bind the
 state checksum, model/configuration, response family, source-indexed closures,
 radial support, seed, code hashes, and numerical-library versions.  A changed
 input or implementation rejects the restart.  The result labels even a
 geometric target crossing as a *candidate* and exposes no delay segment or
-hard-binary handoff.  Galaxy-merger torque calibration, colored-noise dynamics
-when the coherence gate fails, phase-aware bound/hard evolution with this
-response, and physical source verification remain outstanding.
+hard-binary handoff.
+
+`assess_candidate_fdm_outer_phases` applies the established common-nucleus,
+two-body binding, and hard-radius tests to accepted candidate states.  It
+records instantaneous semimajor axis and eccentricity together only after
+the SMBHs lie inside the common nucleus and their two-body orbit is bound;
+these diagnostics differ from the host-orbit eccentricity used to query the
+outer response.  `integrate_candidate_fdm_to_hard_boundary` classifies each
+accepted step immediately and stops before another outer-response step once
+the candidate hard boundary is reached.  A `MULTIPLE` input remains terminal
+and never enters binary evolution.  The phase checkpoint preserves the full
+transition history and rejects changed phase controls, response inputs, code,
+or a corrupted state.  All bound/hard labels remain numerical candidates:
+galaxy-merger torque calibration, colored-noise dynamics where the coherence
+gate fails, physical source verification, and a justified inner-model handoff
+remain outstanding.  No PTA-facing delay is emitted.
 
 For kpc q/e queries, `spherical_host_turning_points` derives a distinct
 host-orbit eccentricity from peri- and apocentre in the static spherical

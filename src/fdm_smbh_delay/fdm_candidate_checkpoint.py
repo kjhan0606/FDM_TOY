@@ -13,12 +13,19 @@ import numpy as np
 
 from .fdm_outer_halo import FDMOuterHaloClosure
 from .fdm_outer_response_family import FDMOuterResponseFamily
-from .kpc_checkpoint import _digest, _physics_value, kpc_implementation_sha256
-from .kpc_inspiral import DualNucleusState, KpcInspiralModel, KpcIntegrationConfig
+from .kpc_checkpoint import (
+    _digest, _physics_value, _state_from_record as _phase_state_from_record,
+    _state_record as _phase_state_record, kpc_implementation_sha256,
+)
+from .kpc_inspiral import (
+    DualNucleusState, KpcInspiralModel, KpcIntegrationConfig,
+    KpcToHardConfig, KpcToHardState,
+)
 
 
 _CANDIDATE_MODULES = (
     "fdm_candidate_checkpoint.py", "fdm_candidate_orbit.py",
+    "fdm_candidate_phase.py",
     "fdm_orbital_response.py", "fdm_outer_response.py",
     "fdm_outer_response_family.py", "fdm_response_kick.py", "host_orbit.py",
 )
@@ -64,6 +71,26 @@ def candidate_physics_sha256(
     })
 
 
+def candidate_phase_physics_sha256(
+    *,
+    model: KpcInspiralModel,
+    outer_config: KpcIntegrationConfig,
+    phase_config: KpcToHardConfig,
+    response_family: FDMOuterResponseFamily,
+    closure_by_source_sha256: Mapping[str, FDMOuterHaloClosure],
+    radial_support_pc: tuple[float, float],
+    random_seed: int,
+) -> str:
+    return _digest({
+        "outer_physics_sha256": candidate_physics_sha256(
+            model=model, config=outer_config, response_family=response_family,
+            closure_by_source_sha256=closure_by_source_sha256,
+            radial_support_pc=radial_support_pc, random_seed=random_seed,
+        ),
+        "phase_config": _physics_value(phase_config),
+    })
+
+
 def _state_record(state: DualNucleusState) -> dict[str, object]:
     return {
         "elapsed_myr": state.elapsed_myr,
@@ -72,6 +99,36 @@ def _state_record(state: DualNucleusState) -> dict[str, object]:
         "envelope_truncation_radius_pc": state.envelope_truncation_radius_pc,
         "completed_steps": state.completed_steps,
     }
+
+
+def _atomic_json_replace(destination: Path, record: dict[str, object]) -> None:
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", dir=destination.parent,
+            prefix=f".{destination.name}.", suffix=".partial", delete=False,
+        ) as stream:
+            temporary = Path(stream.name)
+            json.dump(record, stream, sort_keys=True, indent=2, allow_nan=False)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, destination)
+        directory_fd = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
+
+
+def _read_json(path: str | Path) -> object:
+    try:
+        return json.loads(Path(path).expanduser().resolve().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"cannot read candidate checkpoint: {error}") from error
 
 
 def write_candidate_fdm_checkpoint(
@@ -104,26 +161,7 @@ def write_candidate_fdm_checkpoint(
         "state_sha256": _digest(state_record),
         "state": state_record,
     }
-    temporary: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            "w", encoding="utf-8", dir=destination.parent,
-            prefix=f".{destination.name}.", suffix=".partial", delete=False,
-        ) as stream:
-            temporary = Path(stream.name)
-            json.dump(record, stream, sort_keys=True, indent=2, allow_nan=False)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, destination)
-        directory_fd = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
-    finally:
-        if temporary is not None and temporary.exists():
-            temporary.unlink()
+    _atomic_json_replace(destination, record)
 
 
 def read_candidate_fdm_checkpoint(
@@ -138,10 +176,7 @@ def read_candidate_fdm_checkpoint(
 ) -> DualNucleusState:
     """Reject changed physics/code, corrupted state, or out-of-budget restart."""
 
-    try:
-        record = json.loads(Path(path).expanduser().resolve().read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise ValueError(f"cannot read candidate checkpoint: {error}") from error
+    record = _read_json(path)
     if not isinstance(record, dict) or set(record) != {
         "schema_version", "physics_sha256", "implementation_sha256",
         "state_sha256", "state",
@@ -175,4 +210,79 @@ def read_candidate_fdm_checkpoint(
     )
     if state.elapsed_myr > config.maximum_time_myr or state.completed_steps > config.maximum_steps:
         raise ValueError("candidate checkpoint state exceeds integration budget")
+    return state
+
+
+def write_candidate_fdm_phase_checkpoint(
+    path: str | Path,
+    state: KpcToHardState,
+    *,
+    model: KpcInspiralModel,
+    outer_config: KpcIntegrationConfig,
+    phase_config: KpcToHardConfig,
+    response_family: FDMOuterResponseFamily,
+    closure_by_source_sha256: Mapping[str, FDMOuterHaloClosure],
+    radial_support_pc: tuple[float, float],
+    random_seed: int,
+) -> None:
+    """Atomically preserve trajectory state and full phase-transition history."""
+
+    destination = Path(path).expanduser().resolve()
+    if not destination.parent.is_dir():
+        raise ValueError("candidate phase checkpoint parent directory must exist")
+    dynamics = state.dynamical_state
+    if dynamics.elapsed_myr > outer_config.maximum_time_myr or dynamics.completed_steps > outer_config.maximum_steps:
+        raise ValueError("candidate phase checkpoint exceeds outer integration budget")
+    record_state = _phase_state_record(state)
+    record = {
+        "schema_version": 1,
+        "kind": "candidate_fdm_phase",
+        "physics_sha256": candidate_phase_physics_sha256(
+            model=model, outer_config=outer_config, phase_config=phase_config,
+            response_family=response_family,
+            closure_by_source_sha256=closure_by_source_sha256,
+            radial_support_pc=radial_support_pc, random_seed=random_seed,
+        ),
+        "implementation_sha256": candidate_implementation_sha256(),
+        "state_sha256": _digest(record_state),
+        "state": record_state,
+    }
+    _atomic_json_replace(destination, record)
+
+
+def read_candidate_fdm_phase_checkpoint(
+    path: str | Path,
+    *,
+    model: KpcInspiralModel,
+    outer_config: KpcIntegrationConfig,
+    phase_config: KpcToHardConfig,
+    response_family: FDMOuterResponseFamily,
+    closure_by_source_sha256: Mapping[str, FDMOuterHaloClosure],
+    radial_support_pc: tuple[float, float],
+    random_seed: int,
+) -> KpcToHardState:
+    """Reject changed response/phase physics, implementation, or history."""
+
+    record = _read_json(path)
+    if not isinstance(record, dict) or set(record) != {
+        "schema_version", "kind", "physics_sha256", "implementation_sha256",
+        "state_sha256", "state",
+    } or record["schema_version"] != 1 or record["kind"] != "candidate_fdm_phase":
+        raise ValueError("unsupported candidate phase checkpoint schema")
+    expected_physics = candidate_phase_physics_sha256(
+        model=model, outer_config=outer_config, phase_config=phase_config,
+        response_family=response_family,
+        closure_by_source_sha256=closure_by_source_sha256,
+        radial_support_pc=radial_support_pc, random_seed=random_seed,
+    )
+    if record["physics_sha256"] != expected_physics:
+        raise ValueError("candidate phase checkpoint physics fingerprint differs")
+    if record["implementation_sha256"] != candidate_implementation_sha256():
+        raise ValueError("candidate phase checkpoint implementation fingerprint differs")
+    if record["state_sha256"] != _digest(record["state"]):
+        raise ValueError("candidate phase checkpoint state checksum differs")
+    state = _phase_state_from_record(record["state"])
+    dynamics = state.dynamical_state
+    if dynamics.elapsed_myr > outer_config.maximum_time_myr or dynamics.completed_steps > outer_config.maximum_steps:
+        raise ValueError("candidate phase checkpoint exceeds outer integration budget")
     return state
