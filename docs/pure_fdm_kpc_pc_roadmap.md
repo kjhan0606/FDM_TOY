@@ -41,7 +41,9 @@ batches recorded later are absent from that snapshot. A batch interrupted by
 a later valid restart attempt is censored and reported as such; a missing
 commit followed by another batch in the same attempt remains an error. An
 incomplete final batch requires explicit tail allowance. Legacy bare-event
-ledgers remain readable but cannot prove this restart lineage.
+ledgers require `allow_legacy_events=True` for historical inspection; their
+events are marked unverified and cannot initialize the physical kpc state,
+nuclear bridge, FDM seed, or dark-matter-run binding.
 It preserves the active model and SIDM/FDM controls, but does not assert that
 different model runs reach capture simultaneously or that any capture is a
 physical coalescence.  Only the FDM branch proceeds to the all-wave seed and

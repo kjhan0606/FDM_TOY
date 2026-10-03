@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 import hashlib
 from pathlib import Path
@@ -256,7 +257,25 @@ def test_capture_seed_rejects_sparse_legacy_ledger_without_native_conservation(
     )
     event = read_capture_ledger(ledger, allow_legacy_events=True).events[0]
     assert not event.native_conservation_verified
+    event = replace(event, post_compaction_verified=True)
     with pytest.raises(ValueError, match="verified native ledger conservation"):
+        derive_dual_smbh_sink_pair_from_capture(
+            event, frame=_frame(), assignment=_assignment(),
+            mass_projection=_projection(),
+        )
+
+
+def test_full_legacy_event_cannot_seed_even_with_explicit_inspection_opt_in(
+    tmp_path: Path,
+) -> None:
+    ledger = tmp_path / "legacy_capture.jsonl"
+    ledger.write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in _rows()),
+        encoding="utf-8",
+    )
+    event = read_capture_ledger(ledger, allow_legacy_events=True).events[0]
+    assert event.native_conservation_verified
+    with pytest.raises(ValueError, match="committed post-compaction batch"):
         derive_dual_smbh_sink_pair_from_capture(
             event, frame=_frame(), assignment=_assignment(),
             mass_projection=_projection(),

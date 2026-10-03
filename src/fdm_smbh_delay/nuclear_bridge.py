@@ -426,6 +426,8 @@ class NuclearBridgeInput:
         environment: EnvironmentSnapshot,
         target_semimajor_axis_pc: float = 1.0,
     ) -> "NuclearBridgeInput":
+        if not event.post_compaction_verified:
+            raise ValueError("nuclear bridge requires a committed post-compaction capture")
         pair = event.binary_orbital_state
         if pair is None:
             raise ValueError(

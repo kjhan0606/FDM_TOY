@@ -188,6 +188,16 @@ def transition_radii(
 
 def initial_capture_state(event: CaptureEvent) -> InspiralState:
     state = event.binary_orbital_state
+    if not event.post_compaction_verified:
+        return InspiralState(
+            event_uid=event.event_uid,
+            phase=InspiralPhase.CENSORED,
+            elapsed_myr=0.0,
+            separation_pc=(None if state is None else state.separation_pc),
+            semimajor_axis_pc=(None if state is None else state.semi_major_axis_pc),
+            eccentricity=(None if state is None else state.eccentricity),
+            reason="capture lacks a committed post-compaction batch",
+        )
     return InspiralState(
         event_uid=event.event_uid,
         phase=InspiralPhase.NUMERICAL_CAPTURE,
@@ -219,6 +229,8 @@ def classify_capture_state(
     ):
         raise ValueError("common_nucleus_radius_pc must be finite and positive")
     current = initial_capture_state(event)
+    if current.terminal:
+        return current
     if event.classification == "MULTIPLE":
         return transition_state(
             current,

@@ -200,6 +200,7 @@ def test_capture_event_constructor_preserves_ledger_provenance() -> None:
         source_path=Path("capture.jsonl"),
         first_line=1,
         last_line=3,
+        post_compaction_verified=True,
     )
     bridge = NuclearBridgeInput.from_capture_event(
         event,
@@ -209,6 +210,13 @@ def test_capture_event_constructor_preserves_ledger_provenance() -> None:
     )
     assert bridge.source_sha256 == SOURCE_HASH
     assert bridge.redshift == pytest.approx(event.redshift)
+    with pytest.raises(ValueError, match="committed post-compaction capture"):
+        NuclearBridgeInput.from_capture_event(
+            replace(event, post_compaction_verified=False),
+            run_id="hr5-run-1",
+            capture_time_myr=1200.0,
+            environment=_environment(),
+        )
 
 
 def test_unbound_capture_is_preserved_for_rebinding_model() -> None:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 from pathlib import Path
@@ -62,6 +62,7 @@ class CaptureEvent:
     last_line: int
     multiple_members_preserved: bool | None = None
     native_conservation_verified: bool = False
+    post_compaction_verified: bool = False
 
     @property
     def binary_orbital_state(self) -> PairOrbitalState | None:
@@ -766,7 +767,7 @@ def read_capture_ledger(
             raise CaptureLedgerError(f"{committed_batch.uid}: conflicting deterministic batch UID")
         batch_digests[committed_batch.uid] = digest
         for event in committed_batch.events:
-            accept(event)
+            accept(replace(event, post_compaction_verified=True))
     return CaptureLedger(
         source_path=resolved, events=tuple(events.values()),
         duplicate_events=duplicates, incomplete_event_uids=tuple(incomplete),

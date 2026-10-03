@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 from pathlib import Path
 import subprocess
@@ -256,6 +257,12 @@ def test_capture_binds_only_to_a_later_output_with_the_same_ledger_name(tmp_path
     decision = bind_capture_event_to_dark_matter_run(event, read_dark_matter_run_provenance(path))
     assert decision.bound
     assert decision.dark_matter_model == "cdm"
+    historical = bind_capture_event_to_dark_matter_run(
+        replace(event, post_compaction_verified=False),
+        read_dark_matter_run_provenance(path),
+    )
+    assert not historical.bound
+    assert "committed post-compaction" in historical.reasons[0]
 
     _write_provenance(path, _records("sidm", nstep=9, ledger_name="other.jsonl"))
     rejected = bind_capture_event_to_dark_matter_run(event, read_dark_matter_run_provenance(path))

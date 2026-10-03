@@ -359,6 +359,8 @@ def _member_by_id(event: CaptureEvent, member_id: int) -> CaptureMember:
 def _validate_binary_event(
     event: CaptureEvent, assignment: CaptureFDMSeedAssignment
 ) -> None:
+    if not event.post_compaction_verified:
+        raise ValueError("capture-to-FDM seed requires a committed post-compaction batch")
     state = event.binary_orbital_state
     if event.classification != "BINARY" or state is None:
         raise ValueError("only a complete unambiguous BINARY capture can seed a dual-SMBH zoom")

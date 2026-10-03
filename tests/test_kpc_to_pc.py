@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -85,7 +86,20 @@ def _event(
         source_path=Path("ledger.jsonl"),
         first_line=1,
         last_line=5,
+        post_compaction_verified=True,
     )
+
+
+def test_uncommitted_legacy_capture_remains_censored() -> None:
+    event = replace(_event(), post_compaction_verified=False)
+    assert initial_capture_state(event).phase is InspiralPhase.CENSORED
+    state = classify_capture_state(
+        event,
+        common_nucleus_radius_pc=5.0,
+        sigma_pc_myr=200.0 * KM_S_TO_PC_MYR,
+    )
+    assert state.phase is InspiralPhase.CENSORED
+    assert "committed post-compaction" in state.reason
 
 
 def test_event_specific_influence_and_hard_binary_radii() -> None:

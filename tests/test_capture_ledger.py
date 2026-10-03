@@ -13,6 +13,7 @@ from fdm_smbh_delay.capture_ledger import (
     read_capture_ledger as _read_capture_ledger,
 )
 from fdm_smbh_delay.constants import G_INTERNAL
+from capture_protocol_fixture import committed_capture_rows
 
 
 def read_capture_ledger(path, **kwargs):
@@ -382,7 +383,15 @@ def test_legacy_event_is_not_admitted_by_default(tmp_path) -> None:
     _write_rows(path, _native_binary_rows())
     with pytest.raises(CaptureLedgerError, match="cannot prove post-compaction capture"):
         _read_capture_ledger(path)
-    assert read_capture_ledger(path).events[0].native_conservation_verified
+    historical = read_capture_ledger(path).events[0]
+    assert historical.native_conservation_verified
+    assert not historical.post_compaction_verified
+
+
+def test_committed_batch_marks_post_compaction_capture(tmp_path) -> None:
+    path = tmp_path / "ledger.jsonl"
+    _write_rows(path, [_attempt(), *_committed_batch_rows()])
+    assert _read_capture_ledger(path).events[0].post_compaction_verified
 
 
 def test_exact_restart_event_is_deduplicated(tmp_path) -> None:
@@ -432,10 +441,12 @@ def test_preserved_multiple_is_ingested_without_selecting_a_binary(tmp_path) -> 
     end.update(nmember=3, npair=3)
     rows = [begin, first, second, third, *pairs, end]
     path = tmp_path / "ledger.jsonl"
-    _write_rows(path, rows + rows)
+    committed = committed_capture_rows(rows)
+    _write_rows(path, committed + committed[1:])
     ledger = read_capture_ledger(path)
     event = ledger.events[0]
     assert ledger.duplicate_events == 1
+    assert event.post_compaction_verified
     assert event.multiple_members_preserved is True
     assert [member.sink_id for member in event.members] == [7, 9, 11]
     assert len(event.pairs) == 3
