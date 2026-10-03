@@ -500,6 +500,7 @@ def test_qe_box_control_compares_same_fixed_bin_without_releasing(
 @pytest.mark.parametrize(
     ("field", "value"),
     [("kinetic_phase_layout", "separable_axis_v1"),
+     ("wave_buffer_lifetime", "release_previous_state_before_fft_v1"),
      ("backend", "pytorch_cuda")],
 )
 def test_qe_box_control_rejects_mixed_solver_settings(
@@ -525,6 +526,7 @@ def test_qe_box_control_accepts_matching_separable_solver_layout(
         metadata = json.loads(path.read_text())
         metadata["backend"] = "pytorch_cuda"
         metadata["kinetic_phase_layout"] = "separable_axis_v1"
+        metadata["wave_buffer_lifetime"] = "release_previous_state_before_fft_v1"
         path.write_text(json.dumps(metadata))
     result = assess_qe_box_control(
         CalibrationSource("test", pair), CalibrationSource("test", box)

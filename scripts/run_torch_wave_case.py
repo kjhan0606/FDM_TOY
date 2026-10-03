@@ -322,6 +322,7 @@ def main() -> int:
             "actual_wave_steps": actual_steps,
             "wave_time_step_code": time_step,
             "kinetic_phase_layout": "separable_axis_v1",
+            "wave_buffer_lifetime": "release_previous_state_before_fft_v1",
             "checkpoint_every_saved_intervals": args.checkpoint_every_saves,
             "wave_acceleration_during_particle_rk4": (
                 "interpolated_from_a_local_potential_patch_at_each_rk4_stage"
@@ -344,6 +345,7 @@ def main() -> int:
             "actual_wave_steps",
             "wave_time_step_code",
             "kinetic_phase_layout",
+            "wave_buffer_lifetime",
         ):
             if saved_metadata.get(key) != metadata[key]:
                 raise ValueError(f"restart request changes {key}")
@@ -466,7 +468,12 @@ def main() -> int:
         half_phase = torch.exp(-0.5j * time_step * total_potential)
         wavefunction.mul_(half_phase)
         del half_phase
+        # None of the previous density/potential buffers enters the FFT drift.
+        # Release them before allocating its complex work arrays, rather than
+        # retaining an entire old wave state until the next assignment.
+        del total_potential, density, wave_potential, compact_potential
         wavefunction_k = torch.fft.fftn(wavefunction)
+        del wavefunction
         apply_kinetic_phase_in_place(wavefunction_k, grid.kinetic_axis_phase)
         wavefunction = torch.fft.ifftn(wavefunction_k)
         del wavefunction_k
@@ -490,6 +497,7 @@ def main() -> int:
             time_step=time_step,
             substeps=args.rk4_substeps,
         )
+        del wave_patches, patch_starts
         compact_potential = plummer_potential_torch(
             coordinate=grid.coordinate,
             masses=masses_code,

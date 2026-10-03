@@ -277,7 +277,8 @@ fine-run rates. The result reports candidate or censored bins only;
 `production_calibration_row_admitted` stays false until release provenance and
 the full calibration gates are implemented and verified.
 The assessor requires matching timestep factor, particle RK4 substeps, backend,
-and kinetic-phase layout across the coarse, fine, and doubled-box runs. A
+kinetic-phase layout, and wave-buffer lifetime across the coarse, fine, and
+doubled-box runs. A
 missing legacy layout tag cannot be mixed with the current separable-axis
 layout, even though the two implement the same spectral drift mathematically.
 The command also recomputes each fixed-bin comparison from its named raw
@@ -363,6 +364,10 @@ to the doubled grids gives 116.0 and 418.5 GiB; the resource planner reports
 these independently of the 16-array estimate. Neither projection includes
 CUDA reserved memory, FFT workspace, or a newly measured large-grid peak.
 These estimates are planning warnings, not measured peak GPU footprints. A
+new Torch solver revision separates the kinetic phase by axis and releases
+previous-step wave buffers before its FFT. Its large-grid peak has not yet
+been measured, so the historical peak measurements and cubic projections
+cannot be treated as a capacity clearance for that revision. A
 new release therefore needs an independently reviewed solver/resource design
 for its doubled-box controls; merely extending the current run duration or
 submitting the same grids on an 80 GiB card cannot establish the required
