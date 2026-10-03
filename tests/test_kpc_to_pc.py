@@ -121,6 +121,18 @@ def test_gw_transition_cannot_bypass_hard_binary_boundary() -> None:
     ).phase is InspiralPhase.GW_DRIVEN
 
 
+def test_capture_rejects_hard_scale_outside_common_nucleus() -> None:
+    sigma = 200.0 * KM_S_TO_PC_MYR
+    hard = hard_binary_radius_pc(1.0e8, 1.0e8, sigma)
+    state = classify_capture_state(
+        _event(separation_pc=0.01),
+        common_nucleus_radius_pc=0.5 * hard,
+        sigma_pc_myr=sigma,
+    )
+    assert state.phase is InspiralPhase.INVALID
+    assert "outside the common-nucleus domain" in state.reason
+
+
 def test_capture_outside_common_nucleus_is_not_called_a_binary() -> None:
     event = _event(separation_pc=10.0)
     state = classify_capture_state(

@@ -428,18 +428,17 @@ def _advance_physical_phase(
         phase = state.inspiral_state.phase
 
     if phase is InspiralPhase.COMMON_NUCLEUS_UNBOUND:
+        if elements.separation > config.common_nucleus_radius_pc:
+            state = _append_phase(
+                state,
+                InspiralPhase.CENSORED,
+                elements=elements,
+                reason=(
+                    "common-nucleus passage exited the static-host calibration domain"
+                ),
+            )
+            return state, "outside"
         if elements.specific_energy >= 0.0:
-            if elements.separation > config.common_nucleus_radius_pc:
-                state = _append_phase(
-                    state,
-                    InspiralPhase.CENSORED,
-                    elements=elements,
-                    reason=(
-                        "unbound common-nucleus passage exited the static-host "
-                        "calibration domain"
-                    ),
-                )
-                return state, "outside"
             return state, None
         state = _append_phase(
             state,
@@ -450,6 +449,14 @@ def _advance_physical_phase(
         phase = state.inspiral_state.phase
 
     if phase is InspiralPhase.BOUND_BINARY:
+        if elements.separation > config.common_nucleus_radius_pc:
+            state = _append_phase(
+                state,
+                InspiralPhase.CENSORED,
+                elements=elements,
+                reason="bound orbit exited the static-host common-nucleus domain",
+            )
+            return state, "outside"
         if elements.specific_energy >= 0.0 or elements.semimajor_axis is None:
             state = _append_phase(
                 state,

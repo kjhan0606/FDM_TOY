@@ -519,6 +519,52 @@ def test_unbound_exit_is_censored_outside_static_host_domain(monkeypatch) -> Non
     assert result.delay_segment.status == "timeout"
 
 
+@pytest.mark.parametrize("initially_bound", [False, True])
+def test_bound_energy_outside_common_nucleus_cannot_be_promoted(
+    monkeypatch, initially_bound: bool,
+) -> None:
+    model = _phase_aware_model()
+    config = _phase_aware_config()
+    if initially_bound:
+        starting = initial_dual_nucleus_state(
+            position_pc=np.array([10.0, 0.0, 0.0]),
+            velocity_pc_myr=_tangential_velocity_for_axis(15.0),
+            model=model,
+        )
+    else:
+        starting = _inside_unbound_state(model)
+    initial = initial_kpc_to_hard_state(
+        event_uid="capture-bound-energy-exit",
+        dynamical_state=starting,
+        model=model,
+        config=config,
+    )
+    assert initial.inspiral_state.phase is (
+        InspiralPhase.BOUND_BINARY if initially_bound
+        else InspiralPhase.COMMON_NUCLEUS_UNBOUND
+    )
+
+    def leave_with_bound_energy(state, _model, time_step):
+        return DualNucleusState(
+            state.elapsed_myr + time_step,
+            np.array([21.0, 0.0, 0.0]),
+            _tangential_velocity_for_axis(30.0, radius_pc=21.0),
+            state.envelope_truncation_radius_pc,
+            state.completed_steps + 1,
+        )
+
+    monkeypatch.setattr(
+        kpc_inspiral, "_advance_phase_aware_rk4", leave_with_bound_energy
+    )
+    result = integrate_dual_nucleus_to_hard(
+        initial_state=initial, model=model, config=config,
+    )
+    assert result.status == "outside"
+    assert result.final_state.inspiral_state.phase is InspiralPhase.CENSORED
+    assert result.binary_initial_state is None
+    assert result.delay_segment.status == "timeout"
+
+
 def test_primary_mass_must_match_static_host_central_mass() -> None:
     model = _phase_aware_model()
     config = KpcToHardConfig(

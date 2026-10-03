@@ -234,6 +234,19 @@ def classify_capture_state(
             elapsed_myr=0.0,
             reason="binary relative state is undefined",
         )
+    radii = transition_radii(
+        mass1_msun=orbit.masses_msun[0],
+        mass2_msun=orbit.masses_msun[1],
+        sigma_pc_myr=sigma_pc_myr,
+        gw_transition_pc=gw_transition_pc,
+    )
+    if radii.hard_binary_radius_pc > common_nucleus_radius_pc:
+        return transition_state(
+            current,
+            InspiralPhase.INVALID,
+            elapsed_myr=0.0,
+            reason="hard-binary radius lies outside the common-nucleus domain",
+        )
     if orbit.separation_pc > common_nucleus_radius_pc:
         target = InspiralPhase.DUAL_NUCLEUS
         reason = "SMBHs remain outside the event-specific common-nucleus boundary"
@@ -241,12 +254,6 @@ def classify_capture_state(
         target = InspiralPhase.COMMON_NUCLEUS_UNBOUND
         reason = "SMBHs share a nucleus but the osculating two-body orbit is unbound"
     else:
-        radii = transition_radii(
-            mass1_msun=orbit.masses_msun[0],
-            mass2_msun=orbit.masses_msun[1],
-            sigma_pc_myr=sigma_pc_myr,
-            gw_transition_pc=gw_transition_pc,
-        )
         assert orbit.semi_major_axis_pc is not None
         if (
             radii.gw_transition_pc is not None
