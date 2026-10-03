@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import uuid
 
 import numpy as np
 
@@ -24,7 +25,11 @@ from .subgrid_calibration import (
     MINIMUM_ACCEPTED_CORE_RADIUS_CELLS,
     MINIMUM_ACCEPTED_SEPARATION_OVER_PLUMMER_RADIUS,
     SUBGRID_CALIBRATION_SCHEMA_VERSION,
+    QE_SUBGRID_CALIBRATION_SCHEMA_VERSION,
     SubgridCalibrationRow,
+    SubgridCalibrationTable,
+    _release_input_sha256,
+    _verify_qe_release_controls,
     is_qe_extension_case,
     summarize_calibrated_domains,
 )
@@ -227,33 +232,6 @@ def _input_record(role: str, path: Path) -> dict:
         "path": str(resolved),
         "sha256": _sha256(resolved),
     }
-
-
-def _release_input_sha256(acceptance: dict, results: list[SourceBuildResult]) -> str:
-    sources = sorted(
-        (
-            {
-                "profile_id": result.profile_id,
-                "source_case_id": result.source_case_id,
-                "inputs": list(result.input_files),
-            }
-            for result in results
-        ),
-        key=lambda source: (
-            source["profile_id"],
-            source["source_case_id"],
-            source["inputs"][0]["path"],
-        ),
-    )
-    payload = {
-        "schema_version": SUBGRID_CALIBRATION_SCHEMA_VERSION,
-        "acceptance": acceptance,
-        "sources": sources,
-    }
-    encoded = json.dumps(
-        payload, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
 
 
 def build_source_rows(
@@ -613,18 +591,6 @@ def write_calibration_table(
         raise ValueError(
             "q/e extension release requires verified doubled-box control"
         )
-    rows = sorted(
-        (row for result in results for row in result.accepted_rows),
-        key=lambda row: (
-            row.profile_id,
-            row.mass_ratio_q,
-            row.reference_eccentricity,
-            row.binary_to_soliton_mass,
-            row.reference_mean_separation_over_core_radius,
-        ),
-    )
-    if not rows:
-        raise ValueError("no matched-separation bin passes the subgrid gates")
     acceptance = {
         "maximum_spatial_systematic_fraction": (
             maximum_spatial_systematic_fraction
@@ -640,14 +606,68 @@ def write_calibration_table(
         ),
         "extrapolation": "prohibited",
     }
-    release_input_sha256 = _release_input_sha256(acceptance, results)
+    return _publish_calibration_release(
+        results, output=output, acceptance=acceptance,
+        schema_version=SUBGRID_CALIBRATION_SCHEMA_VERSION,
+    )
+
+
+def _publish_calibration_release(
+    results: list[SourceBuildResult],
+    *,
+    output: Path,
+    acceptance: dict,
+    schema_version: int,
+    qe_controls: list[dict] | None = None,
+    exclusive: bool = False,
+) -> dict:
+    rows = sorted(
+        (row for result in results for row in result.accepted_rows),
+        key=lambda row: (
+            row.profile_id,
+            row.mass_ratio_q,
+            row.reference_eccentricity,
+            row.binary_to_soliton_mass,
+            row.reference_mean_separation_over_core_radius,
+        ),
+    )
+    if not rows:
+        raise ValueError("no matched-separation bin passes the subgrid gates")
+    SubgridCalibrationTable(rows)
+    source_records = [
+        {
+            "profile_id": result.profile_id,
+            "source_case_id": result.source_case_id,
+            "convergence_summary": result.convergence_summary,
+            "source_sha256": result.source_sha256,
+            "inputs": list(result.input_files),
+            "accepted_bins": len(result.accepted_rows),
+            "rejected_bins": list(result.rejected_bins),
+        }
+        for result in results
+    ]
+    release_input_sha256 = _release_input_sha256(
+        acceptance, source_records, schema_version=schema_version,
+        qe_controls=qe_controls,
+    )
+    if schema_version == QE_SUBGRID_CALIBRATION_SCHEMA_VERSION:
+        _verify_qe_release_controls(
+            {
+                "sources": source_records,
+                "qe_controls": qe_controls,
+                "acceptance": acceptance,
+                "release_input_sha256": release_input_sha256,
+            },
+            tuple(rows),
+        )
     output = output.expanduser().resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     names = [
         "release_input_sha256",
         *(field.name for field in fields(SubgridCalibrationRow)),
     ]
-    temporary = output.with_name(f".{output.name}.tmp")
+    suffix = f".{uuid.uuid4().hex}.tmp" if exclusive else ".tmp"
+    temporary = output.with_name(f".{output.name}{suffix}")
     import csv
 
     with temporary.open("w", newline="", encoding="utf-8") as stream:
@@ -660,10 +680,16 @@ def write_calibration_table(
         stream.flush()
         os.fsync(stream.fileno())
     table_sha256 = _sha256(temporary)
-    os.replace(temporary, output)
+    if exclusive:
+        try:
+            os.link(temporary, output)
+        finally:
+            temporary.unlink(missing_ok=True)
+    else:
+        os.replace(temporary, output)
     summary = {
         "status": "accepted_subgrid_calibration_table",
-        "schema_version": SUBGRID_CALIBRATION_SCHEMA_VERSION,
+        "schema_version": schema_version,
         "release_input_sha256": release_input_sha256,
         "rows": len(rows),
         "profiles": sorted({row.profile_id for row in rows}),
@@ -676,24 +702,82 @@ def write_calibration_table(
             "release_input_sha256": release_input_sha256,
         },
         "acceptance": acceptance,
-        "sources": [
-            {
-                "profile_id": result.profile_id,
-                "source_case_id": result.source_case_id,
-                "convergence_summary": result.convergence_summary,
-                "source_sha256": result.source_sha256,
-                "inputs": list(result.input_files),
-                "accepted_bins": len(result.accepted_rows),
-                "rejected_bins": list(result.rejected_bins),
-            }
-            for result in results
-        ],
+        "sources": source_records,
     }
+    if qe_controls is not None:
+        summary["qe_controls"] = qe_controls
     summary_path = output.with_suffix(".summary.json")
-    summary_temporary = summary_path.with_name(f".{summary_path.name}.tmp")
+    summary_temporary = summary_path.with_name(f".{summary_path.name}{suffix}")
     with summary_temporary.open("w", encoding="utf-8") as stream:
         stream.write(json.dumps(summary, indent=2, sort_keys=True) + "\n")
         stream.flush()
         os.fsync(stream.fileno())
-    os.replace(summary_temporary, summary_path)
+    if exclusive:
+        try:
+            os.link(summary_temporary, summary_path)
+        finally:
+            summary_temporary.unlink(missing_ok=True)
+    else:
+        os.replace(summary_temporary, summary_path)
     return summary
+
+
+def write_qe_calibration_table(
+    controls: list[tuple[CalibrationSource, CalibrationSource]],
+    *,
+    output: Path,
+) -> dict:
+    """Release only registered q/e rows with raw-verified doubled-box controls.
+
+    No (a,e)-to-mean-separation runtime mapping is released by this function.
+    """
+
+    from .qe_box_control import build_box_controlled_qe_source
+
+    if not controls:
+        raise ValueError("q/e release requires at least one box control")
+    results = []
+    qe_controls = []
+    for pair, box in controls:
+        result, package = build_box_controlled_qe_source(pair, box)
+        binding = package["box_assessment"].get("qe_design_binding")
+        if (
+            not is_qe_extension_case(result.source_case_id)
+            or not isinstance(binding, dict)
+            or binding.get("status")
+            != "registered_design_bound_not_a_calibration_release"
+            or binding.get("comparison_kind") != "resolution_pair"
+        ):
+            raise ValueError("q/e release requires a registered pre-run design")
+        assessment = package["box_assessment"]
+        qe_controls.append({
+            "profile_id": result.profile_id,
+            "source_case_id": result.source_case_id,
+            "resolution_pair_sha256": assessment["resolution_pair_sha256"],
+            "doubled_box_sha256": assessment["doubled_box_sha256"],
+            "doubled_box_summary": str(box.convergence_summary.expanduser().resolve()),
+            "selected_bin_indices": sorted(
+                row.separation_bin_index for row in result.accepted_rows
+            ),
+            "design_binding": binding,
+            "raw_verification": assessment["raw_verification"],
+        })
+        results.append(result)
+    acceptance = {
+        "maximum_spatial_systematic_fraction": MAXIMUM_ACCEPTED_SPATIAL_SYSTEMATIC_FRACTION,
+        "maximum_energy_error_over_transfer": MAXIMUM_ACCEPTED_ENERGY_ERROR_OVER_TRANSFER,
+        "maximum_eccentricity_mismatch": MAXIMUM_ACCEPTED_ECCENTRICITY_MISMATCH,
+        "minimum_complete_orbits_per_bin": MINIMUM_ACCEPTED_COMPLETE_ORBITS,
+        "minimum_core_radius_cells": MINIMUM_ACCEPTED_CORE_RADIUS_CELLS,
+        "minimum_separation_over_plummer_radius": MINIMUM_ACCEPTED_SEPARATION_OVER_PLUMMER_RADIUS,
+        "extrapolation": "prohibited",
+    }
+    output = output.expanduser().resolve()
+    if output.exists() or output.with_suffix(".summary.json").exists():
+        raise FileExistsError("q/e release output already exists")
+    return _publish_calibration_release(
+        results, output=output, acceptance=acceptance,
+        schema_version=QE_SUBGRID_CALIBRATION_SCHEMA_VERSION,
+        qe_controls=qe_controls,
+        exclusive=True,
+    )

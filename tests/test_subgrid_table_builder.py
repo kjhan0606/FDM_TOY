@@ -21,6 +21,7 @@ from fdm_smbh_delay.subgrid_table_builder import (
     CalibrationSource,
     build_source_rows,
     write_calibration_table,
+    write_qe_calibration_table,
 )
 from fdm_smbh_delay.qe_box_control import (
     assess_qe_box_control as _assess_qe_box_control,
@@ -931,6 +932,71 @@ def test_qe_source_selection_rejects_candidate_row_mismatch(
         qe_box_module.build_box_controlled_qe_source(
             CalibrationSource("test", pair), CalibrationSource("test", box)
         )
+
+
+def test_qe_release_requires_registered_design_and_verifies_box_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pair, box = _mock_strict_box_assessment(tmp_path, monkeypatch)
+    controls = [(CalibrationSource("test", pair), CalibrationSource("test", box))]
+    output = tmp_path / "qe_release.csv"
+    with pytest.raises(ValueError, match="registered pre-run design"):
+        write_qe_calibration_table(controls, output=output)
+    assert not output.exists()
+
+    source, package = qe_box_module.build_box_controlled_qe_source(*controls[0])
+    registered = deepcopy(package)
+    registered["box_assessment"]["qe_design_binding"] = {
+        "status": "registered_design_bound_not_a_calibration_release",
+        "comparison_kind": "resolution_pair",
+        "design_sha256": "a" * 64,
+        "file_sha256": "b" * 64,
+        "path": str(tmp_path / "design.json"),
+        "physical_cases_path": str(tmp_path / "cases.csv"),
+        "run_manifest_path": str(tmp_path / "manifest.csv"),
+    }
+    monkeypatch.setattr(
+        qe_box_module, "build_box_controlled_qe_source",
+        lambda *args, **kwargs: (source, registered),
+    )
+    summary = write_qe_calibration_table(controls, output=output)
+    assert summary["schema_version"] == 5
+    assert summary["qe_controls"][0]["selected_bin_indices"] == [0]
+    loaded = SubgridCalibrationTable.from_release(output)
+    assert len(loaded.rows) == 1
+    assert loaded.rows[0].source_case_id == "qe_test"
+    with pytest.raises(FileExistsError, match="already exists"):
+        write_qe_calibration_table(controls, output=output)
+
+    sidecar = output.with_suffix(".summary.json")
+    saved = json.loads(sidecar.read_text())
+    tampered = deepcopy(saved)
+    tampered["qe_controls"][0]["selected_bin_indices"] = [1]
+    sidecar.write_text(json.dumps(tampered))
+    with pytest.raises(ValueError, match="box-control provenance is invalid"):
+        SubgridCalibrationTable.from_release(output)
+    tampered = deepcopy(saved)
+    tampered["qe_controls"][0]["raw_verification"]["doubled_box"][
+        "raw_inputs"
+    ][0]["sha256"].pop("config.uldm")
+    sidecar.write_text(json.dumps(tampered))
+    with pytest.raises(ValueError, match="raw input checksums are incomplete"):
+        SubgridCalibrationTable.from_release(output)
+    tampered = deepcopy(saved)
+    tampered.pop("qe_controls")
+    sidecar.write_text(json.dumps(tampered))
+    with pytest.raises(ValueError, match="box-control provenance is incomplete"):
+        SubgridCalibrationTable.from_release(output)
+    tampered = deepcopy(saved)
+    tampered["qe_controls"][0]["doubled_box_sha256"] = "0" * 64
+    tampered["qe_controls"][0]["raw_verification"]["doubled_box"][
+        "comparison_sha256"
+    ] = "0" * 64
+    sidecar.write_text(json.dumps(tampered))
+    with pytest.raises(ValueError, match="input provenance digest does not close"):
+        SubgridCalibrationTable.from_release(output)
+    sidecar.write_text(json.dumps(saved))
+    assert len(SubgridCalibrationTable.from_release(output).rows) == 1
 
 
 def test_qe_candidate_package_rejects_changed_raw_input(

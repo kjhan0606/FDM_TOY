@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
+import re
 from typing import Iterable
 
 import numpy as np
@@ -26,6 +27,164 @@ from .orbital_exchange import (
 ACCEPTED_STATUS = "accepted_with_spatial_systematic"
 ACCEPTED_TABLE_STATUS = "accepted_subgrid_calibration_table"
 SUBGRID_CALIBRATION_SCHEMA_VERSION = 4
+QE_SUBGRID_CALIBRATION_SCHEMA_VERSION = 5
+
+
+def _release_input_sha256(
+    acceptance: dict,
+    sources: list[dict],
+    *,
+    schema_version: int,
+    qe_controls: list[dict] | None = None,
+) -> str:
+    """Bind release rows to their source and, for q/e, box-control evidence."""
+
+    selected = sorted(
+        (
+            {
+                "profile_id": source["profile_id"],
+                "source_case_id": source["source_case_id"],
+                "inputs": source["inputs"],
+            }
+            for source in sources
+        ),
+        key=lambda source: (
+            source["profile_id"], source["source_case_id"],
+            source["inputs"][0]["path"],
+        ),
+    )
+    payload = {
+        "schema_version": schema_version,
+        "acceptance": acceptance,
+        "sources": selected,
+    }
+    if schema_version >= QE_SUBGRID_CALIBRATION_SCHEMA_VERSION:
+        if qe_controls is None:
+            raise ValueError("q/e release controls are absent")
+        payload["qe_controls"] = sorted(
+            qe_controls,
+            key=lambda control: (
+                control["profile_id"], control["source_case_id"],
+                control["resolution_pair_sha256"],
+            ),
+        )
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+_QE_RAW_INPUTS = {
+    "fdm_adapter_metadata.json", "config.uldm", "torch_run_summary.json",
+    "wave_response_summary.json", "conservation_summary.json",
+    "orbit_averaged_exchange_summary.json", "conservation_timeseries.csv",
+    "orbit_averaged_exchange.csv", "wave_response_timeseries.csv",
+}
+
+
+def _sha256_text(value: object) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+
+def _verify_qe_release_controls(summary: dict, rows: tuple[SubgridCalibrationRow, ...]) -> None:
+    """Check that every released q/e bin has one registered box-control proof."""
+
+    sources = summary["sources"]
+    controls = summary.get("qe_controls")
+    if not isinstance(controls, list) or len(controls) != len(sources):
+        raise ValueError("q/e release box-control provenance is incomplete")
+    by_case = {}
+    for source in sources:
+        key = (source["profile_id"], source["source_case_id"])
+        if key in by_case or not is_qe_extension_case(key[1]):
+            raise ValueError("q/e release contains duplicate or non-q/e sources")
+        by_case[key] = source
+    seen = set()
+    for control in controls:
+        if not isinstance(control, dict):
+            raise ValueError("q/e release box-control record is invalid")
+        key = (control.get("profile_id"), control.get("source_case_id"))
+        source = by_case.get(key)
+        if source is None or key in seen:
+            raise ValueError("q/e release box control lacks one source")
+        seen.add(key)
+        indices = control.get("selected_bin_indices")
+        expected = sorted(
+            row.separation_bin_index for row in rows
+            if (row.profile_id, row.source_case_id) == key
+        )
+        binding = control.get("design_binding")
+        raw = control.get("raw_verification")
+        if (
+            not isinstance(indices, list)
+            or not indices
+            or any(type(index) is not int for index in indices)
+            or indices != expected
+            or len(indices) != source["accepted_bins"]
+            or control.get("resolution_pair_sha256") != source["source_sha256"]
+            or not _sha256_text(control.get("doubled_box_sha256"))
+            or not isinstance(control.get("doubled_box_summary"), str)
+            or not control["doubled_box_summary"]
+            or not isinstance(binding, dict)
+            or set(binding) != {
+                "path", "physical_cases_path", "run_manifest_path",
+                "design_sha256", "file_sha256", "comparison_kind", "status",
+            }
+            or any(
+                not isinstance(binding.get(field), str) or not binding[field]
+                for field in ("path", "physical_cases_path", "run_manifest_path")
+            )
+            or binding.get("status") != "registered_design_bound_not_a_calibration_release"
+            or binding.get("comparison_kind") != "resolution_pair"
+            or not _sha256_text(binding.get("design_sha256"))
+            or not _sha256_text(binding.get("file_sha256"))
+            or not isinstance(raw, dict)
+            or set(raw) != {"resolution_pair", "doubled_box"}
+        ):
+            raise ValueError("q/e release box-control provenance is invalid")
+        for role, comparison_sha in (
+            ("resolution_pair", source["source_sha256"]),
+            ("doubled_box", control["doubled_box_sha256"]),
+        ):
+            proof = raw[role]
+            if (
+                not isinstance(proof, dict)
+                or proof.get("comparison_sha256") != comparison_sha
+                or not isinstance(proof.get("raw_inputs"), list)
+                or len(proof["raw_inputs"]) != 2
+            ):
+                raise ValueError("q/e release raw comparison proof is invalid")
+            run_keys = set()
+            for run in proof["raw_inputs"]:
+                if not isinstance(run, dict) or not run.get("label") or not run.get("run"):
+                    raise ValueError("q/e release raw run identity is invalid")
+                run_keys.add((run["label"], run["run"]))
+                hashes = run.get("sha256")
+                if (
+                    not isinstance(hashes, dict)
+                    or set(hashes) != _QE_RAW_INPUTS
+                    or any(not _sha256_text(value) for value in hashes.values())
+                ):
+                    raise ValueError("q/e release raw input checksums are incomplete")
+            if len(run_keys) != 2:
+                raise ValueError("q/e release raw run identities are duplicated")
+        pair_runs = {
+            (run["label"], run["run"])
+            for run in raw["resolution_pair"]["raw_inputs"]
+        }
+        box_runs = {
+            (run["label"], run["run"])
+            for run in raw["doubled_box"]["raw_inputs"]
+        }
+        if len(pair_runs & box_runs) != 1:
+            raise ValueError("q/e release box control does not reuse one fine run")
+    if seen != set(by_case):
+        raise ValueError("q/e release box-control coverage is incomplete")
+    if _release_input_sha256(
+        summary["acceptance"], sources,
+        schema_version=QE_SUBGRID_CALIBRATION_SCHEMA_VERSION,
+        qe_controls=controls,
+    ) != summary["release_input_sha256"]:
+        raise ValueError("q/e release input provenance digest does not close")
 
 
 def is_qe_extension_case(case_id: str) -> bool:
@@ -588,7 +747,7 @@ class SubgridCalibrationTable:
         schema_version = summary.get("schema_version")
         if (
             summary.get("status") != ACCEPTED_TABLE_STATUS
-            or schema_version not in (2, 3, 4)
+            or schema_version not in (2, 3, 4, QE_SUBGRID_CALIBRATION_SCHEMA_VERSION)
         ):
             raise ValueError("subgrid release status or schema is invalid")
         table_metadata = summary.get("table")
@@ -733,7 +892,9 @@ class SubgridCalibrationTable:
                 "subgrid release row exceeds the recorded eccentricity "
                 "acceptance criterion"
             )
-        if any(is_qe_extension_case(row.source_case_id) for row in table.rows):
+        if schema_version < QE_SUBGRID_CALIBRATION_SCHEMA_VERSION and any(
+            is_qe_extension_case(row.source_case_id) for row in table.rows
+        ):
             raise ValueError(
                 "q/e extension release requires verified doubled-box control"
             )
@@ -744,7 +905,10 @@ class SubgridCalibrationTable:
         for source in sources:
             if not isinstance(source, dict):
                 raise ValueError("subgrid release provenance source is invalid")
-            if is_qe_extension_case(str(source.get("source_case_id", ""))):
+            if (
+                schema_version < QE_SUBGRID_CALIBRATION_SCHEMA_VERSION
+                and is_qe_extension_case(str(source.get("source_case_id", "")))
+            ):
                 raise ValueError(
                     "q/e extension release requires verified doubled-box control"
                 )
@@ -806,6 +970,8 @@ class SubgridCalibrationTable:
             accepted_rows += source_rows
         if accepted_rows != len(table.rows):
             raise ValueError("subgrid release provenance row count does not close")
+        if schema_version == QE_SUBGRID_CALIBRATION_SCHEMA_VERSION:
+            _verify_qe_release_controls(summary, table.rows)
         expected_domains = summarize_calibrated_domains(table.rows)
         if schema_version == 2:
             expected_domains = [

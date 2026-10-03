@@ -317,8 +317,8 @@ twice-larger box at unchanged cell size and softening, and its other run must
 be the resolution pair's fine run. Both comparisons must use the same fixed
 edges, SMBH/soliton initial conditions, numerical settings, and measured
 fine-run rates. The result reports candidate or censored bins only;
-`production_calibration_row_admitted` stays false until release provenance and
-the full calibration gates are implemented and verified.
+`production_calibration_row_admitted` stays false because an assessment alone
+does not satisfy the separate release contract.
 The assessor requires matching timestep factor, particle RK4 substeps, backend,
 kinetic-phase layout, and wave-buffer lifetime across the coarse, fine, and
 doubled-box runs. A
@@ -337,8 +337,24 @@ still does not produce a runtime-loadable calibration table.
 freshly rebuilt resolution-pair rows. It retains only bins accepted by both
 controls, records resolution-accepted bins rejected by the box control as
 rejected, and rechecks both comparison checksums. This is a release-input
-selection step, not a release; the production writer and loader still refuse
-q/e rows until their separate box-control provenance contract is complete.
+selection step, not a release. `write_qe_calibration_table` is the separate
+version-5 release path: it requires registered design binding, raw-verified
+resolution and doubled-box comparisons, and only their common accepted bins.
+The loader checks selected-bin coverage, recorded comparison and raw-input
+digest completeness, and the release-input identity. The writer recomputes
+the source diagnostics before publication. The legacy writer still refuses
+q/e rows.
+The release path cannot prove that a design was committed before the runs;
+that temporal provenance must be audited from the pre-run Git commit and
+stamped run metadata. Nor does a rate-table release validate the distinct
+`(a,e) -> <r>` runtime mapping; absent that mapping, the bound-binary
+consumer remains uncalibrated/censored.
+When all required measurements exist, request a new release path with
+`python scripts/build_qe_subgrid_calibration_table.py --control
+PROFILE=PAIR.json,BOX.json --output NEW_TABLE.csv`. This command never starts
+a wave calculation and refuses to overwrite either release file. No current
+q/e follow-up run supplies the required accepted measurements, so this is
+an interface contract rather than a present production table.
 The candidate package also retains fine, coarse, and doubled-box measurements
 of mean separation, osculating semimajor axis and eccentricity for each
 box-supported bin. The osculating-axis mean and per-orbit range must be
