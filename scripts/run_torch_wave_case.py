@@ -44,6 +44,7 @@ _RESTART_METADATA_KEYS = (
     "wave_density_layout",
     "compact_potential_layout",
     "potential_phase_layout",
+    "total_potential_lifetime",
 )
 
 
@@ -368,6 +369,7 @@ def main() -> int:
             "wave_density_layout": "real_imag_addcmul_v1",
             "compact_potential_layout": "x_slab32_inplace_rsqrt_v1",
             "potential_phase_layout": "complex_real_imag_inplace_trig_v1",
+            "total_potential_lifetime": "recompute_before_first_kick_release_before_save_v1",
             "memory_stage_profile_enabled": args.profile_memory_stages,
             "checkpoint_every_saved_intervals": args.checkpoint_every_saves,
             "wave_acceleration_during_particle_rk4": (
@@ -444,8 +446,6 @@ def main() -> int:
         plummer_radius=plummer_code,
     )
     profile_stage("initial_compact_potential")
-    total_potential = wave_potential + compact_potential
-    profile_stage("initial_total_potential")
 
     if args.resume:
         logs = _load_energy_logs(output, start_save_index)
@@ -506,6 +506,8 @@ def main() -> int:
                 save_index=0,
             )
     for step in range(start_step + 1, actual_steps + 1):
+        total_potential = wave_potential + compact_potential
+        profile_stage(f"step_{step:06d}_first_total_potential")
         apply_potential_half_kick_in_place(wavefunction, total_potential, time_step)
         profile_stage(f"step_{step:06d}_first_kick")
         # None of the previous density/potential buffers enters the FFT drift.
@@ -553,6 +555,7 @@ def main() -> int:
         profile_stage(f"step_{step:06d}_compact_potential")
         total_potential = wave_potential + compact_potential
         apply_potential_half_kick_in_place(wavefunction, total_potential, time_step)
+        del total_potential
         profile_stage(f"step_{step:06d}_second_kick")
         if step % steps_per_save == 0:
             save_index = step // steps_per_save

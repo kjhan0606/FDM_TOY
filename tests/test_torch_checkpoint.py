@@ -50,6 +50,7 @@ def test_remaining_time_uses_only_steps_completed_since_resume() -> None:
 @pytest.mark.parametrize(
     "field", (
         "wave_density_layout", "compact_potential_layout", "potential_phase_layout",
+        "total_potential_lifetime",
     )
 )
 def test_restart_rejects_missing_or_changed_numerical_layout(field: str) -> None:
@@ -57,6 +58,9 @@ def test_restart_rejects_missing_or_changed_numerical_layout(field: str) -> None
     requested["wave_density_layout"] = "real_imag_addcmul_v1"
     requested["compact_potential_layout"] = "x_slab32_inplace_rsqrt_v1"
     requested["potential_phase_layout"] = "complex_real_imag_inplace_trig_v1"
+    requested["total_potential_lifetime"] = (
+        "recompute_before_first_kick_release_before_save_v1"
+    )
     run_torch_wave_case._require_resume_metadata(dict(requested), requested)
     saved = dict(requested)
     del saved[field]
