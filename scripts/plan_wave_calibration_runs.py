@@ -288,8 +288,14 @@ def build_plan(
     rk4_substeps: int = 9,
     device: str = "cuda:0",
     qe_design_path: Path | None = None,
+    selected_run_ids: set[str] | None = None,
 ) -> list[RunPlanRow]:
     manifest = _read_rows(manifest_path)
+    manifest_ids = [row.get("run_id") for row in manifest]
+    if any(not run_id for run_id in manifest_ids) or len(set(manifest_ids)) != len(manifest_ids):
+        raise ValueError("run manifest has missing or duplicate run IDs")
+    if selected_run_ids is not None and not selected_run_ids <= set(manifest_ids):
+        raise ValueError("selected run ID is absent from the manifest")
     case_parameters = _load_case_parameters(cases_path)
     design = None
     design_file_sha256 = None
@@ -341,6 +347,12 @@ def build_plan(
                 raise ValueError(
                     "registered q/e save-count override undersamples the planned cadence"
                 )
+        # Validate the complete registered manifest above, but inspect live
+        # output only for selected runs. Another Slurm job may be writing an
+        # unselected seed at this instant; its partial directory must not
+        # prevent this run's verification or restart.
+        if selected_run_ids is not None and run_id not in selected_run_ids:
+            continue
         initial_directory = initial_root / run_id
         torch_directory = torch_root / run_id
         seed_ready = (
@@ -512,6 +524,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="verified prospective design required by a marked follow-up manifest",
     )
     parser.add_argument(
+        "--run-id", action="append", dest="run_ids",
+        help="inspect only this run's output state (repeatable)",
+    )
+    parser.add_argument(
         "--save-number",
         type=int,
         help="override output-cadence-derived saved intervals for every case",
@@ -566,6 +582,7 @@ def main() -> int:
         rk4_substeps=args.rk4_substeps,
         device=args.device,
         qe_design_path=args.qe_design,
+        selected_run_ids=None if args.run_ids is None else set(args.run_ids),
     )
 
     _print_summary(plan)

@@ -252,7 +252,7 @@ class GuardedQeRunner:
         self.monotonic = monotonic
         self.guard_failure_status = log_root / f"qe_gpu{gpu_index}_guard_failure.json"
 
-    def _plan(self) -> list[RunPlanRow]:
+    def _plan(self, selected_run_ids: set[str] | None = None) -> list[RunPlanRow]:
         return self.plan_builder(
             self.inputs.manifest,
             self.inputs.cases,
@@ -261,6 +261,7 @@ class GuardedQeRunner:
             self.inputs.pyul_path,
             device="cuda:0",
             qe_design_path=self.inputs.qe_design_path,
+            selected_run_ids=selected_run_ids,
         )
 
     def _stage_status_path(self, row: RunPlanRow, stage: str) -> Path:
@@ -632,7 +633,7 @@ class GuardedQeRunner:
         return code
 
     def run(self, selected_run_ids: set[str] | None = None) -> int:
-        initial_plan = self._plan()
+        initial_plan = self._plan(selected_run_ids)
         known = {row.run_id for row in initial_plan}
         selected = known if selected_run_ids is None else selected_run_ids
         unknown = selected - known
@@ -642,7 +643,7 @@ class GuardedQeRunner:
         completed_gpu_stages = 0
         for run_id in sorted(selected):
             while True:
-                rows = {row.run_id: row for row in self._plan()}
+                rows = {row.run_id: row for row in self._plan({run_id})}
                 row = rows[run_id]
                 pending_gpu = [
                     (stage, command)
@@ -655,7 +656,7 @@ class GuardedQeRunner:
                 status = self._execute_stage(row, stage, command)
                 if status != 0:
                     return status
-                refreshed = {item.run_id: item for item in self._plan()}[run_id]
+                refreshed = {item.run_id: item for item in self._plan({run_id})}[run_id]
                 verified = refreshed.seed_ready if stage == "seed" else refreshed.torch_complete
                 status = self._mark_verification(refreshed, stage, verified)
                 if status != 0:

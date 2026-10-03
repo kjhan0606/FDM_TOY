@@ -246,6 +246,9 @@ def test_guarded_runner_forwards_registered_design_to_planner(tmp_path: Path) ->
     assert len(received) == 1
     assert received[0][1]["qe_design_path"] == design
     assert received[0][1]["device"] == "cuda:0"
+    assert received[0][1]["selected_run_ids"] is None
+    runner._plan({"one_run"})
+    assert received[-1][1]["selected_run_ids"] == {"one_run"}
 
 
 def test_registered_followup_is_plannable_without_launch(tmp_path: Path) -> None:

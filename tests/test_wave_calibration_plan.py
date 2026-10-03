@@ -187,6 +187,38 @@ def test_registered_qe_plan_rejects_unbound_existing_seed(tmp_path: Path) -> Non
         )
 
 
+def test_selected_registered_run_ignores_other_jobs_partial_output(
+    tmp_path: Path,
+) -> None:
+    cases, manifest, design = _registered_inputs(tmp_path)
+    initial = tmp_path / "initial"
+    (initial / "qe_test_n512").mkdir(parents=True)
+    inputs = (manifest, cases, initial, tmp_path / "torch", tmp_path / "PyUL_NBody")
+    with pytest.raises(ValueError, match="seed directory is incomplete"):
+        build_plan(*inputs, qe_design_path=design)
+    selected = build_plan(
+        *inputs, qe_design_path=design, selected_run_ids={"qe_test_n256"},
+    )
+    assert [row.run_id for row in selected] == ["qe_test_n256"]
+    command = subprocess.run(
+        [
+            sys.executable, "scripts/plan_wave_calibration_runs.py",
+            "--manifest", str(manifest), "--cases", str(cases),
+            "--qe-design", str(design),
+            "--initial-root", str(initial),
+            "--torch-root", str(tmp_path / "torch"),
+            "--run-id", "qe_test_n256",
+        ],
+        cwd=PROJECT, text=True, capture_output=True, check=True,
+    )
+    assert "total_runs=1" in command.stdout
+    assert "qe_test_n512" not in command.stdout
+    with pytest.raises(ValueError, match="absent from the manifest"):
+        build_plan(
+            *inputs, qe_design_path=design, selected_run_ids={"unknown"},
+        )
+
+
 def test_registered_qe_plan_refuses_orphaned_torch_restart(tmp_path: Path) -> None:
     cases, manifest, design = _registered_inputs(tmp_path)
     torch_run = tmp_path / "torch/qe_test_n256"
