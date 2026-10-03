@@ -4,6 +4,8 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
+
 from fdm_smbh_delay.backreaction import (
     BackreactionTrackPoint,
     read_verified_backreaction_decision,
@@ -130,3 +132,20 @@ def test_verified_pta_driver_composes_all_three_intervals(tmp_path, capsys) -> N
     output = json.loads(capsys.readouterr().out)
     assert output["estimate"]["status"] == "complete"
     assert output["estimate"]["total_delay_myr"] == 46.5
+
+
+def test_pta_driver_rejects_kpc_record_that_stops_before_one_pc(tmp_path) -> None:
+    decision, delay, fdm, gw = _make_inputs(tmp_path)
+    record = json.loads(delay.read_text(encoding="utf-8"))
+    record["end_separation_pc"] = 2.0
+    delay.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(ValueError, match="1 pc FDM handoff"):
+        main(
+            [
+                "--sink-time", "1 Gyr",
+                "--backreaction-decision", str(decision),
+                "--backreaction-delay-record", str(delay),
+                "--fdm-summary", str(fdm),
+                "--gw-record", str(gw),
+            ]
+        )

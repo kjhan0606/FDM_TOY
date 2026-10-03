@@ -486,9 +486,16 @@ def materialize_backreaction_delay_segment(
             )
         start = _finite(start_separation_pc, "start_separation_pc", positive=True)
         end = _finite(end_separation_pc, "end_separation_pc", positive=True)
-        if start < end:
+        if start <= end:
             raise ValueError(
-                "integrated backreaction interval must run from larger to smaller separation"
+                "integrated backreaction interval must run over a nonzero range "
+                "from larger to smaller separation"
+            )
+        if name == "kpc_to_pc" and not math.isclose(
+            end, 1.0, rel_tol=0.0, abs_tol=1.0e-12
+        ):
+            raise ValueError(
+                "completed kpc_to_pc interval must end at the 1 pc FDM handoff"
             )
         if (
             decision.overlap_low_pc is None

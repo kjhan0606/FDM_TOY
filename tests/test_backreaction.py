@@ -268,6 +268,30 @@ def test_accepted_decision_rejects_delay_outside_measured_overlap() -> None:
         )
 
 
+def test_completed_kpc_to_pc_requires_one_pc_handoff_and_nonzero_interval() -> None:
+    live, frozen = _tracks()
+    decision = assess_live_frozen_backreaction(
+        model="cdm",
+        live_points=live,
+        frozen_points=frozen,
+        evidence=_evidence(),
+    )
+    common = {
+        "name": "kpc_to_pc",
+        "offline_delay_myr": 12.5,
+        "source_case_id": "case-1",
+        "delay_source_sha256": _sha("integrated-delay"),
+    }
+    with pytest.raises(ValueError, match="1 pc FDM handoff"):
+        materialize_backreaction_delay_segment(
+            decision, start_separation_pc=8.0, end_separation_pc=2.0, **common
+        )
+    with pytest.raises(ValueError, match="nonzero range"):
+        materialize_backreaction_delay_segment(
+            decision, start_separation_pc=1.0, end_separation_pc=1.0, **common
+        )
+
+
 def test_accepted_decision_requires_a_delay_value() -> None:
     live, frozen = _tracks()
     decision = assess_live_frozen_backreaction(
