@@ -159,6 +159,34 @@ def test_resolution_pair_builds_exact_point_delay_row(tmp_path) -> None:
         KpcDelayCalibrationTable((malformed,))
 
 
+def test_resolution_pair_rejects_different_capture_events(tmp_path) -> None:
+    coarse_case, fine_case = build_zoom_grid(_specification()).cases[:2]
+    coarse_path = tmp_path / "coarse.json"
+    fine_path = tmp_path / "fine.json"
+    _write_result(coarse_path, coarse_case)
+    _write_result(fine_path, fine_case)
+    coarse_record = json.loads(coarse_path.read_text())
+    coarse_record["capture_event_uid"] = "another-capture"
+    coarse_path.write_text(json.dumps(coarse_record))
+    with pytest.raises(ValueError, match="different capture events"):
+        compare_zoom_resolution_pair(
+            read_zoom_result(fine_path, fine_case),
+            read_zoom_result(coarse_path, coarse_case),
+        )
+
+
+@pytest.mark.parametrize("uid", [7, "", "   "])
+def test_zoom_result_rejects_nontext_or_blank_capture_uid(tmp_path, uid) -> None:
+    case = build_zoom_grid(_specification()).cases[0]
+    path = tmp_path / "result.json"
+    _write_result(path, case)
+    record = json.loads(path.read_text())
+    record["capture_event_uid"] = uid
+    path.write_text(json.dumps(record))
+    with pytest.raises(ValueError, match="provenance does not match"):
+        read_zoom_result(path, case)
+
+
 @pytest.mark.parametrize("baseline", [0.0, -1.0, float("nan"), float("inf"), True])
 def test_kpc_delay_consumer_rejects_invalid_baseline(tmp_path, baseline) -> None:
     grid = build_zoom_grid(_specification())

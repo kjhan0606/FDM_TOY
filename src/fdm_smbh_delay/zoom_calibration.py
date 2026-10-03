@@ -398,7 +398,8 @@ def read_zoom_result(path: str | Path, case: GalaxyMergerZoomCase) -> ZoomRunRes
         record.get("schema_version") != ZOOM_SCHEMA_VERSION
         or record.get("case_id") != case.case_id
         or record.get("case") != case.as_dict()
-        or not record.get("capture_event_uid")
+        or not isinstance(record.get("capture_event_uid"), str)
+        or not record["capture_event_uid"].strip()
     ):
         raise ValueError("zoom result provenance does not match its manifest case")
     stage_records = record.get("stages")
@@ -526,6 +527,8 @@ def compare_zoom_resolution_pair(
         reference.case.replicate != comparison.case.replicate
     ):
         raise ValueError("zoom resolution pair does not share one physical realization")
+    if reference.capture_event_uid != comparison.capture_event_uid:
+        raise ValueError("zoom resolution pair uses different capture events")
     if (
         reference.case.numerics.finest_cell_size_pc
         >= comparison.case.numerics.finest_cell_size_pc
