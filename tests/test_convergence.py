@@ -1,4 +1,5 @@
 import json
+import argparse
 from pathlib import Path
 
 import numpy as np
@@ -9,6 +10,7 @@ from fdm_smbh_delay.convergence import (
     load_convergence_run,
     summarize_convergence,
 )
+from scripts.summarize_pyul_convergence import _parse_edges
 
 
 def _write_run(path: Path, *, scale: float, time_step_factor: float) -> None:
@@ -242,6 +244,71 @@ def test_matched_separation_requires_positive_bin_count(tmp_path: Path) -> None:
             ),
             separation_bins=0,
             minimum_orbits_per_separation_bin=2,
+        )
+
+
+def test_fixed_separation_edges_preserve_identical_physical_bins(
+    tmp_path: Path,
+) -> None:
+    first_path = tmp_path / "first"
+    second_path = tmp_path / "second"
+    _write_run(first_path, scale=1.0, time_step_factor=1.0)
+    _write_run(second_path, scale=1.0, time_step_factor=0.5)
+    loaded = (
+        load_convergence_run("first", first_path),
+        load_convergence_run("second", second_path),
+    )
+    result = summarize_convergence(
+        loaded, separation_bins=1, minimum_orbits_per_separation_bin=2,
+        separation_bin_edges_pc=(0.88, 0.98),
+    )
+    matched = result["matched_separation"]
+    assert result["requested_separation_bin_edges_pc"] == [0.88, 0.98]
+    assert matched["bin_edge_policy"] == "fixed_physical_edges"
+    assert matched["separation_bin_edges_pc"] == [0.88, 0.98]
+    assert matched["retained_bins"] == 1
+    assert matched["bins"][0]["lower_separation_pc"] == pytest.approx(0.88)
+    assert matched["bins"][0]["upper_separation_pc"] == pytest.approx(0.98)
+
+
+def test_fixed_bin_outside_full_common_support_is_censored(
+    tmp_path: Path,
+) -> None:
+    first_path = tmp_path / "first"
+    second_path = tmp_path / "second"
+    _write_run(first_path, scale=1.0, time_step_factor=1.0)
+    _write_run(second_path, scale=1.0, time_step_factor=0.5)
+    result = summarize_convergence(
+        (load_convergence_run("first", first_path),
+         load_convergence_run("second", second_path)),
+        separation_bins=1, minimum_orbits_per_separation_bin=2,
+        separation_bin_edges_pc=(0.87, 0.98),
+    )
+    assert result["matched_separation"]["retained_bins"] == 0
+    assert result["matched_separation"]["bins"] == []
+
+
+def test_fixed_edge_cli_parser_rejects_non_numeric_edges() -> None:
+    assert _parse_edges("0.1,0.2") == (0.1, 0.2)
+    with pytest.raises(argparse.ArgumentTypeError):
+        _parse_edges("0.1,bad")
+
+
+@pytest.mark.parametrize("edges", [(0.98, 0.88), (0.88, 0.88),
+                                     (0.88, float("nan")), (0.88, 0.98, 1.0)])
+def test_fixed_separation_edges_reject_invalid_design(
+    tmp_path: Path, edges: tuple[float, ...],
+) -> None:
+    first_path = tmp_path / "first"
+    second_path = tmp_path / "second"
+    _write_run(first_path, scale=1.0, time_step_factor=1.0)
+    _write_run(second_path, scale=1.0, time_step_factor=0.5)
+    with pytest.raises(ValueError, match="fixed separation-bin edges"):
+        summarize_convergence(
+            (load_convergence_run("first", first_path),
+             load_convergence_run("second", second_path)),
+            separation_bins=1, minimum_orbits_per_separation_bin=2,
+            separation_bin_edges_pc=edges,
         )
 
 

@@ -288,7 +288,10 @@ def _common_orbit_window(
 
 
 def _matched_separation_bins(
-    loaded: list[dict], requested_bins: int, minimum_orbits_per_bin: int
+    loaded: list[dict],
+    requested_bins: int,
+    minimum_orbits_per_bin: int,
+    separation_bin_edges_pc: tuple[float, ...] | None = None,
 ) -> dict | None:
     """Compare orbit-averaged rates over common physical-separation bins."""
 
@@ -298,6 +301,20 @@ def _matched_separation_bins(
         raise ValueError(
             "matched-separation bins require at least two complete orbits"
         )
+    fixed_edges = None
+    if separation_bin_edges_pc is not None:
+        fixed_edges = np.asarray(separation_bin_edges_pc, dtype=float)
+        if (
+            fixed_edges.ndim != 1
+            or fixed_edges.size != requested_bins + 1
+            or np.any(~np.isfinite(fixed_edges))
+            or np.any(fixed_edges <= 0.0)
+            or np.any(np.diff(fixed_edges) <= 0.0)
+        ):
+            raise ValueError(
+                "fixed separation-bin edges must be positive, finite, "
+                "strictly increasing, and match the requested bin count"
+            )
     if any(item["orbit_series"] is None for item in loaded):
         return None
 
@@ -329,6 +346,13 @@ def _matched_separation_bins(
             "common_minimum_separation_pc": None,
             "common_maximum_separation_pc": None,
             "requested_bins": requested_bins,
+            "separation_bin_edges_pc": (
+                None if fixed_edges is None else fixed_edges.tolist()
+            ),
+            "bin_edge_policy": (
+                "common_resolved_interval" if fixed_edges is None
+                else "fixed_physical_edges"
+            ),
             "minimum_complete_orbits_per_run_per_bin": minimum_orbits_per_bin,
             "retained_bins": 0,
             "bins": [],
@@ -355,11 +379,19 @@ def _matched_separation_bins(
     if common_maximum <= common_minimum:
         return None
 
-    edges = np.linspace(common_minimum, common_maximum, requested_bins + 1)
+    edges = (
+        np.linspace(common_minimum, common_maximum, requested_bins + 1)
+        if fixed_edges is None else fixed_edges
+    )
     bins: list[dict] = []
     for bin_index, (lower, upper) in enumerate(
         zip(edges[:-1], edges[1:], strict=True)
     ):
+        # A fixed bin is not supported merely because a few orbits fall in it:
+        # both calculations' sampled means must span its prescribed edges.
+        if (fixed_edges is not None and
+                (lower < common_minimum or upper > common_maximum)):
+            continue
         selections: list[np.ndarray] = []
         for item, initially_resolved in zip(loaded, resolved_indices):
             orbit = item["orbit_series"]
@@ -467,6 +499,11 @@ def _matched_separation_bins(
         "common_minimum_separation_pc": common_minimum,
         "common_maximum_separation_pc": common_maximum,
         "requested_bins": requested_bins,
+        "separation_bin_edges_pc": edges.tolist(),
+        "bin_edge_policy": (
+            "common_resolved_interval" if fixed_edges is None
+            else "fixed_physical_edges"
+        ),
         "minimum_complete_orbits_per_run_per_bin": minimum_orbits_per_bin,
         "retained_bins": len(bins),
         "bins": bins,
@@ -489,6 +526,7 @@ def summarize_convergence(
     *,
     separation_bins: int = 8,
     minimum_orbits_per_separation_bin: int = 8,
+    separation_bin_edges_pc: tuple[float, ...] | None = None,
 ) -> dict:
     """Compare numerical variants over their shared resolved time interval."""
     loaded = list(runs)
@@ -629,7 +667,8 @@ def summarize_convergence(
             row["common_orbit_window"] = orbit_row
 
     matched_separation = _matched_separation_bins(
-        loaded, separation_bins, minimum_orbits_per_separation_bin
+        loaded, separation_bins, minimum_orbits_per_separation_bin,
+        separation_bin_edges_pc,
     )
 
     return {
@@ -639,6 +678,10 @@ def summarize_convergence(
         "common_interval_end_myr": common_end,
         "common_orbit_window_start_myr": common_orbit_start,
         "matched_separation": matched_separation,
+        "requested_separation_bin_edges_pc": (
+            None if separation_bin_edges_pc is None
+            else list(separation_bin_edges_pc)
+        ),
         "runs": rows,
         "interpretation": (
             "common-interval rates include reversible orbital-phase and interaction-energy "

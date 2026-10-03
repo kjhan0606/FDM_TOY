@@ -259,6 +259,15 @@ of every resolution pair, and include a doubled-box control. Until those gates
 pass, the runtime must report these q-e-small-separation domains as
 uncalibrated/censored.
 
+For a new registered design, the resolution pair and same-cell-size doubled-box
+control must use identical physical separation-bin edges. The comparison CLI
+accepts `--separation-bin-edges-pc` (comma-separated numbers) together with a
+matching `--separation-bins` count. It records the fixed edges and omits a bin
+unless the sampled mean separations in both calculations span its edges with
+the required complete orbits. This establishes common sampling support only;
+it does not by itself
+establish doubled-box agreement or authorize a production calibration release.
+
 The corresponding resource-design calculation (which launches no solver) is
 
 ```bash

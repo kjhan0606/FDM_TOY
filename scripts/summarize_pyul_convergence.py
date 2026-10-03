@@ -18,6 +18,15 @@ def _parse_specification(specification: str) -> tuple[str, Path]:
     return label, Path(path)
 
 
+def _parse_edges(value: str) -> tuple[float, ...]:
+    try:
+        return tuple(float(part) for part in value.split(","))
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            "separation-bin edges must be comma-separated numbers"
+        ) from error
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -27,6 +36,10 @@ def main() -> int:
     )
     parser.add_argument("--output", type=Path)
     parser.add_argument("--separation-bins", type=int, default=8)
+    parser.add_argument(
+        "--separation-bin-edges-pc", type=_parse_edges,
+        help="prospectively fixed comma-separated physical separation edges",
+    )
     parser.add_argument(
         "--minimum-orbits-per-separation-bin", type=int, default=8
     )
@@ -44,6 +57,7 @@ def main() -> int:
         minimum_orbits_per_separation_bin=(
             args.minimum_orbits_per_separation_bin
         ),
+        separation_bin_edges_pc=args.separation_bin_edges_pc,
     )
     text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
     if args.output is not None:
