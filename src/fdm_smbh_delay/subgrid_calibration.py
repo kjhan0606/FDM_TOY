@@ -618,6 +618,19 @@ class SubgridCalibrationTable:
         }
         if release_ids != {release_input_sha256}:
             raise ValueError("subgrid release CSV input identity does not match")
+        if schema_version >= 4:
+            required_qe_fields = (
+                "mass_ratio_q",
+                "reference_eccentricity",
+                "absolute_mean_eccentricity_mismatch",
+            )
+            if any(
+                not isinstance(record.get(field), str)
+                or not record[field].strip()
+                for record in release_records
+                for field in required_qe_fields
+            ):
+                raise ValueError("subgrid release q/e provenance fields are absent")
         table = cls.from_csv(resolved)
         expected_rows = table_metadata.get("rows")
         if (

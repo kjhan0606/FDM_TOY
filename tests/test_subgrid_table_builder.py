@@ -922,6 +922,38 @@ def test_release_loader_requires_a_commit_sidecar(tmp_path: Path) -> None:
         SubgridCalibrationTable.from_release(output)
 
 
+@pytest.mark.parametrize(
+    "missing_field",
+    (
+        "mass_ratio_q",
+        "reference_eccentricity",
+        "absolute_mean_eccentricity_mismatch",
+    ),
+)
+def test_schema_four_release_rejects_blank_qe_provenance(
+    tmp_path: Path, missing_field: str,
+) -> None:
+    path = _write_summary(tmp_path)
+    output = tmp_path / "subgrid.csv"
+    write_calibration_table([CalibrationSource("boey2025", path)], output=output)
+    with output.open(newline="", encoding="utf-8") as stream:
+        reader = csv.DictReader(stream)
+        names = reader.fieldnames
+        records = list(reader)
+    assert names is not None and len(records) == 1
+    records[0][missing_field] = ""
+    with output.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=names)
+        writer.writeheader()
+        writer.writerows(records)
+    summary_path = output.with_suffix(".summary.json")
+    summary = json.loads(summary_path.read_text())
+    summary["table"]["sha256"] = hashlib.sha256(output.read_bytes()).hexdigest()
+    summary_path.write_text(json.dumps(summary))
+    with pytest.raises(ValueError, match="q/e provenance fields are absent"):
+        SubgridCalibrationTable.from_release(output)
+
+
 def test_release_loader_rejects_relaxed_acceptance_criteria(
     tmp_path: Path,
 ) -> None:
