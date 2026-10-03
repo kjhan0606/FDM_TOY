@@ -132,6 +132,9 @@ def test_resolution_pair_builds_exact_point_delay_row(tmp_path) -> None:
     assert convergence.maximum_stage_delay_systematic_fraction == pytest.approx(0.1)
     row = accepted_kpc_delay_row(convergence)
     assert row.multiplicative_delay_correction == pytest.approx(0.8)
+    assert row.reference_result_sha256 == fine.source_sha256
+    assert row.comparison_result_sha256 == coarse.source_sha256
+    assert row.source_sha256 not in {fine.source_sha256, coarse.source_sha256}
     table = KpcDelayCalibrationTable((row,))
     assert table.lookup(fine_case.physics) == row
     unmeasured = replace(fine_case.physics, mass_ratio_q=0.7)
@@ -157,6 +160,17 @@ def test_resolution_pair_builds_exact_point_delay_row(tmp_path) -> None:
     malformed = replace(row, source_sha256="not-a-sha256")
     with pytest.raises(ValueError, match="provenance is incomplete"):
         KpcDelayCalibrationTable((malformed,))
+    with pytest.raises(ValueError, match="provenance is incomplete"):
+        KpcDelayCalibrationTable((replace(row, comparison_result_sha256="0" * 64),))
+
+    revised_coarse = json.loads(coarse_path.read_text())
+    revised_coarse["stages"]["hard_binary"]["elapsed_since_capture_myr"] = 21.0
+    coarse_path.write_text(json.dumps(revised_coarse), encoding="utf-8")
+    changed_convergence = compare_zoom_resolution_pair(
+        fine, read_zoom_result(coarse_path, coarse_case)
+    )
+    assert changed_convergence.status == "accepted"
+    assert accepted_kpc_delay_row(changed_convergence).source_sha256 != row.source_sha256
 
 
 def test_resolution_pair_rejects_different_capture_events(tmp_path) -> None:

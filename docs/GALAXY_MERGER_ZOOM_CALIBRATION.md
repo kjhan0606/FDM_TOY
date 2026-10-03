@@ -40,6 +40,9 @@ accepted fine run supplies the multiplicative correction
 to the analytic delay. The initial table performs exact physical-point lookup;
 interpolation and extrapolation remain prohibited until the populated grid
 demonstrates support between points.
+The correction's source SHA-256 identifies the ordered fine/coarse result pair,
+and the row retains each result's individual SHA-256 and case ID. Changing
+either run therefore changes the correction provenance.
 
 ## Static-host applicability boundary
 

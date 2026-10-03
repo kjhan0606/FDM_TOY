@@ -586,6 +586,23 @@ class KpcDelayCalibrationRow:
     resolution_systematic_fraction: float
     source_case_id: str
     source_sha256: str
+    reference_result_sha256: str
+    comparison_case_id: str
+    comparison_result_sha256: str
+
+
+def _zoom_pair_sha256(
+    reference_case_id: str,
+    reference_result_sha256: str,
+    comparison_case_id: str,
+    comparison_result_sha256: str,
+) -> str:
+    return _canonical_sha256({
+        "reference_case_id": reference_case_id,
+        "reference_result_sha256": reference_result_sha256,
+        "comparison_case_id": comparison_case_id,
+        "comparison_result_sha256": comparison_result_sha256,
+    })
 
 
 def accepted_kpc_delay_row(convergence: ZoomConvergenceResult) -> KpcDelayCalibrationRow:
@@ -606,7 +623,15 @@ def accepted_kpc_delay_row(convergence: ZoomConvergenceResult) -> KpcDelayCalibr
             convergence.maximum_stage_delay_systematic_fraction
         ),
         source_case_id=reference.case.case_id,
-        source_sha256=reference.source_sha256,
+        source_sha256=_zoom_pair_sha256(
+            reference.case.case_id,
+            reference.source_sha256,
+            convergence.comparison.case.case_id,
+            convergence.comparison.source_sha256,
+        ),
+        reference_result_sha256=reference.source_sha256,
+        comparison_case_id=convergence.comparison.case.case_id,
+        comparison_result_sha256=convergence.comparison.source_sha256,
     )
 
 
@@ -649,8 +674,20 @@ class KpcDelayCalibrationTable:
             if (
                 not isinstance(row.source_case_id, str)
                 or not row.source_case_id.strip()
+                or not isinstance(row.comparison_case_id, str)
+                or not row.comparison_case_id.strip()
                 or not isinstance(row.source_sha256, str)
                 or re.fullmatch(r"[0-9a-fA-F]{64}", row.source_sha256) is None
+                or not isinstance(row.reference_result_sha256, str)
+                or re.fullmatch(r"[0-9a-fA-F]{64}", row.reference_result_sha256) is None
+                or not isinstance(row.comparison_result_sha256, str)
+                or re.fullmatch(r"[0-9a-fA-F]{64}", row.comparison_result_sha256) is None
+                or row.source_sha256 != _zoom_pair_sha256(
+                    row.source_case_id,
+                    row.reference_result_sha256,
+                    row.comparison_case_id,
+                    row.comparison_result_sha256,
+                )
             ):
                 raise ValueError("kpc delay calibration provenance is incomplete")
         self.rows = rows
