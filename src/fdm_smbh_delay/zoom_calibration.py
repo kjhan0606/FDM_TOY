@@ -398,6 +398,7 @@ class ZoomRunResult:
     capture_event_sha256: str | None = None
     capture_ledger_path: Path | None = None
     capture_ledger_signature: tuple[int, int, int, int] | None = None
+    capture_ledger_sha256: str | None = None
 
     def stage(self, name: str) -> ZoomStageResult:
         return dict(self.stages)[name]
@@ -522,9 +523,11 @@ def bind_zoom_result_to_capture_ledger(
     if _file_sha256(result.source_path) != result.source_sha256:
         raise ValueError("zoom result changed before capture binding")
     before = _file_signature(source)
+    before_sha256 = _file_sha256(source)
     ledger = read_capture_ledger(source)
     after = _file_signature(source)
-    if before != after:
+    after_sha256 = _file_sha256(source)
+    if before != after or before_sha256 != after_sha256:
         raise ValueError("capture ledger changed during zoom binding")
     matches = [event for event in ledger.events
                if event.event_uid == result.capture_event_uid]
@@ -549,21 +552,32 @@ def bind_zoom_result_to_capture_ledger(
         or not np.isclose(orbit.separation_pc,
                           result.stage("numerical_capture").separation_pc,
                           rtol=1.0e-10, atol=0.0)
+        or not np.isclose(orbit.eccentricity,
+                          result.case.physics.initial_orbit_eccentricity,
+                          rtol=1.0e-10, atol=1.0e-12)
     ):
         raise ValueError("zoom capture state disagrees with the committed ledger event")
     return replace(
         result, capture_event_sha256=event.event_sha256,
         capture_ledger_path=source, capture_ledger_signature=after,
+        capture_ledger_sha256=after_sha256,
     )
 
 
 def _require_current_zoom_sources(result: ZoomRunResult) -> None:
     """Reject a restart append or result edit after the verified binding."""
 
-    if result.capture_ledger_path is None or result.capture_ledger_signature is None:
+    if (
+        result.capture_ledger_path is None
+        or result.capture_ledger_signature is None
+        or result.capture_ledger_sha256 is None
+    ):
         raise ValueError("zoom result lacks a verified capture ledger source")
     try:
-        if _file_signature(result.capture_ledger_path) != result.capture_ledger_signature:
+        if (
+            _file_signature(result.capture_ledger_path) != result.capture_ledger_signature
+            or _file_sha256(result.capture_ledger_path) != result.capture_ledger_sha256
+        ):
             raise ValueError("capture ledger changed after zoom binding")
         if _file_sha256(result.source_path) != result.source_sha256:
             raise ValueError("zoom result changed after capture binding")

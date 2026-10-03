@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
+import os
 
 import numpy as np
 import pytest
@@ -37,6 +38,8 @@ def _committed_zoom_capture(tmp_path):
     event = read_capture_ledger(path).events[0]
     assert event.event_uid == uid
     assert event.post_compaction_verified and event.native_conservation_verified
+    assert event.binary_orbital_state is not None
+    assert event.binary_orbital_state.eccentricity == pytest.approx(0.5)
     return path
 
 
@@ -257,6 +260,22 @@ def test_zoom_capture_binding_rejects_changed_physical_state(tmp_path) -> None:
         _bound_result(result_path, altered_case, ledger_path)
 
 
+def test_zoom_capture_binding_rejects_changed_initial_eccentricity(tmp_path) -> None:
+    case = build_zoom_grid(_specification()).cases[0]
+    result_path = tmp_path / "result.json"
+    _write_result(result_path, case)
+    ledger_path = _committed_zoom_capture(tmp_path)
+    altered_case = replace(
+        case, physics=replace(case.physics, initial_orbit_eccentricity=0.3),
+    )
+    altered = json.loads(result_path.read_text())
+    altered["case_id"] = altered_case.case_id
+    altered["case"] = altered_case.as_dict()
+    result_path.write_text(json.dumps(altered), encoding="utf-8")
+    with pytest.raises(ValueError, match="disagrees with the committed ledger"):
+        _bound_result(result_path, altered_case, ledger_path)
+
+
 def test_zoom_capture_binding_rejects_legacy_bare_event(tmp_path) -> None:
     case = build_zoom_grid(_specification()).cases[0]
     result_path = tmp_path / "result.json"
@@ -303,6 +322,40 @@ def test_zoom_binding_rejects_later_superseding_restart(tmp_path) -> None:
         accepted_kpc_delay_row(convergence)
     with pytest.raises(ValueError, match="absent from the active ledger lineage"):
         _bound_result(fine_path, fine_case, ledger_path)
+
+
+def test_zoom_binding_rejects_same_size_ledger_rewrite_with_restored_mtime(
+    tmp_path,
+) -> None:
+    coarse_case, fine_case = build_zoom_grid(_specification()).cases[:2]
+    coarse_path = tmp_path / "coarse.json"
+    fine_path = tmp_path / "fine.json"
+    _write_result(coarse_path, coarse_case)
+    _write_result(fine_path, fine_case)
+    ledger_path = _committed_zoom_capture(tmp_path)
+    fine = _bound_result(fine_path, fine_case, ledger_path)
+    coarse = _bound_result(coarse_path, coarse_case, ledger_path)
+    convergence = compare_zoom_resolution_pair(fine, coarse)
+    assert convergence.status == "accepted"
+
+    original_stat = ledger_path.stat()
+    original_text = ledger_path.read_text(encoding="utf-8")
+    assert '"spin_magnitude": 0.5' in original_text
+    modified_text = original_text.replace(
+        '"spin_magnitude": 0.5', '"spin_magnitude": 0.6', 1,
+    )
+    assert len(modified_text) == len(original_text)
+    ledger_path.write_text(modified_text, encoding="utf-8")
+    os.utime(
+        ledger_path,
+        ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
+    )
+    assert ledger_path.stat().st_size == original_stat.st_size
+    assert ledger_path.stat().st_mtime_ns == original_stat.st_mtime_ns
+    with pytest.raises(ValueError, match="ledger changed after zoom binding"):
+        compare_zoom_resolution_pair(fine, coarse)
+    with pytest.raises(ValueError, match="ledger changed after zoom binding"):
+        accepted_kpc_delay_row(convergence)
 
 
 def test_zoom_binding_rejects_result_changed_after_read(tmp_path) -> None:

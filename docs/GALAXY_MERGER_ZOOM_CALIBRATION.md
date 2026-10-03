@@ -25,12 +25,16 @@ complete times must increase and separations must decrease.
 Before comparing resolutions, call `bind_zoom_result_to_capture_ledger` on each
 read result. It reads the active committed lagRamses ledger lineage and
 requires a native-conservation-verified two-member event whose UID, SMBH
-masses, mass ratio, and separation agree with the zoom capture boundary.
+masses, mass ratio, separation, and osculating two-body eccentricity agree
+with the zoom capture boundary and manifest initial state. Thus the manifest
+eccentricity denotes the measured osculating eccentricity at capture, not an
+unverified target value imposed before the merger.
 An unbound UID string, an old bare event, a superseded event, or a MULTIPLE
 event cannot supply a zoom calibration row.
-The comparison and row builder recheck the result-file checksum and the ledger
-file identity recorded at binding. If a later restart changes the active
-ledger lineage, the old binding is rejected and the result must be rebound
+The comparison and row builder recheck the result-file checksum and both the
+ledger file identity and content SHA-256 recorded at binding. If a later
+restart changes the active ledger lineage, the old binding is rejected and
+the result must be rebound
 against the current ledger before it can be assessed again.
 
 The result diagnostics must include:
