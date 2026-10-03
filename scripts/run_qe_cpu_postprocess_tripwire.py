@@ -379,7 +379,7 @@ class QeCpuTripwire:
         if any(payload.get(key) != value for key, value in identity.items()):
             raise StageFailed(f"checkpoint identity mismatch: {marker}", EX_CONFIG)
         status = payload.get("status")
-        if status not in {"running", "failed", "memory_rejected", "complete"}:
+        if status not in {"running", "checkpoint", "failed", "memory_rejected", "complete"}:
             raise StageFailed(f"invalid checkpoint status: {marker}", EX_CONFIG)
         return status == "complete" and _stage_output_valid(row, stage)
 
@@ -464,7 +464,9 @@ class QeCpuTripwire:
             raise StageFailed(f"{row.run_id} {stage} outputs failed validation")
         self._write_marker(row, stage, status="complete", exit_code=0, command=command)
 
-    def _run_wave_response(self, row: RunPlanRow) -> None:
+    def _run_wave_response(
+        self, row: RunPlanRow, *, max_invocations: int | None = None
+    ) -> bool:
         stage = "wave_response"
         command = [
             sys.executable,
@@ -475,14 +477,17 @@ class QeCpuTripwire:
             "1",
         ]
         if self._completed_marker_valid(row, stage):
-            return
-        maximum_invocations = _expected_saved_3d_states(row)
+            return True
+        maximum_invocations = (
+            _expected_saved_3d_states(row)
+            if max_invocations is None else max_invocations
+        )
         for _invocation in range(maximum_invocations):
             if _stage_output_valid(row, stage):
                 self._write_marker(
                     row, stage, status="complete", exit_code=0, command=command
                 )
-                return
+                return True
             limit = ADDRESS_SPACE_LIMIT_BYTES[row.resolution]
             available = self.available_memory()
             if available < limit:
@@ -531,7 +536,12 @@ class QeCpuTripwire:
             self._write_marker(
                 row, stage, status="complete", exit_code=0, command=command
             )
-            return
+            return True
+        if max_invocations is not None:
+            self._write_marker(
+                row, stage, status="checkpoint", exit_code=0, command=command
+            )
+            return False
         self._write_marker(
             row,
             stage,
@@ -542,6 +552,63 @@ class QeCpuTripwire:
         raise StageFailed(
             f"{row.run_id} wave response exceeded saved_3d_states bound"
         )
+
+    def _process_one_unit(self, row: RunPlanRow) -> bool:
+        """Run at most one CPU child, preserving stage order across invocations."""
+
+        validate_torch_summary(row)
+        commands = self._commands(row)
+        ordered = [*commands[:4], ("wave_response", []), commands[-1]]
+        for stage, command in ordered:
+            if self._completed_marker_valid(row, stage):
+                continue
+            if stage == "wave_response":
+                if not self._run_wave_response(row, max_invocations=1):
+                    return False
+            else:
+                # A valid output may need only its checkpoint repaired.
+                already_valid = _stage_output_valid(row, stage)
+                self._run_command(row, stage, command)
+                if not already_valid:
+                    return stage == "exchange_table" and all(
+                        self._completed_marker_valid(row, required)
+                        for required, _ in ordered
+                    )
+            # A completed wave-response stage may have consumed the one child.
+            if stage == "wave_response":
+                return False
+        return True
+
+    def run_one_unit(self) -> int:
+        """Non-waiting registered run, suitable for one manual invocation."""
+
+        if len(self.rows) != 1:
+            raise ValueError("one-work-unit mode requires exactly one run")
+        row = self.rows[0]
+        status_path = self.status_file or self.log_root / "qe_cpu_tripwire_status.json"
+        try:
+            if not (row.torch_directory / "torch_run_summary.json").is_file():
+                raise WaitFailed(f"Torch completion is not present: {row.run_id}")
+            validate_torch_summary(row)
+            with self.lock_function(FINALIZER_LOCK):
+                complete = self._process_one_unit(row)
+            status, code, detail = ("complete" if complete else "checkpoint"), 0, ""
+        except WaitFailed as error:
+            status, code, detail = "not_ready", EX_TEMPFAIL, str(error)
+        except StageFailed as error:
+            status, code, detail = "postprocess_failed", error.exit_code, str(error)
+        except (OSError, ValueError) as error:
+            status, code, detail = "validation_failed", EX_SOFTWARE, str(error)
+        _atomic_json(status_path, {
+            "status": status,
+            "exit_code": code,
+            "detail": detail,
+            "run_ids": [row.run_id],
+            "timestamp": _utc_timestamp(),
+        })
+        if code:
+            print(f"q-e CPU tripwire failed: {detail}", file=sys.stderr, flush=True)
+        return code
 
     def _commands(self, row: RunPlanRow) -> list[tuple[str, list[str]]]:
         run = str(row.torch_directory.resolve())
@@ -663,6 +730,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--wait-cadence-seconds", type=float, default=300.0)
     parser.add_argument("--wait-timeout-seconds", type=float)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--one-work-unit", action="store_true",
+        help="run at most one CPU stage or one wave-response sample; do not wait",
+    )
     return parser
 
 
@@ -684,8 +755,13 @@ def main() -> int:
             parser.error(
                 "registered q/e post-processing requires lageunha or a Slurm allocation"
             )
-        if not arguments.dry_run and arguments.wait_timeout_seconds is None:
+        if (
+            not arguments.dry_run and not arguments.one_work_unit
+            and arguments.wait_timeout_seconds is None
+        ):
             parser.error("registered q/e post-processing requires a bounded wait timeout")
+    elif arguments.one_work_unit:
+        parser.error("--one-work-unit requires --qe-design")
     elif not arguments.dry_run and socket.gethostname().split(".", maxsplit=1)[0] != "syntax":
         parser.error("CPU post-processing is restricted to syntax")
 
@@ -741,14 +817,15 @@ def main() -> int:
         None if arguments.qe_design is None
         else log_root / f"qe_cpu_tripwire_{selected[0].run_id}.json"
     )
-    return QeCpuTripwire(
+    tripwire = QeCpuTripwire(
         rows=selected,
         log_root=log_root,
         guard_status_paths=guard_paths,
         cadence_seconds=arguments.wait_cadence_seconds,
         timeout_seconds=arguments.wait_timeout_seconds,
         status_file=status_file,
-    ).run()
+    )
+    return tripwire.run_one_unit() if arguments.one_work_unit else tripwire.run()
 
 
 if __name__ == "__main__":

@@ -582,3 +582,82 @@ def test_dry_run_prints_wait_lock_and_bounded_response_without_execution(
     assert output.count("wait run_id=") == 8
     assert output.count("lock/process/release run_id=") == 8
     assert output.count("--resume --max-new-samples 1") == 8
+
+
+def test_one_work_unit_resumes_in_order_and_runs_at_most_one_child(
+    tmp_path: Path, monkeypatch
+) -> None:
+    row = _row(tmp_path, "case_n256", resolution=256, save_3d_number=1)
+    summary = row.torch_directory / "torch_run_summary.json"
+    summary.parent.mkdir(parents=True)
+    summary.write_text("{}", encoding="utf-8")
+    completed_stages: set[str] = set()
+    calls: list[str] = []
+    response_calls = 0
+    stage_by_script = {
+        "snapshot_torch_provenance.py": "provenance",
+        "analyze_pyul_wave_run.py": "conservation",
+        "analyze_pyul_secular_exchange.py": "secular",
+        "analyze_pyul_line_density.py": "line_density",
+        "analyze_pyul_wave_response.py": "wave_response",
+        "build_wave_exchange_table.py": "exchange_table",
+    }
+
+    def command_runner(command, **_kwargs):
+        nonlocal response_calls
+        stage = stage_by_script[Path(command[1]).name]
+        calls.append(stage)
+        if stage == "wave_response":
+            assert command[-3:] == ["--resume", "--max-new-samples", "1"]
+            response_calls += 1
+            if response_calls == 2:
+                completed_stages.add(stage)
+        else:
+            completed_stages.add(stage)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(tripwire, "validate_torch_summary", lambda _row: {})
+    monkeypatch.setattr(
+        tripwire, "_stage_output_valid",
+        lambda _row, stage: stage in completed_stages,
+    )
+    runner = tripwire.QeCpuTripwire(
+        rows=[row],
+        log_root=tmp_path / "logs",
+        status_file=tmp_path / "logs" / "one_unit_status.json",
+        guard_status_paths=(),
+        cadence_seconds=30.0,
+        timeout_seconds=None,
+        command_runner=command_runner,
+        available_memory=lambda: 10**15,
+        lock_function=lambda _path: tripwire.shared_finalizer_lock(tmp_path / "lock"),
+    )
+    for expected_stage in [
+        "provenance", "conservation", "secular", "line_density",
+        "wave_response", "wave_response", "exchange_table",
+    ]:
+        before = len(calls)
+        assert runner.run_one_unit() == 0
+        assert len(calls) == before + 1
+        assert calls[-1] == expected_stage
+        status = json.loads(runner.status_file.read_text())
+        assert status["status"] == (
+            "complete" if expected_stage == "exchange_table" else "checkpoint"
+        )
+    assert runner.run_one_unit() == 0
+    assert len(calls) == 7
+
+
+def test_one_work_unit_does_not_wait_for_torch(tmp_path: Path) -> None:
+    row = _row(tmp_path, "case_n384", resolution=384)
+    runner = tripwire.QeCpuTripwire(
+        rows=[row],
+        log_root=tmp_path / "logs",
+        guard_status_paths=(),
+        cadence_seconds=30.0,
+        timeout_seconds=None,
+        wait_function=lambda *_args, **_kwargs: pytest.fail("must not wait"),
+    )
+    assert runner.run_one_unit() == tripwire.EX_TEMPFAIL
+    status = json.loads((tmp_path / "logs" / "qe_cpu_tripwire_status.json").read_text())
+    assert status["status"] == "not_ready"
