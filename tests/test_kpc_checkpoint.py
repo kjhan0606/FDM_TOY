@@ -166,6 +166,26 @@ def test_checkpoint_rejects_changed_implementation_identity(tmp_path, monkeypatc
         read_kpc_to_hard_checkpoint(path, model, config)
 
 
+@pytest.mark.parametrize("dependency", ["gw.py", "capture_ledger.py", "lagramses.py"])
+def test_checkpoint_fingerprint_covers_transitive_handoff_dependencies(
+    tmp_path, monkeypatch, dependency: str
+) -> None:
+    model, config, initial = _case()
+    path = tmp_path / "kpc-checkpoint.json"
+    write_kpc_to_hard_checkpoint(path, initial, model, config)
+    original_read_bytes = kpc_checkpoint.Path.read_bytes
+
+    def changed_dependency(source):
+        contents = original_read_bytes(source)
+        if source.name == dependency:
+            return contents + b"\n# changed physics dependency\n"
+        return contents
+
+    monkeypatch.setattr(kpc_checkpoint.Path, "read_bytes", changed_dependency)
+    with pytest.raises(ValueError, match="physics implementation identity changed"):
+        read_kpc_to_hard_checkpoint(path, model, config)
+
+
 def test_checkpoint_rejects_state_corruption_and_out_of_budget_state(tmp_path) -> None:
     model, config, initial = _case()
     path = tmp_path / "kpc-checkpoint.json"

@@ -28,9 +28,10 @@ CHECKPOINT_SCHEMA_VERSION = 2
 # integrator, force law, profile interpolation, handoff definition, or unit
 # conversion invalidates bitwise restart compatibility.
 _PHYSICS_MODULES = (
-    "binary_evolution.py", "constants.py", "delay_budget.py",
+    "binary_evolution.py", "capture_ledger.py", "constants.py", "delay_budget.py",
     "environmental_friction.py", "fdm_outer_halo.py", "galaxy_environment.py",
-    "kpc_checkpoint.py", "kpc_inspiral.py", "kpc_to_pc.py",
+    "gw.py", "kpc_checkpoint.py", "kpc_inspiral.py", "kpc_to_pc.py",
+    "lagramses.py",
     "orbital_exchange.py", "profile_table.py", "soliton.py", "wave_drag.py",
 )
 
