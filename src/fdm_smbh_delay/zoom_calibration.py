@@ -515,7 +515,9 @@ def read_zoom_result(path: str | Path, case: GalaxyMergerZoomCase) -> ZoomRunRes
 
 
 def bind_zoom_result_to_capture_ledger(
-    result: ZoomRunResult, ledger_path: str | Path,
+    result: ZoomRunResult, ledger_path: str | Path, *,
+    output_root: str | Path | None = None,
+    selected_checkpoint_uid: str | None = None,
 ) -> ZoomRunResult:
     """Bind a zoom result to one active, committed native binary event."""
 
@@ -524,7 +526,10 @@ def bind_zoom_result_to_capture_ledger(
         raise ValueError("zoom result changed before capture binding")
     before = _file_signature(source)
     before_sha256 = _file_sha256(source)
-    ledger = read_capture_ledger(source)
+    ledger = read_capture_ledger(
+        source, output_root=output_root,
+        selected_checkpoint_uid=selected_checkpoint_uid,
+    )
     after = _file_signature(source)
     after_sha256 = _file_sha256(source)
     if before != after or before_sha256 != after_sha256:

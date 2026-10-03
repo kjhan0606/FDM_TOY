@@ -264,6 +264,128 @@ def test_native_v2_complete_checkpoint_promotes_active_lineage(tmp_path) -> None
         _read_capture_ledger(path, output_root=tmp_path)
 
 
+def test_verified_native_v2_capture_reaches_physical_kpc_phase_only_on_selected_tip(
+    tmp_path,
+) -> None:
+    from fdm_smbh_delay.kpc_to_pc import InspiralPhase, classify_capture_state
+
+    path = tmp_path / "ledger-v2.jsonl"
+    parent = _write_lineage_marker(
+        tmp_path, 1, "attempt-a", 1, 10, path.name,
+    )
+    selected = _write_lineage_marker(
+        tmp_path, 2, "attempt-b", 0, 10, path.name,
+    )
+    _write_lineage_marker(tmp_path, 3, "attempt-c", 0, 10, path.name)
+    _write_rows(path, [
+        _attempt_v2("attempt-a", path.name),
+        *_lineaged_batch(_native_v2_batch(_native_binary_rows()), "attempt-a", 1),
+        _attempt_v2(
+            "attempt-b", path.name, parent=parent,
+            restart_output=1, restart_step=10,
+        ),
+        _attempt_v2(
+            "attempt-c", path.name, parent=parent,
+            restart_output=1, restart_step=10,
+        ),
+    ])
+
+    with pytest.raises(CaptureLedgerError, match="2 leaves"):
+        _read_capture_ledger(path, output_root=tmp_path)
+    with pytest.raises(CaptureLedgerError, match="lack attempt/checkpoint lineage"):
+        _read_capture_ledger(path)
+
+    event = _read_capture_ledger(
+        path, output_root=tmp_path, selected_checkpoint_uid=selected,
+    ).events[0]
+    state = classify_capture_state(
+        event, common_nucleus_radius_pc=10.0, sigma_pc_myr=100.0,
+    )
+    assert event.lineage_verified
+    assert state.phase == InspiralPhase.HARD_BINARY
+
+
+def test_verified_native_v2_multiple_remains_censored_from_binary_kpc_phase(
+    tmp_path,
+) -> None:
+    from fdm_smbh_delay.kpc_to_pc import InspiralPhase, classify_capture_state
+
+    rows = _native_binary_rows()
+    begin, first, second, pair, end = rows
+    begin.update(
+        classification="MULTIPLE", nmember=3, expected_pairs=3,
+        multiple_members_preserved=True,
+    )
+    third = copy.deepcopy(second)
+    third.update(member_index=3, sink_id=11, position_code=[0.0, 0.5, 0.0])
+    pairs = []
+    for index, ids in enumerate(((7, 9), (7, 11), (9, 11)), start=1):
+        item = copy.deepcopy(pair)
+        item.update(pair_index=index, sink_id_1=ids[0], sink_id_2=ids[1])
+        pairs.append(item)
+    end.update(nmember=3, npair=3)
+    begin["event_uid"] = "10-1-7-11-3-3FF0000000000000"
+    for row in [first, second, third, *pairs, end]:
+        row["event_uid"] = begin["event_uid"]
+    members = {row["sink_id"]: row for row in (first, second, third)}
+    masses = np.asarray([row["mass_code"] for row in members.values()])
+    positions = np.asarray([row["position_code"] for row in members.values()])
+    velocities = np.asarray([row["velocity_code"] for row in members.values()])
+    begin.update(
+        total_mass_code=float(masses.sum()),
+        com_position_code=np.average(positions, axis=0, weights=masses).tolist(),
+        com_velocity_code=np.average(velocities, axis=0, weights=masses).tolist(),
+        max_pair_separation_code=max(
+            float(np.linalg.norm(positions[j] - positions[i]))
+            for i in range(3) for j in range(i + 1, 3)
+        ),
+    )
+    for item in pairs:
+        one, two = (members[item["sink_id_1"]], members[item["sink_id_2"]])
+        dr = np.asarray(two["position_code"]) - np.asarray(one["position_code"])
+        dv = np.asarray(two["velocity_code"]) - np.asarray(one["velocity_code"])
+        radius, speed = float(np.linalg.norm(dr)), float(np.linalg.norm(dv))
+        reduced = one["mass_code"] * two["mass_code"] / (
+            one["mass_code"] + two["mass_code"]
+        )
+        h = np.cross(dr, dv)
+        item.update(
+            delta_position_code=dr.tolist(), separation_code=radius,
+            delta_velocity_code=dv.tolist(), relative_speed_code=speed,
+            reduced_mass_code=reduced,
+            relative_kinetic_code=0.5 * reduced * speed**2,
+            newtonian_potential_1overr_code=(
+                -G_INTERNAL * one["mass_code"] * two["mass_code"] / radius
+            ),
+            two_body_specific_energy_code=(
+                0.5 * speed**2
+                - G_INTERNAL * (one["mass_code"] + two["mass_code"]) / radius
+            ),
+            specific_angular_momentum_code=h.tolist(),
+            relative_angular_momentum_code=(reduced * h).tolist(),
+            legacy_binding_proxy_1overr2_code=(
+                G_INTERNAL * one["mass_code"] * two["mass_code"] / radius**2
+            ),
+        )
+    path = tmp_path / "ledger-v2.jsonl"
+    _write_rows(path, [
+        _attempt_v2("attempt-a", path.name),
+        *_lineaged_batch(
+            _native_v2_batch([begin, first, second, third, *pairs, end]),
+            "attempt-a", 1,
+        ),
+    ])
+    _write_lineage_marker(tmp_path, 1, "attempt-a", 1, 10, path.name)
+
+    event = _read_capture_ledger(path, output_root=tmp_path).events[0]
+    state = classify_capture_state(
+        event, common_nucleus_radius_pc=10.0, sigma_pc_myr=100.0,
+    )
+    assert event.multiple_members_preserved is True
+    assert event.binary_orbital_state is None
+    assert state.phase == InspiralPhase.MULTIPLE
+
+
 def test_native_v2_no_event_child_suppresses_ancestor_tail(tmp_path) -> None:
     path = tmp_path / "ledger-v2.jsonl"
     first = _lineaged_batch(

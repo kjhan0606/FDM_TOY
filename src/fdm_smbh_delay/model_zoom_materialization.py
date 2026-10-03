@@ -69,10 +69,17 @@ def _case(grid: ZoomGrid, case_id: str) -> GalaxyMergerZoomCase:
     return matches[0]
 
 
-def _capture_event(path: str | Path, event_uid: str) -> CaptureEvent:
+def _capture_event(
+    path: str | Path, event_uid: str, *,
+    output_root: str | Path | None = None,
+    selected_checkpoint_uid: str | None = None,
+) -> CaptureEvent:
     source = Path(path).expanduser().resolve()
     try:
-        ledger = read_capture_ledger(source)
+        ledger = read_capture_ledger(
+            source, output_root=output_root,
+            selected_checkpoint_uid=selected_checkpoint_uid,
+        )
     except (OSError, ValueError) as error:
         raise ValueError(f"cannot read capture ledger: {error}") from error
     matches = [event for event in ledger.events if event.event_uid == event_uid]
@@ -231,7 +238,8 @@ class VerifiedModelZoomExecutionContract:
 
 
 def read_verified_model_zoom_execution_contract(
-    path: str | Path,
+    path: str | Path, *, output_root: str | Path | None = None,
+    selected_checkpoint_uid: str | None = None,
 ) -> VerifiedModelZoomExecutionContract:
     """Re-read every declaration input and reject a stale model-zoom contract."""
 
@@ -293,7 +301,10 @@ def read_verified_model_zoom_execution_contract(
     ledger_path = Path(capture["ledger_path"]).expanduser().resolve()
     if _sha256(ledger_path) != capture.get("ledger_sha256"):
         raise ValueError("model-zoom execution contract capture ledger SHA-256 no longer matches")
-    event = _capture_event(ledger_path, capture["event_uid"])
+    event = _capture_event(
+        ledger_path, capture["event_uid"], output_root=output_root,
+        selected_checkpoint_uid=selected_checkpoint_uid,
+    )
     if event.event_sha256 != capture.get("event_sha256"):
         raise ValueError("model-zoom execution contract capture event SHA-256 no longer matches")
     shared_record = record.get("shared_inputs")
@@ -349,6 +360,8 @@ def materialize_model_zoom_execution_contract(
     shared_input_paths: Mapping[str, str | Path],
     run_namelist_path: str | Path,
     output_directory: str | Path,
+    output_root: str | Path | None = None,
+    selected_checkpoint_uid: str | None = None,
 ) -> dict[str, Any]:
     """Write one identity contract and controls fragment without touching a run."""
 
@@ -358,7 +371,10 @@ def materialize_model_zoom_execution_contract(
     except (OSError, ValueError) as error:
         raise ValueError(f"cannot load zoom manifest: {error}") from error
     case = _case(grid, case_id)
-    event = _capture_event(capture_ledger_path, capture_event_uid)
+    event = _capture_event(
+        capture_ledger_path, capture_event_uid, output_root=output_root,
+        selected_checkpoint_uid=selected_checkpoint_uid,
+    )
     inputs = _shared_inputs(shared_input_paths)
     identity = _identity(grid, case, event, inputs)
     run_namelist = _verified_namelist_identity(run_namelist_path, identity)

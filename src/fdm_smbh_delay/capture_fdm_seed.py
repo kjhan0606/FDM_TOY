@@ -446,6 +446,8 @@ def materialize_capture_derived_sink_pair_record(
     pair: CaptureDerivedDualSMBHSinkPair,
     *,
     frame_specification_path: str | Path,
+    output_root: str | Path | None = None,
+    selected_checkpoint_uid: str | None = None,
 ) -> dict[str, Any]:
     """Return a v2 pair record whose frame and projection sources are attested.
 
@@ -470,7 +472,10 @@ def materialize_capture_derived_sink_pair_record(
     try:
         events = [
             event
-            for event in read_capture_ledger(pair.capture_ledger_path).events
+            for event in read_capture_ledger(
+                pair.capture_ledger_path, output_root=output_root,
+                selected_checkpoint_uid=selected_checkpoint_uid,
+            ).events
             if event.event_uid == specification.event_uid
         ]
     except (OSError, ValueError) as error:

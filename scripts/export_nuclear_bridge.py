@@ -48,12 +48,17 @@ def export_bridge_input(
     capture_time_myr: float,
     output_path: str | Path,
     target_semimajor_axis_pc: float = 1.0,
+    output_root: str | Path | None = None,
+    selected_checkpoint_uid: str | None = None,
 ) -> Path:
     """Build one bridge JSON from a complete ledger event and environment."""
 
     if not event_uid or not run_id:
         raise ValueError("event_uid and run_id are required")
-    ledger = read_capture_ledger(ledger_path)
+    ledger = read_capture_ledger(
+        ledger_path, output_root=output_root,
+        selected_checkpoint_uid=selected_checkpoint_uid,
+    )
     matches = [event for event in ledger.events if event.event_uid == event_uid]
     if len(matches) != 1:
         raise ValueError(
@@ -82,6 +87,8 @@ def main() -> int:
     parser.add_argument("--capture-time-myr", required=True, type=float)
     parser.add_argument("--target-semimajor-axis-pc", type=float, default=1.0)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--capture-output-root", type=Path)
+    parser.add_argument("--selected-checkpoint-uid")
     args = parser.parse_args()
     output = export_bridge_input(
         ledger_path=args.ledger,
@@ -91,6 +98,8 @@ def main() -> int:
         capture_time_myr=args.capture_time_myr,
         output_path=args.output,
         target_semimajor_axis_pc=args.target_semimajor_axis_pc,
+        output_root=args.capture_output_root,
+        selected_checkpoint_uid=args.selected_checkpoint_uid,
     )
     bridge = NuclearBridgeInput.read_json(output)
     print(

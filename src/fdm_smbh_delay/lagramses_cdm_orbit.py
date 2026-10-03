@@ -136,6 +136,8 @@ def read_bound_cdm_capture(
     capture_event_uid: str,
     primary_sink_id: int,
     secondary_sink_id: int,
+    output_root: str | Path | None = None,
+    selected_checkpoint_uid: str | None = None,
 ) -> dict[str, Any]:
     """Read one validated original CDM capture bound to a retained zoom pair.
 
@@ -180,7 +182,10 @@ def read_bound_cdm_capture(
     if not isinstance(ledger_reference, str) or not ledger_reference.strip():
         raise ValueError("CDM capture binding ledger_path is invalid")
     ledger_path = _resolve(ledger_reference, source.parent)
-    ledger = read_capture_ledger(ledger_path)
+    ledger = read_capture_ledger(
+        ledger_path, output_root=output_root,
+        selected_checkpoint_uid=selected_checkpoint_uid,
+    )
     matches = [event for event in ledger.events if event.event_uid == capture_event_uid]
     if len(matches) != 1:
         raise ValueError("CDM capture binding event is absent from its ledger")

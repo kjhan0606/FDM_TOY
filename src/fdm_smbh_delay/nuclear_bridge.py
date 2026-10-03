@@ -523,11 +523,17 @@ class NuclearBridgeInput:
         return cls.from_dict(record)
 
 
-def read_ledger_bound_bridge(path: str | Path) -> NuclearBridgeInput:
+def read_ledger_bound_bridge(
+    path: str | Path, *, output_root: str | Path | None = None,
+    selected_checkpoint_uid: str | None = None,
+) -> NuclearBridgeInput:
     """Recheck the bridge pair against its committed capture-ledger event."""
 
     bridge = NuclearBridgeInput.read_json(path)
-    ledger = read_capture_ledger(bridge.source_path)
+    ledger = read_capture_ledger(
+        bridge.source_path, output_root=output_root,
+        selected_checkpoint_uid=selected_checkpoint_uid,
+    )
     matches = [event for event in ledger.events if event.event_uid == bridge.event_uid]
     if len(matches) != 1:
         raise ValueError("bridge requires exactly one committed capture event")

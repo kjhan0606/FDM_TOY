@@ -318,6 +318,8 @@ def assess_cdm_noncompacting_zoom_run_inputs(
     expected_build_git_hash: str,
     expected_compilation_path: str | Path,
     case_input_artifact_paths: Mapping[str, str | Path],
+    output_root: str | Path | None = None,
+    selected_checkpoint_uid: str | None = None,
 ) -> tuple[CDMNonCompactingZoomRunContract, CDMNonCompactingZoomPlan]:
     """Check one complete lagRamses input without modifying it or submitting."""
 
@@ -330,6 +332,8 @@ def assess_cdm_noncompacting_zoom_run_inputs(
         capture_event_uid=capture_event_uid,
         primary_sink_id=primary_sink_id,
         secondary_sink_id=secondary_sink_id,
+        output_root=output_root,
+        selected_checkpoint_uid=selected_checkpoint_uid,
     )
     expected_ledger_file = _fortran_string(capture_ledger_file)
     build_hash = _expected_build_hash(expected_build_git_hash)
@@ -433,6 +437,8 @@ def materialize_cdm_noncompacting_zoom_run_contract(
     expected_compilation_path: str | Path,
     case_input_artifact_paths: Mapping[str, str | Path],
     output_directory: str | Path,
+    output_root: str | Path | None = None,
+    selected_checkpoint_uid: str | None = None,
 ) -> dict[str, Any]:
     """Write a new run-contract directory; never modify run inputs or submit."""
 
@@ -448,6 +454,8 @@ def materialize_cdm_noncompacting_zoom_run_contract(
         expected_build_git_hash=expected_build_git_hash,
         expected_compilation_path=expected_compilation_path,
         case_input_artifact_paths=case_input_artifact_paths,
+        output_root=output_root,
+        selected_checkpoint_uid=selected_checkpoint_uid,
     )
     destination = Path(output_directory).expanduser().resolve()
     try:

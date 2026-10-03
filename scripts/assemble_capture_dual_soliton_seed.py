@@ -41,6 +41,8 @@ def main() -> int:
     parser.add_argument("soliton_configuration", type=Path)
     parser.add_argument("seed_output", type=Path)
     parser.add_argument("capture_pair_output", type=Path)
+    parser.add_argument("--capture-output-root", type=Path)
+    parser.add_argument("--selected-checkpoint-uid")
     args = parser.parse_args()
     specification = CaptureFDMSeedFrameSpecification.from_dict(
         json.loads(args.frame_specification.read_text(encoding="utf-8"))
@@ -50,7 +52,10 @@ def main() -> int:
     )
     matches = [
         event
-        for event in read_capture_ledger(args.ledger).events
+        for event in read_capture_ledger(
+            args.ledger, output_root=args.capture_output_root,
+            selected_checkpoint_uid=args.selected_checkpoint_uid,
+        ).events
         if event.event_uid == specification.event_uid
     ]
     if len(matches) != 1:
@@ -65,6 +70,8 @@ def main() -> int:
     pair_record = materialize_capture_derived_sink_pair_record(
         pair,
         frame_specification_path=args.frame_specification,
+        output_root=args.capture_output_root,
+        selected_checkpoint_uid=args.selected_checkpoint_uid,
     )
     _write_atomic(
         args.seed_output.expanduser().resolve(),

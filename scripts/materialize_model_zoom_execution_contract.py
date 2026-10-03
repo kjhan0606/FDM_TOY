@@ -27,6 +27,8 @@ def main() -> int:
     parser.add_argument("--case-id", required=True)
     parser.add_argument("--capture-ledger", type=Path, required=True)
     parser.add_argument("--capture-event-uid", required=True)
+    parser.add_argument("--capture-output-root", type=Path)
+    parser.add_argument("--selected-checkpoint-uid")
     parser.add_argument("--run-namelist", type=Path, required=True)
     parser.add_argument("--shared-input", action="append", default=[], metavar="ROLE=PATH")
     parser.add_argument("specification", type=Path)
@@ -40,6 +42,8 @@ def main() -> int:
         shared_input_paths=_shared_inputs(args.shared_input),
         run_namelist_path=args.run_namelist,
         output_directory=args.output_directory,
+        output_root=args.capture_output_root,
+        selected_checkpoint_uid=args.selected_checkpoint_uid,
     )
     print(json.dumps(record, indent=2, sort_keys=True))
     return 0

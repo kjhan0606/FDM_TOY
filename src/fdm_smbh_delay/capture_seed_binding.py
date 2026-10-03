@@ -57,7 +57,8 @@ def _pair_sinks(record: Mapping[str, Any]) -> tuple[DualSMBHSinkSeed, DualSMBHSi
 
 
 def _capture_pair_record(
-    path: Path,
+    path: Path, *, output_root: str | Path | None = None,
+    selected_checkpoint_uid: str | None = None,
 ) -> tuple[str, str, CaptureFDMSeedFrame, CaptureSMBHMassProjection, tuple[DualSMBHSinkSeed, DualSMBHSinkSeed]]:
     record = _json_object(path, "capture sink-pair record")
     if (
@@ -149,7 +150,10 @@ def _capture_pair_record(
         if _sha256(ledger_source) != ledger_sha256:
             raise ValueError("capture sink-pair ledger SHA-256 no longer matches")
         matches = [
-            event for event in read_capture_ledger(ledger_source).events if event.event_uid == event_uid
+            event for event in read_capture_ledger(
+                ledger_source, output_root=output_root,
+                selected_checkpoint_uid=selected_checkpoint_uid,
+            ).events if event.event_uid == event_uid
         ]
     except (OSError, ValueError) as error:
         raise ValueError(f"cannot re-read capture ledger: {error}") from error
@@ -223,7 +227,8 @@ class CaptureSeedMaterializationBinding:
 
 
 def read_verified_capture_seed_materialization_binding(
-    path: str | Path,
+    path: str | Path, *, output_root: str | Path | None = None,
+    selected_checkpoint_uid: str | None = None,
 ) -> CaptureSeedMaterializationBinding:
     """Rebuild a saved capture-to-seed decision from its source artifacts."""
 
@@ -273,6 +278,8 @@ def read_verified_capture_seed_materialization_binding(
     decision = assess_capture_seed_materialization_binding(
         capture_sink_pair_path=paths["capture_sink_pair"],
         seed_manifest_path=paths["seed_manifest"],
+        output_root=output_root,
+        selected_checkpoint_uid=selected_checkpoint_uid,
     )
     if not decision.verified or decision.as_dict() != record:
         raise ValueError("capture-to-seed binding no longer matches its source artifacts")
@@ -283,6 +290,8 @@ def assess_capture_seed_materialization_binding(
     *,
     capture_sink_pair_path: str | Path,
     seed_manifest_path: str | Path,
+    output_root: str | Path | None = None,
+    selected_checkpoint_uid: str | None = None,
 ) -> CaptureSeedMaterializationBinding:
     """Require every materialized SMBH row to match its capture-derived row."""
 
@@ -295,7 +304,10 @@ def assess_capture_seed_materialization_binding(
     pair_sinks: tuple[DualSMBHSinkSeed, DualSMBHSinkSeed] | None = None
     seed: PureFDMDualSolitonSeed | None = None
     try:
-        event_uid, event_sha256, _, _, pair_sinks = _capture_pair_record(pair_path)
+        event_uid, event_sha256, _, _, pair_sinks = _capture_pair_record(
+            pair_path, output_root=output_root,
+            selected_checkpoint_uid=selected_checkpoint_uid,
+        )
     except ValueError as error:
         reasons.append(str(error))
     try:

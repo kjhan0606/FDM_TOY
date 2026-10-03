@@ -30,8 +30,13 @@ def main() -> int:
     parser.add_argument("event_uid")
     parser.add_argument("run_provenance", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--capture-output-root", type=Path)
+    parser.add_argument("--selected-checkpoint-uid")
     args = parser.parse_args()
-    matches = [event for event in read_capture_ledger(args.ledger).events if event.event_uid == args.event_uid]
+    matches = [event for event in read_capture_ledger(
+        args.ledger, output_root=args.capture_output_root,
+        selected_checkpoint_uid=args.selected_checkpoint_uid,
+    ).events if event.event_uid == args.event_uid]
     if len(matches) != 1:
         raise ValueError("event_uid must identify exactly one complete capture event")
     decision = bind_capture_event_to_dark_matter_run(
