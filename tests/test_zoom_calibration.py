@@ -270,6 +270,57 @@ def test_zoom_capture_binding_rejects_legacy_bare_event(tmp_path) -> None:
         _bound_result(result_path, case, bare)
 
 
+def test_zoom_binding_rejects_later_superseding_restart(tmp_path) -> None:
+    coarse_case, fine_case = build_zoom_grid(_specification()).cases[:2]
+    coarse_path = tmp_path / "coarse.json"
+    fine_path = tmp_path / "fine.json"
+    _write_result(coarse_path, coarse_case)
+    _write_result(fine_path, fine_case)
+    ledger_path = _committed_zoom_capture(tmp_path)
+    fine = _bound_result(fine_path, fine_case, ledger_path)
+    coarse = _bound_result(coarse_path, coarse_case, ledger_path)
+    convergence = compare_zoom_resolution_pair(fine, coarse)
+    assert convergence.status == "accepted"
+
+    rows = [json.loads(line) for line in ledger_path.read_text().splitlines()]
+    checkpoint = {
+        "schema_version": 1, "record_type": "checkpoint",
+        "output_number": 1, "nstep_coarse": 10,
+    }
+    restart = {
+        "schema_version": 1, "record_type": "attempt_begin",
+        "restart_output": 1, "resume_step": 10,
+    }
+    ledger_path.write_text(
+        "".join(json.dumps(row) + "\n" for row in
+                [rows[0], checkpoint, *rows[1:], restart]),
+        encoding="utf-8",
+    )
+    assert read_capture_ledger(ledger_path).events == ()
+    with pytest.raises(ValueError, match="ledger changed after zoom binding"):
+        compare_zoom_resolution_pair(fine, coarse)
+    with pytest.raises(ValueError, match="ledger changed after zoom binding"):
+        accepted_kpc_delay_row(convergence)
+    with pytest.raises(ValueError, match="absent from the active ledger lineage"):
+        _bound_result(fine_path, fine_case, ledger_path)
+
+
+def test_zoom_binding_rejects_result_changed_after_read(tmp_path) -> None:
+    coarse_case, fine_case = build_zoom_grid(_specification()).cases[:2]
+    coarse_path = tmp_path / "coarse.json"
+    fine_path = tmp_path / "fine.json"
+    _write_result(coarse_path, coarse_case)
+    _write_result(fine_path, fine_case)
+    ledger_path = _committed_zoom_capture(tmp_path)
+    fine = _bound_result(fine_path, fine_case, ledger_path)
+    coarse = _bound_result(coarse_path, coarse_case, ledger_path)
+    modified = json.loads(coarse_path.read_text())
+    modified["stages"]["hard_binary"]["elapsed_since_capture_myr"] = 21.0
+    coarse_path.write_text(json.dumps(modified), encoding="utf-8")
+    with pytest.raises(ValueError, match="zoom result changed after capture binding"):
+        compare_zoom_resolution_pair(fine, coarse)
+
+
 @pytest.mark.parametrize("coarse_baseline", [None, 30.0])
 def test_resolution_pair_rejects_missing_or_changed_analytic_baseline(
     tmp_path, coarse_baseline

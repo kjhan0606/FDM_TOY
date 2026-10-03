@@ -28,6 +28,10 @@ requires a native-conservation-verified two-member event whose UID, SMBH
 masses, mass ratio, and separation agree with the zoom capture boundary.
 An unbound UID string, an old bare event, a superseded event, or a MULTIPLE
 event cannot supply a zoom calibration row.
+The comparison and row builder recheck the result-file checksum and the ledger
+file identity recorded at binding. If a later restart changes the active
+ledger lineage, the old binding is rejected and the result must be rebound
+against the current ledger before it can be assessed again.
 
 The result diagnostics must include:
 

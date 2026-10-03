@@ -40,6 +40,14 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _file_signature(path: Path) -> tuple[int, int, int, int]:
+    metadata = path.stat()
+    return (
+        metadata.st_dev, metadata.st_ino,
+        metadata.st_size, metadata.st_mtime_ns,
+    )
+
+
 @dataclass(frozen=True)
 class ZoomPhysicsPoint:
     host_stellar_mass_msun: float
@@ -388,6 +396,8 @@ class ZoomRunResult:
     minimum_transition_radius_cells: float
     integration_time_myr: float
     capture_event_sha256: str | None = None
+    capture_ledger_path: Path | None = None
+    capture_ledger_signature: tuple[int, int, int, int] | None = None
 
     def stage(self, name: str) -> ZoomStageResult:
         return dict(self.stages)[name]
@@ -395,6 +405,7 @@ class ZoomRunResult:
 
 def read_zoom_result(path: str | Path, case: GalaxyMergerZoomCase) -> ZoomRunResult:
     resolved = Path(path).expanduser().resolve()
+    source_before = _file_sha256(resolved)
     record = json.loads(resolved.read_text(encoding="utf-8"))
     if (
         record.get("schema_version") != ZOOM_SCHEMA_VERSION
@@ -485,10 +496,13 @@ def read_zoom_result(path: str | Path, case: GalaxyMergerZoomCase) -> ZoomRunRes
         atol=0.0,
     ):
         raise ValueError("zoom capture separation differs from the manifest initial state")
+    source_after = _file_sha256(resolved)
+    if source_after != source_before:
+        raise ValueError("zoom result changed while it was read")
     return ZoomRunResult(
         case=case,
         source_path=resolved,
-        source_sha256=_file_sha256(resolved),
+        source_sha256=source_after,
         capture_event_uid=str(record["capture_event_uid"]),
         stages=stages,
         analytic_kpc_to_hard_delay_myr=analytic,
@@ -504,7 +518,14 @@ def bind_zoom_result_to_capture_ledger(
 ) -> ZoomRunResult:
     """Bind a zoom result to one active, committed native binary event."""
 
-    ledger = read_capture_ledger(ledger_path)
+    source = Path(ledger_path).expanduser().resolve()
+    if _file_sha256(result.source_path) != result.source_sha256:
+        raise ValueError("zoom result changed before capture binding")
+    before = _file_signature(source)
+    ledger = read_capture_ledger(source)
+    after = _file_signature(source)
+    if before != after:
+        raise ValueError("capture ledger changed during zoom binding")
     matches = [event for event in ledger.events
                if event.event_uid == result.capture_event_uid]
     if len(matches) != 1:
@@ -530,7 +551,24 @@ def bind_zoom_result_to_capture_ledger(
                           rtol=1.0e-10, atol=0.0)
     ):
         raise ValueError("zoom capture state disagrees with the committed ledger event")
-    return replace(result, capture_event_sha256=event.event_sha256)
+    return replace(
+        result, capture_event_sha256=event.event_sha256,
+        capture_ledger_path=source, capture_ledger_signature=after,
+    )
+
+
+def _require_current_zoom_sources(result: ZoomRunResult) -> None:
+    """Reject a restart append or result edit after the verified binding."""
+
+    if result.capture_ledger_path is None or result.capture_ledger_signature is None:
+        raise ValueError("zoom result lacks a verified capture ledger source")
+    try:
+        if _file_signature(result.capture_ledger_path) != result.capture_ledger_signature:
+            raise ValueError("capture ledger changed after zoom binding")
+        if _file_sha256(result.source_path) != result.source_sha256:
+            raise ValueError("zoom result changed after capture binding")
+    except OSError as error:
+        raise ValueError("zoom result or capture ledger source is unavailable") from error
 
 
 @dataclass(frozen=True)
@@ -571,6 +609,8 @@ def compare_zoom_resolution_pair(
         or reference.capture_event_sha256 != comparison.capture_event_sha256
     ):
         raise ValueError("zoom resolution pair lacks one verified ledger capture event")
+    _require_current_zoom_sources(reference)
+    _require_current_zoom_sources(comparison)
     if (
         reference.case.numerics.finest_cell_size_pc
         >= comparison.case.numerics.finest_cell_size_pc
@@ -653,6 +693,8 @@ def _zoom_pair_sha256(
 def accepted_kpc_delay_row(convergence: ZoomConvergenceResult) -> KpcDelayCalibrationRow:
     if convergence.status != "accepted":
         raise ValueError("only accepted zoom convergence results can calibrate delays")
+    _require_current_zoom_sources(convergence.reference)
+    _require_current_zoom_sources(convergence.comparison)
     reference = convergence.reference
     simulated = reference.stage("hard_binary").elapsed_since_capture_myr
     analytic = reference.analytic_kpc_to_hard_delay_myr
