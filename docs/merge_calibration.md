@@ -334,7 +334,10 @@ and `--qe-design-manifest` to `summarize_pyul_convergence.py`; it obtains the
 bin edges and orbit minimum from the bound design instead of accepting
 post-hoc CLI values. A design file and its hashes alone cannot establish
 that it predates the calculations: retain the pre-run Git commit and the
-run's stamped metadata. This path still does not authorize a GPU run or a
+run's stamped metadata. The doubled-box assessor rechecks the design against
+both comparison summaries and their raw run metadata; a registered and an
+unregistered comparison, or two different designs, cannot be combined. This
+path still does not authorize a GPU run or a
 calibration release. The present 128–432 GiB doubled-box estimates require
 an independently reviewed resource/solver design.
 

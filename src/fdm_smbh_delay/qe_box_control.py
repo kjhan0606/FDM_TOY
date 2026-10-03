@@ -13,6 +13,10 @@ from pathlib import Path
 import numpy as np
 
 from .convergence import load_convergence_run, summarize_convergence
+from .qe_followup_design import (
+    read_verified_qe_followup_design,
+    verify_qe_design_comparison_runs,
+)
 from .subgrid_table_builder import (
     CalibrationSource,
     _physical_definition,
@@ -132,6 +136,39 @@ def _check_rate_fractions(bin_row: dict, reference_label: str, comparison_label:
             raise ValueError(f"box-control rate difference is inconsistent: {field}")
 
 
+def _verify_registered_comparison_binding(summary: dict) -> dict | None:
+    binding = summary.get("qe_design_binding")
+    if binding is None:
+        return None
+    if not isinstance(binding, dict) or set(binding) != {
+        "path", "physical_cases_path", "run_manifest_path", "design_sha256",
+        "file_sha256", "comparison_kind", "status",
+    } or binding["status"] != "registered_design_bound_not_a_calibration_release":
+        raise ValueError("q/e registered comparison binding is invalid")
+    design, file_sha256 = read_verified_qe_followup_design(
+        Path(binding["path"]),
+        physical_cases=Path(binding["physical_cases_path"]),
+        run_manifest=Path(binding["run_manifest_path"]),
+    )
+    if (file_sha256 != binding["file_sha256"]
+            or design["design_sha256"] != binding["design_sha256"]
+            or summary["matched_separation"]["separation_bin_edges_pc"]
+            != design["separation_bin_edges_pc"]
+            or summary["matched_separation"]["minimum_complete_orbits_per_run_per_bin"]
+            != design["minimum_orbits_per_bin"]):
+        raise ValueError("q/e registered comparison differs from its fixed design")
+    rows = summary["runs"]
+    if rows[0]["label"] != summary["reference_label"]:
+        raise ValueError("q/e registered reference label is out of order")
+    kind = verify_qe_design_comparison_runs(
+        design, file_sha256,
+        tuple(Path(row["run"]).expanduser().resolve() for row in rows),
+    )
+    if kind != binding["comparison_kind"]:
+        raise ValueError("q/e registered comparison kind differs from run roles")
+    return binding
+
+
 def verify_fixed_comparison_summary(path: Path) -> dict:
     """Recompute a fixed-bin comparison from bounded named raw diagnostics."""
 
@@ -177,6 +214,9 @@ def verify_fixed_comparison_summary(path: Path) -> dict:
         ),
         separation_bin_edges_pc=tuple(matched["separation_bin_edges_pc"]),
     )
+    binding = _verify_registered_comparison_binding(saved)
+    if binding is not None:
+        recomputed["qe_design_binding"] = binding
     if recomputed != saved:
         raise ValueError(f"box-control comparison is not reproducible from raw diagnostics: {path}")
     for row, loaded_run in zip(source_inputs, loaded, strict=True):
@@ -202,6 +242,19 @@ def assess_qe_box_control(
     box_path = doubled_box.convergence_summary.expanduser().resolve()
     pair = _read(pair_path)
     box = _read(box_path)
+    pair_binding = pair.get("qe_design_binding")
+    box_binding = box.get("qe_design_binding")
+    if (pair_binding is None) != (box_binding is None):
+        raise ValueError("q/e controls mix registered and unregistered designs")
+    if pair_binding is not None:
+        if (not isinstance(pair_binding, dict) or not isinstance(box_binding, dict)
+                or pair_binding.get("comparison_kind") != "resolution_pair"
+                or box_binding.get("comparison_kind") != "doubled_box"
+                or any(pair_binding.get(field) != box_binding.get(field)
+                       for field in ("path", "physical_cases_path",
+                                     "run_manifest_path", "design_sha256",
+                                     "file_sha256"))):
+            raise ValueError("q/e controls use different registered designs")
     raw_verification = None
     if verify_raw:
         raw_verification = {
@@ -287,6 +340,7 @@ def assess_qe_box_control(
         "bin_decisions": decisions,
         "raw_diagnostics_verified": verify_raw,
         "raw_verification": raw_verification,
+        "qe_design_binding": pair_binding,
         "production_calibration_row_admitted": False,
     }
 

@@ -162,14 +162,18 @@ def test_design_comparison_requires_both_bound_roles(tmp_path: Path) -> None:
             },
         }), encoding="utf-8")
     assert verify_qe_design_comparison_runs(
-        design, digest, (tmp_path / "coarse", tmp_path / "fine")
+        design, digest, (tmp_path / "fine", tmp_path / "coarse")
     ) == "resolution_pair"
     assert verify_qe_design_comparison_runs(
-        design, digest, (tmp_path / "fine", tmp_path / "doubled_box_control")
+        design, digest, (tmp_path / "doubled_box_control", tmp_path / "fine")
     ) == "doubled_box"
-    with pytest.raises(ValueError, match="registered resolution or box pair"):
+    with pytest.raises(ValueError, match="registered reference and comparison roles"):
         verify_qe_design_comparison_runs(
             design, digest, (tmp_path / "coarse", tmp_path / "doubled_box_control")
+        )
+    with pytest.raises(ValueError, match="registered reference and comparison roles"):
+        verify_qe_design_comparison_runs(
+            design, digest, (tmp_path / "coarse", tmp_path / "fine")
         )
     metadata_path = tmp_path / "fine" / "fdm_adapter_metadata.json"
     metadata = json.loads(metadata_path.read_text())
@@ -177,7 +181,7 @@ def test_design_comparison_requires_both_bound_roles(tmp_path: Path) -> None:
     metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
     with pytest.raises(ValueError, match="lacks the registered design binding"):
         verify_qe_design_comparison_runs(
-            design, digest, (tmp_path / "coarse", tmp_path / "fine")
+            design, digest, (tmp_path / "fine", tmp_path / "coarse")
         )
 
 
@@ -214,7 +218,7 @@ def test_registered_comparison_uses_only_bound_edges_and_refuses_overwrite(
     output = tmp_path / "comparison.json"
     arguments = [
         "summarize_pyul_convergence.py",
-        f"n256={tmp_path / 'coarse'}", f"n512={tmp_path / 'fine'}",
+        f"n512={tmp_path / 'fine'}", f"n256={tmp_path / 'coarse'}",
         "--qe-design", str(source), "--qe-design-cases", str(cases),
         "--qe-design-manifest", str(manifest), "--output", str(output),
     ]

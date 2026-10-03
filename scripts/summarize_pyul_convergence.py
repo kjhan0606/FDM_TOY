@@ -80,6 +80,9 @@ def main() -> int:
         bins = len(edges) - 1
         minimum_orbits = design["minimum_orbits_per_bin"]
         design_binding = {
+            "path": str(args.qe_design.expanduser().resolve()),
+            "physical_cases_path": str(args.qe_design_cases.expanduser().resolve()),
+            "run_manifest_path": str(args.qe_design_manifest.expanduser().resolve()),
             "design_sha256": design["design_sha256"],
             "file_sha256": file_sha256,
             "comparison_kind": kind,

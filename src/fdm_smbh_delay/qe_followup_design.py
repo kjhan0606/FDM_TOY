@@ -241,8 +241,8 @@ def verify_qe_design_comparison_runs(
             duration_myr=metadata["duration_myr"],
         )
         roles.append(role)
-    if len(set(runs)) != 2 or set(roles) not in (
-        {"coarse", "fine"}, {"fine", "doubled_box_control"}
+    if len(set(runs)) != 2 or roles not in (
+        ["fine", "coarse"], ["doubled_box_control", "fine"]
     ):
-        raise ValueError("q/e comparison must use one registered resolution or box pair")
-    return "resolution_pair" if set(roles) == {"coarse", "fine"} else "doubled_box"
+        raise ValueError("q/e comparison must use the registered reference and comparison roles")
+    return "resolution_pair" if roles == ["fine", "coarse"] else "doubled_box"

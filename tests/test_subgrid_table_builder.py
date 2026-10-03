@@ -591,6 +591,28 @@ def test_qe_box_control_rejects_mismatched_fixed_edges(tmp_path: Path) -> None:
         )
 
 
+def test_qe_box_control_rejects_mixed_design_binding(tmp_path: Path) -> None:
+    pair_path, box_path = _write_qe_box_pair(tmp_path)
+    pair = json.loads(pair_path.read_text())
+    pair["qe_design_binding"] = {
+        "comparison_kind": "resolution_pair", "design_sha256": "a" * 64,
+    }
+    pair_path.write_text(json.dumps(pair))
+    with pytest.raises(ValueError, match="mix registered and unregistered"):
+        assess_qe_box_control(
+            CalibrationSource("test", pair_path), CalibrationSource("test", box_path)
+        )
+    box = json.loads(box_path.read_text())
+    box["qe_design_binding"] = {
+        "comparison_kind": "doubled_box", "design_sha256": "b" * 64,
+    }
+    box_path.write_text(json.dumps(box))
+    with pytest.raises(ValueError, match="different registered designs"):
+        assess_qe_box_control(
+            CalibrationSource("test", pair_path), CalibrationSource("test", box_path)
+        )
+
+
 def test_qe_box_control_rejects_inconsistent_shared_run(tmp_path: Path) -> None:
     pair, box_path = _write_qe_box_pair(tmp_path)
     box = json.loads(box_path.read_text())

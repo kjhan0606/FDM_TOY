@@ -1,5 +1,6 @@
 import json
 import argparse
+import hashlib
 from pathlib import Path
 
 import numpy as np
@@ -12,6 +13,7 @@ from fdm_smbh_delay.convergence import (
 )
 from scripts.summarize_pyul_convergence import _parse_edges
 from fdm_smbh_delay.qe_box_control import verify_fixed_comparison_summary
+from fdm_smbh_delay.qe_followup_design import build_qe_followup_design
 
 
 def _write_run(path: Path, *, scale: float, time_step_factor: float) -> None:
@@ -333,6 +335,79 @@ def test_fixed_comparison_is_recomputed_from_raw_diagnostics(
     metadata["time_step_factor"] = 1.1
     metadata_path.write_text(json.dumps(metadata))
     with pytest.raises(ValueError, match="not reproducible from raw diagnostics"):
+        verify_fixed_comparison_summary(path)
+
+
+def test_registered_fixed_comparison_recomputes_and_rechecks_design(
+    tmp_path: Path,
+) -> None:
+    cases = tmp_path / "cases.csv"
+    cases.write_text(
+        "case_id,mass_ratio_q,eccentricity,initial_separation_pc,core_radius_pc,"
+        "kepler_period_myr\nqe_test,1.0,0.0,0.9,2.2,0.001\n"
+    )
+    manifest = tmp_path / "manifest.csv"
+    manifest.write_text(
+        "case_id,run_id,effective_grid_cells,box_size_pc,finest_cell_size_pc\n"
+        "qe_test,qe_test_n128,128,32,0.25\n"
+        "qe_test,qe_test_n256,256,32,0.125\n"
+    )
+    design = build_qe_followup_design(
+        case_id="qe_test", physical_cases=cases, run_manifest=manifest,
+        coarse_resolution=128, fine_resolution=256,
+        separation_bin_edges_pc=(0.88, 0.98), duration_myr=0.02,
+    )
+    design_path = tmp_path / "design.json"
+    design_path.write_text(json.dumps(design))
+    design_file_sha256 = hashlib.sha256(design_path.read_bytes()).hexdigest()
+    runs = []
+    for role, resolution, cell_size in (
+        ("fine", 256, 0.125), ("coarse", 128, 0.25)
+    ):
+        run = tmp_path / role
+        _write_run(run, scale=1.0, time_step_factor=1.0)
+        metadata_path = run / "fdm_adapter_metadata.json"
+        metadata = json.loads(metadata_path.read_text())
+        metadata.update({
+            "case_id": "qe_test", "resolution": resolution,
+            "cell_size_pc": cell_size, "box_size_pc": 32.0,
+            "duration_myr": 0.02,
+            "qe_design_binding": {
+                "status": "qe_prospective_design_bound_not_a_calibration_release",
+                "design_sha256": design["design_sha256"],
+                "file_sha256": design_file_sha256, "role": role,
+            },
+        })
+        metadata_path.write_text(json.dumps(metadata))
+        (run / "wave_response_timeseries.csv").write_text(
+            "time_myr,measured_half_density_radius_pc\n0,1\n1,1\n"
+        )
+        (run / "torch_run_summary.json").write_text(
+            json.dumps({"status": "complete", "run": str(run)})
+        )
+        (run / "wave_response_summary.json").write_text(
+            json.dumps({"status": "diagnosed", "run": str(run)})
+        )
+        runs.append(load_convergence_run(f"n{resolution}", run))
+    summary = summarize_convergence(
+        runs, separation_bins=1, minimum_orbits_per_separation_bin=8,
+        separation_bin_edges_pc=(0.88, 0.98),
+    )
+    binding = {
+        "path": str(design_path), "physical_cases_path": str(cases),
+        "run_manifest_path": str(manifest),
+        "design_sha256": design["design_sha256"],
+        "file_sha256": design_file_sha256,
+        "comparison_kind": "resolution_pair",
+        "status": "registered_design_bound_not_a_calibration_release",
+    }
+    summary["qe_design_binding"] = binding
+    path = tmp_path / "registered-comparison.json"
+    path.write_text(json.dumps(summary))
+    assert len(verify_fixed_comparison_summary(path)["raw_inputs"]) == 2
+    summary["qe_design_binding"]["design_sha256"] = "0" * 64
+    path.write_text(json.dumps(summary))
+    with pytest.raises(ValueError, match="differs from its fixed design"):
         verify_fixed_comparison_summary(path)
 
 
