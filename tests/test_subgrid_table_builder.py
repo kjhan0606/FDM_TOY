@@ -12,6 +12,10 @@ import numpy as np
 import pytest
 
 from fdm_smbh_delay.exchange_scaling import exchange_scales
+from fdm_smbh_delay.binary_evolution import (
+    MeanSeparationEstimate,
+    calibrated_qe_fdm_rate_provider,
+)
 from fdm_smbh_delay.subgrid_calibration import (
     SubgridCalibrationTable,
     advance_calibrated_exchange,
@@ -966,6 +970,23 @@ def test_qe_release_requires_registered_design_and_verifies_box_provenance(
     loaded = SubgridCalibrationTable.from_release(output)
     assert len(loaded.rows) == 1
     assert loaded.rows[0].source_case_id == "qe_test"
+    assert loaded.release_schema_version == 5
+    assert loaded.release_table_sha256 == summary["table"]["sha256"]
+    provider = calibrated_qe_fdm_rate_provider(
+        loaded,
+        profile_id="test",
+        mass1_msun=2.0e7,
+        mass2_msun=2.0e7,
+        soliton_mass_msun=1.0e9,
+        core_radius_pc=2.0,
+        particle_mass_ev=1.0e-21,
+        mean_separation_provider=lambda _a, _e: MeanSeparationEstimate(
+            0.6, 0.6, 0.6, "synthetic-test-only",
+        ),
+    )
+    assert provider(0.6, 0.23).calibration_id.startswith(
+        f"v5:test:table={summary['table']['sha256']}:"
+    )
     with pytest.raises(FileExistsError, match="already exists"):
         write_qe_calibration_table(controls, output=output)
 

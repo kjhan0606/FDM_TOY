@@ -605,6 +605,8 @@ class SubgridCalibrationTable:
 
     def __init__(self, rows: Iterable[SubgridCalibrationRow]) -> None:
         self.rows = tuple(rows)
+        self.release_schema_version: int | None = None
+        self.release_table_sha256: str | None = None
         if not self.rows:
             raise ValueError("a subgrid calibration table cannot be empty")
         keys = [
@@ -1014,6 +1016,8 @@ class SubgridCalibrationTable:
         domains = summary.get("calibrated_domains")
         if domains != expected_domains:
             raise ValueError("subgrid release calibrated domains do not match")
+        table.release_schema_version = schema_version
+        table.release_table_sha256 = expected_sha256
         return table
 
     def _mass_plane(

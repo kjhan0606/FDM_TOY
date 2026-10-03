@@ -216,7 +216,7 @@ def calibrated_qe_fdm_rate_provider(
     particle_mass_ev: float,
     mean_separation_provider: MeanSeparationProvider | None = None,
 ) -> FDMRateProvider:
-    """Adapt an accepted schema-v4 table without q, e, or a extrapolation.
+    """Adapt an accepted q/e table without q, e, or a extrapolation.
 
     The table admits interpolation only when measured ``(q, e)`` planes
     bracket the state and share mass/separation support. Its separation bins
@@ -308,8 +308,14 @@ def calibrated_qe_fdm_rate_provider(
         except (TypeError, ValueError) as error:
             raise UncalibratedBinaryState(str(error)) from error
         dimensionless = rates.dimensionless
-        calibration_id = (
-            f"v4:{profile_id}:"
+        release_identity = (
+            f"v5:{profile_id}:table={table.release_table_sha256}:"
+            if isinstance(table, SubgridCalibrationTable)
+            and table.release_schema_version == 5
+            and table.release_table_sha256 is not None
+            else f"v4:{profile_id}:"
+        )
+        calibration_id = release_identity + (
             f"eta={dimensionless.schrodinger_poisson_similarity_parameter:.12g}:"
             f"q={dimensionless.mass_ratio_q:.12g}:"
             f"e={dimensionless.reference_eccentricity:.12g}:"

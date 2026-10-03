@@ -350,6 +350,9 @@ that temporal provenance must be audited from the pre-run Git commit and
 stamped run metadata. Nor does a rate-table release validate the distinct
 `(a,e) -> <r>` runtime mapping; absent that mapping, the bound-binary
 consumer remains uncalibrated/censored.
+A loaded version-5 rate table carries its CSV SHA-256 into every runtime
+calibration ID, alongside the mapping ID. A mapping ID alone is provenance,
+not proof that the mapping passed the independent coordinate-support gate.
 When all required measurements exist, request a new release path with
 `python scripts/build_qe_subgrid_calibration_table.py --control
 PROFILE=PAIR.json,BOX.json --output NEW_TABLE.csv`. This command never starts
