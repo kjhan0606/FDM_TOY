@@ -42,4 +42,5 @@ srun /home/kjhan/miniconda3/bin/python scripts/run_guarded_qe_plan.py \
   --log-root /gpfs/kjhan/FDM_TOY_RESULTS/qe_followup_q100e000_v1/logs \
   --gpu-index 0 \
   --run-id qe_q100_e000_a020_n384 \
+  --expected-stage seed \
   --maximum-gpu-stages 1
