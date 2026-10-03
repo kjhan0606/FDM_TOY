@@ -378,6 +378,36 @@ def test_writer_is_loadable_by_the_runtime_table(tmp_path: Path) -> None:
     assert loaded.rows[0].reference_eccentricity == pytest.approx(0.23)
 
 
+def test_qe_candidate_cannot_be_released_without_doubled_box_control(
+    tmp_path: Path,
+) -> None:
+    path = _write_summary(tmp_path)
+    for name in ("n512", "n384"):
+        metadata_path = tmp_path / name / "fdm_adapter_metadata.json"
+        metadata = json.loads(metadata_path.read_text())
+        metadata["case_id"] = "qe_test"
+        metadata_path.write_text(json.dumps(metadata))
+    output = tmp_path / "subgrid.csv"
+    with pytest.raises(ValueError, match="verified doubled-box control"):
+        write_calibration_table([CalibrationSource("test", path)], output=output)
+    assert not output.exists()
+    assert not output.with_suffix(".summary.json").exists()
+
+
+def test_release_loader_rejects_qe_source_without_doubled_box_control(
+    tmp_path: Path,
+) -> None:
+    path = _write_summary(tmp_path)
+    output = tmp_path / "subgrid.csv"
+    write_calibration_table([CalibrationSource("boey2025", path)], output=output)
+    summary_path = output.with_suffix(".summary.json")
+    summary = json.loads(summary_path.read_text())
+    summary["sources"][0]["source_case_id"] = "qe_test"
+    summary_path.write_text(json.dumps(summary))
+    with pytest.raises(ValueError, match="verified doubled-box control"):
+        SubgridCalibrationTable.from_release(output)
+
+
 def test_generated_release_drives_a_conservative_residual_update(
     tmp_path: Path,
 ) -> None:

@@ -26,6 +26,12 @@ from .orbital_exchange import (
 ACCEPTED_STATUS = "accepted_with_spatial_systematic"
 ACCEPTED_TABLE_STATUS = "accepted_subgrid_calibration_table"
 SUBGRID_CALIBRATION_SCHEMA_VERSION = 4
+
+
+def is_qe_extension_case(case_id: str) -> bool:
+    """Identify sparse q/e campaign cases pending doubled-box validation."""
+
+    return case_id.startswith("qe_")
 MAXIMUM_ACCEPTED_SPATIAL_SYSTEMATIC_FRACTION = 0.20
 MAXIMUM_ACCEPTED_ENERGY_ERROR_OVER_TRANSFER = 0.01
 # Eccentricity is an explicit interpolation axis, so a resolution pair must
@@ -699,6 +705,10 @@ class SubgridCalibrationTable:
                 "subgrid release row exceeds the recorded eccentricity "
                 "acceptance criterion"
             )
+        if any(is_qe_extension_case(row.source_case_id) for row in table.rows):
+            raise ValueError(
+                "q/e extension release requires verified doubled-box control"
+            )
         sources = summary.get("sources")
         if not isinstance(sources, list) or not sources:
             raise ValueError("subgrid release provenance sources are absent")
@@ -706,6 +716,10 @@ class SubgridCalibrationTable:
         for source in sources:
             if not isinstance(source, dict):
                 raise ValueError("subgrid release provenance source is invalid")
+            if is_qe_extension_case(str(source.get("source_case_id", ""))):
+                raise ValueError(
+                    "q/e extension release requires verified doubled-box control"
+                )
             source_sha256 = source.get("source_sha256")
             source_rows = source.get("accepted_bins")
             input_files = source.get("inputs")

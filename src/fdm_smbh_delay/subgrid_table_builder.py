@@ -25,6 +25,7 @@ from .subgrid_calibration import (
     MINIMUM_ACCEPTED_SEPARATION_OVER_PLUMMER_RADIUS,
     SUBGRID_CALIBRATION_SCHEMA_VERSION,
     SubgridCalibrationRow,
+    is_qe_extension_case,
     summarize_calibrated_domains,
 )
 
@@ -559,6 +560,10 @@ def write_calibration_table(
         )
         for source in sources
     ]
+    if any(is_qe_extension_case(result.source_case_id) for result in results):
+        raise ValueError(
+            "q/e extension release requires verified doubled-box control"
+        )
     rows = sorted(
         (row for result in results for row in result.accepted_rows),
         key=lambda row: (
