@@ -5,14 +5,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
+import tempfile
 
 from fdm_smbh_delay.convergence import load_convergence_run
 from scripts.audit_qe_bin_occupancy import pair_occupancy
 from scripts.reassess_qe_extension import (
     _require_complete,
     _sha256,
-    _write_json,
     all_adjacent_pairs,
 )
 
@@ -76,6 +77,26 @@ def audit_adjacent_pilot(
     }
 
 
+def _write_new_report(output: Path, result: dict) -> None:
+    """Publish a complete audit without replacing an existing result."""
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", dir=output.parent, delete=False
+        ) as stream:
+            json.dump(result, stream, indent=2, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+            temporary = Path(stream.name)
+        os.link(temporary, output)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", type=Path, required=True)
@@ -96,8 +117,7 @@ def main() -> None:
         output = args.output.expanduser().resolve()
         if output.exists():
             raise FileExistsError(f"refusing existing adjacent-pilot audit: {output}")
-        output.parent.mkdir(parents=True, exist_ok=True)
-        _write_json(output, result)
+        _write_new_report(output, result)
 
 
 if __name__ == "__main__":

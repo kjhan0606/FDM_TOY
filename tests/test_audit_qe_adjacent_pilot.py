@@ -63,3 +63,14 @@ def test_adjacent_pilot_audit_rejects_changed_input(
     monkeypatch.setattr(audit, "pair_occupancy", lambda fine, coarse, **kwargs: {})
     with pytest.raises(ValueError, match="input changed"):
         audit.audit_adjacent_pilot(manifest, tmp_path / "torch")
+
+
+def test_adjacent_pilot_report_refuses_to_replace_existing_file(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "audit.json"
+    audit._write_new_report(path, {"status": "first"})
+    with pytest.raises(FileExistsError):
+        audit._write_new_report(path, {"status": "second"})
+    assert path.read_text().count("first") == 1
+    assert "second" not in path.read_text()
