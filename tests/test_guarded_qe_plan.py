@@ -172,6 +172,7 @@ def _runner(
     wait_until_gpu_empty: bool = False,
     gpu_empty_timeout_seconds: float | None = None,
     maximum_gpu_stages: int | None = None,
+    expected_stage: str | None = None,
     sleep=None,
     monotonic=None,
 ) -> GuardedQeRunner:
@@ -191,6 +192,7 @@ def _runner(
         wait_until_gpu_empty=wait_until_gpu_empty,
         gpu_empty_timeout_seconds=gpu_empty_timeout_seconds,
         maximum_gpu_stages=maximum_gpu_stages,
+        expected_stage=expected_stage,
         plan_builder=_builder(tmp_path, states, resolutions),
         monitor_factory=(
             (lambda _index: FakeMonitor())
@@ -249,6 +251,30 @@ def test_guarded_runner_forwards_registered_design_to_planner(tmp_path: Path) ->
     assert received[0][1]["selected_run_ids"] is None
     runner._plan({"one_run"})
     assert received[-1][1]["selected_run_ids"] == {"one_run"}
+
+
+def test_expected_stage_prevents_seed_retry_from_starting_torch(tmp_path: Path) -> None:
+    run_id = "case_n256"
+    states = {run_id: _state(seed=True)}
+    child = FakePopenFactory(states)
+    runner = _runner(
+        tmp_path, states, popen_factory=child,
+        maximum_gpu_stages=1, expected_stage="seed",
+    )
+    assert runner.run({run_id}) == EX_CONFIG
+    assert child.calls == []
+
+
+def test_expected_torch_stage_requires_seed_first(tmp_path: Path) -> None:
+    run_id = "case_n256"
+    states = {run_id: _state()}
+    child = FakePopenFactory(states)
+    runner = _runner(
+        tmp_path, states, popen_factory=child,
+        maximum_gpu_stages=1, expected_stage="torch",
+    )
+    assert runner.run({run_id}) == EX_CONFIG
+    assert child.calls == []
 
 
 def test_registered_followup_is_plannable_without_launch(tmp_path: Path) -> None:

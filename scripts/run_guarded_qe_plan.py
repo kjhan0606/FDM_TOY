@@ -235,6 +235,7 @@ class GuardedQeRunner:
         wait_until_gpu_empty: bool = False,
         gpu_empty_timeout_seconds: float | None = None,
         maximum_gpu_stages: int | None = None,
+        expected_stage: str | None = None,
         plan_builder: Callable[..., list[RunPlanRow]] = build_plan,
         monitor_factory: Callable[[int], GpuMonitor] = NvmlGpuMonitor,
         popen_factory: Callable[..., subprocess.Popen] = subprocess.Popen,
@@ -254,6 +255,9 @@ class GuardedQeRunner:
         if maximum_gpu_stages is not None and maximum_gpu_stages < 1:
             raise ValueError("maximum_gpu_stages must be positive")
         self.maximum_gpu_stages = maximum_gpu_stages
+        if expected_stage is not None and expected_stage not in GPU_STAGES:
+            raise ValueError("expected GPU stage must be seed or torch")
+        self.expected_stage = expected_stage
         self.plan_builder = plan_builder
         self.monitor_factory = monitor_factory
         self.popen_factory = popen_factory
@@ -664,6 +668,12 @@ class GuardedQeRunner:
                 if not pending_gpu:
                     break
                 stage, command = pending_gpu[0]
+                if self.expected_stage is not None and stage != self.expected_stage:
+                    print(
+                        f"{row.run_id}: expected {self.expected_stage}, next stage is {stage}",
+                        file=sys.stderr, flush=True,
+                    )
+                    return EX_CONFIG
                 status = self._execute_stage(row, stage, command)
                 if status != 0:
                     return status
@@ -706,6 +716,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gpu-index", type=int, default=0)
     parser.add_argument("--run-id", action="append", dest="run_ids")
     parser.add_argument("--maximum-gpu-stages", type=int)
+    parser.add_argument("--expected-stage", choices=sorted(GPU_STAGES))
     parser.add_argument("--poll-seconds", type=float, default=10.0)
     parser.add_argument("--interrupt-grace-seconds", type=float, default=30.0)
     parser.add_argument("--marker-timeout-seconds", type=float, default=60.0)
@@ -836,6 +847,7 @@ def main() -> int:
             wait_until_gpu_empty=arguments.wait_until_gpu_empty,
             gpu_empty_timeout_seconds=arguments.gpu_empty_timeout_seconds,
             maximum_gpu_stages=arguments.maximum_gpu_stages,
+            expected_stage=arguments.expected_stage,
         )
         return runner.run(None if arguments.run_ids is None else set(arguments.run_ids))
     finally:
