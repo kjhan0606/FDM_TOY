@@ -19,6 +19,7 @@ from fdm_smbh_delay.qe_followup_design import (
     verify_qe_design_run_request,
 )
 from fdm_smbh_delay.torch_wave import (
+    apply_kinetic_phase_in_place,
     advance_binary_rk4_patched,
     periodic_poisson_torch,
     plummer_potential_torch,
@@ -320,6 +321,7 @@ def main() -> int:
             "saved_3d_states": len(wave_indices),
             "actual_wave_steps": actual_steps,
             "wave_time_step_code": time_step,
+            "kinetic_phase_layout": "separable_axis_v1",
             "checkpoint_every_saved_intervals": args.checkpoint_every_saves,
             "wave_acceleration_during_particle_rk4": (
                 "interpolated_from_a_local_potential_patch_at_each_rk4_stage"
@@ -341,8 +343,9 @@ def main() -> int:
             "save_number",
             "actual_wave_steps",
             "wave_time_step_code",
+            "kinetic_phase_layout",
         ):
-            if saved_metadata[key] != metadata[key]:
+            if saved_metadata.get(key) != metadata[key]:
                 raise ValueError(f"restart request changes {key}")
         if saved_metadata.get("qe_design_binding") != metadata.get("qe_design_binding"):
             raise ValueError("restart request changes q/e design binding")
@@ -422,7 +425,7 @@ def main() -> int:
             density=density,
             wave_potential=wave_potential,
             compact_potential=compact_potential,
-            kinetic_wavenumber_squared=grid.kinetic_wavenumber_squared,
+            kinetic_axis_wavenumber_squared=grid.kinetic_axis_wavenumber_squared,
             cell_volume=grid.cell_volume,
         )
         point_potential, _ = sample_potential_and_acceleration(
@@ -464,7 +467,7 @@ def main() -> int:
         wavefunction.mul_(half_phase)
         del half_phase
         wavefunction_k = torch.fft.fftn(wavefunction)
-        wavefunction_k.mul_(grid.kinetic_phase)
+        apply_kinetic_phase_in_place(wavefunction_k, grid.kinetic_axis_phase)
         wavefunction = torch.fft.ifftn(wavefunction_k)
         del wavefunction_k
         density = wavefunction.abs().square()

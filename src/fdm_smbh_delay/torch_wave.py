@@ -24,8 +24,8 @@ except ImportError as error:  # pragma: no cover - exercised without GPU extras
 @dataclass(frozen=True)
 class SpectralGrid:
     coordinate: torch.Tensor
-    kinetic_phase: torch.Tensor
-    kinetic_wavenumber_squared: torch.Tensor
+    kinetic_axis_phase: torch.Tensor
+    kinetic_axis_wavenumber_squared: torch.Tensor
     poisson_inverse_wavenumber_squared: torch.Tensor
     cell_size: float
     cell_volume: float
@@ -57,11 +57,7 @@ def spectral_grid(
     wave_number_real = 2.0 * torch.pi * torch.fft.rfftfreq(
         resolution, d=cell_size, dtype=real_dtype, device=device
     )
-    k_squared = (
-        wave_number[:, None, None].square()
-        + wave_number[None, :, None].square()
-        + wave_number[None, None, :].square()
-    )
+    axis_k_squared = wave_number.square()
     poisson_k_squared = (
         wave_number[:, None, None].square()
         + wave_number[None, :, None].square()
@@ -70,17 +66,36 @@ def spectral_grid(
     poisson_inverse = torch.zeros_like(poisson_k_squared)
     nonzero = poisson_k_squared > 0.0
     poisson_inverse[nonzero] = 1.0 / poisson_k_squared[nonzero]
-    kinetic_phase = torch.polar(
-        torch.ones_like(k_squared), -0.5 * time_step * k_squared
+    axis_phase = torch.polar(
+        torch.ones_like(axis_k_squared), -0.5 * time_step * axis_k_squared
     )
     return SpectralGrid(
         coordinate=coordinate,
-        kinetic_phase=kinetic_phase,
-        kinetic_wavenumber_squared=k_squared,
+        kinetic_axis_phase=axis_phase,
+        kinetic_axis_wavenumber_squared=axis_k_squared,
         poisson_inverse_wavenumber_squared=poisson_inverse,
         cell_size=cell_size,
         cell_volume=cell_size**3,
     )
+
+
+def apply_kinetic_phase_in_place(
+    wavefunction_k: torch.Tensor, axis_phase: torch.Tensor
+) -> None:
+    """Apply the exact separable FFT drift without a cubic phase allocation."""
+
+    if (
+        wavefunction_k.ndim != 3
+        or len(set(wavefunction_k.shape)) != 1
+        or axis_phase.ndim != 1
+        or axis_phase.numel() != wavefunction_k.shape[0]
+        or axis_phase.device != wavefunction_k.device
+        or axis_phase.dtype != wavefunction_k.dtype
+    ):
+        raise ValueError("FFT drift field and axis phase are incompatible")
+    wavefunction_k.mul_(axis_phase[:, None, None])
+    wavefunction_k.mul_(axis_phase[None, :, None])
+    wavefunction_k.mul_(axis_phase[None, None, :])
 
 
 def periodic_poisson_torch(
@@ -413,18 +428,31 @@ def wave_energy_components(
     density: torch.Tensor,
     wave_potential: torch.Tensor,
     compact_potential: torch.Tensor,
-    kinetic_wavenumber_squared: torch.Tensor,
+    kinetic_axis_wavenumber_squared: torch.Tensor,
     cell_volume: float,
 ) -> tuple[float, float, float, float]:
     """Return kinetic, self-gravity, compact-interaction energy, and mass."""
 
+    if (
+        wavefunction.ndim != 3
+        or len(set(wavefunction.shape)) != 1
+        or kinetic_axis_wavenumber_squared.shape != (wavefunction.shape[0],)
+        or kinetic_axis_wavenumber_squared.device != wavefunction.device
+    ):
+        raise ValueError("wave kinetic axis and cubic field are incompatible")
     wavefunction_k = torch.fft.fftn(wavefunction)
     cells = wavefunction.numel()
+    spectral_power = wavefunction_k.abs().square()
+    marginal_power = (
+        spectral_power.sum(dim=(1, 2))
+        + spectral_power.sum(dim=(0, 2))
+        + spectral_power.sum(dim=(0, 1))
+    )
     kinetic = (
         0.5
         * cell_volume
         / cells
-        * torch.sum(kinetic_wavenumber_squared * wavefunction_k.abs().square())
+        * torch.sum(kinetic_axis_wavenumber_squared * marginal_power)
     )
     self_gravity = 0.5 * cell_volume * torch.sum(wave_potential * density)
     interaction = cell_volume * torch.sum(compact_potential * density)
