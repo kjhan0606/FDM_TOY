@@ -155,6 +155,7 @@ def main() -> int:
             design, case_id=args.case_id, role=args.qe_design_role,
             resolution=args.resolution, box_size_pc=box_size,
             duration_myr=duration,
+            initial_state_only=True,
         )
         design_binding = {
             "status": "qe_prospective_design_bound_not_a_calibration_release",

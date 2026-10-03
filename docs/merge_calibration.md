@@ -349,8 +349,10 @@ ready-to-run command. The writer refuses overwrite and hashes the exact
 physical-case and run-manifest CSVs. Commit the design before launching new
 calculations. The PyUL seed runner accepts `--qe-design`,
 `--qe-design-manifest`, and `--qe-design-role` (`coarse`, `fine`, or
-`doubled_box_control`); it refuses mismatched geometry or a shorter-than-plan
-duration and stamps the verified design identity into the seed metadata.
+`doubled_box_control`); it refuses mismatched geometry and stamps the verified
+design identity into the seed metadata. The short PyUL initial-state seed is
+not required to cover the planned orbit budget; the Torch evolution is, and
+is rejected if its requested duration is shorter than the registered plan.
 The Torch runner re-verifies that binding before evolving the wave, including
 on restart. For a new comparison, pass `--qe-design`, `--qe-design-cases`,
 and `--qe-design-manifest` to `summarize_pyul_convergence.py`; it obtains the

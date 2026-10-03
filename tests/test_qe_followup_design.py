@@ -121,6 +121,20 @@ def test_design_run_binding_rejects_changed_role_geometry_or_duration(tmp_path: 
         design, case_id="qe_test", role="fine", resolution=512,
         box_size_pc=26.4, duration_myr=0.02,
     )
+    verify_qe_design_run_request(
+        design, case_id="qe_test", role="fine", resolution=512,
+        box_size_pc=26.4, duration_myr=1e-6, initial_state_only=True,
+    )
+    with pytest.raises(ValueError, match="run request disagrees"):
+        verify_qe_design_run_request(
+            design, case_id="qe_test", role="fine", resolution=512,
+            box_size_pc=26.4, duration_myr=1e-6,
+        )
+    with pytest.raises(ValueError, match="run request disagrees"):
+        verify_qe_design_run_request(
+            design, case_id="qe_test", role="fine", resolution=512,
+            box_size_pc=26.4, duration_myr=0.0, initial_state_only=True,
+        )
     with pytest.raises(ValueError, match="exceeds the declared GPU memory"):
         verify_qe_design_run_request(
             design, case_id="qe_test", role="doubled_box_control", resolution=1024,

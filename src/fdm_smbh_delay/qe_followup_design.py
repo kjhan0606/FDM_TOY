@@ -189,8 +189,9 @@ def verify_qe_design_run_request(
     resolution: int,
     box_size_pc: float,
     duration_myr: float,
+    initial_state_only: bool = False,
 ) -> None:
-    """Prevent a labelled run from silently changing the registered design."""
+    """Bind run geometry; apply the orbit budget to evolution, not seed setup."""
 
     roles = {
         "coarse": design["resolution_pair"]["coarse"],
@@ -216,7 +217,8 @@ def verify_qe_design_run_request(
         or not math.isclose(box_size_pc, expected["box_size_pc"],
                             rel_tol=1.0e-12, abs_tol=0.0)
         or not math.isfinite(duration_myr)
-        or duration_myr < design["planned_duration_myr"]
+        or duration_myr <= 0.0
+        or (not initial_state_only and duration_myr < design["planned_duration_myr"])
     ):
         raise ValueError("q/e run request disagrees with the prospective design")
 
