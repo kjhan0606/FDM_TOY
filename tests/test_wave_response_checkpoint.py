@@ -15,6 +15,16 @@ _SPEC.loader.exec_module(_MODULE)
 _resume_rows = _MODULE._resume_rows
 _sampled_shell_mean = _MODULE._sampled_shell_mean
 _write_rows = _MODULE._write_rows
+_exclusive_output_lock = _MODULE._exclusive_output_lock
+
+
+def test_wave_response_output_lock_rejects_concurrent_writer(tmp_path) -> None:
+    with _exclusive_output_lock(tmp_path):
+        with pytest.raises(RuntimeError, match="already active"):
+            with _exclusive_output_lock(tmp_path):
+                pass
+    with _exclusive_output_lock(tmp_path):
+        pass
 
 
 def test_cartesian_shell_mean_does_not_dilute_sparse_inner_shells() -> None:

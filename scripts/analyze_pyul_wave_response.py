@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import csv
+import fcntl
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import numpy as np
 
@@ -152,6 +154,24 @@ def _nearest(values: np.ndarray, target: float) -> int:
     return int(np.argmin(np.abs(values - target)))
 
 
+@contextmanager
+def _exclusive_output_lock(output: Path) -> Iterator[None]:
+    """Fail fast if another analyzer is writing this output directory."""
+
+    lock_path = output / ".wave_response.lock"
+    with lock_path.open("a", encoding="utf-8") as stream:
+        try:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise RuntimeError(
+                f"wave-response analysis already active for {output}"
+            ) from error
+        try:
+            yield
+        finally:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("run", type=Path)
@@ -168,6 +188,11 @@ def main() -> int:
     run = args.run.expanduser().resolve()
     output = run if args.output is None else args.output.expanduser().resolve()
     output.mkdir(parents=True, exist_ok=True)
+    with _exclusive_output_lock(output):
+        return _analyze(args, run, output)
+
+
+def _analyze(args: argparse.Namespace, run: Path, output: Path) -> int:
     metadata = json.loads(
         (run / "fdm_adapter_metadata.json").read_text(encoding="utf-8")
     )
