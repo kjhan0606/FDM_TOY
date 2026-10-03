@@ -246,6 +246,23 @@ def test_interpolation_rejects_a_missing_separation_bin() -> None:
             binary_to_soliton_mass=0.04,
             separation_over_core_radius=0.5,
         )
+    for separation, expected_power in (
+        (0.35, -1.0), (0.4, -1.0),
+        (0.6, -3.0), (0.65, -3.0),
+    ):
+        rates = table.interpolate(
+            profile_id="boey2025",
+            binary_to_soliton_mass=0.04,
+            separation_over_core_radius=separation,
+        )
+        assert rates.dimensionless_orbital_power == pytest.approx(expected_power)
+    for separation in (0.4001, 0.5, 0.5999):
+        with pytest.raises(ValueError, match="unmeasured gap"):
+            table.interpolate(
+                profile_id="boey2025",
+                binary_to_soliton_mass=0.04,
+                separation_over_core_radius=separation,
+            )
 
 
 def test_independent_small_separation_sources_join_by_physical_bins() -> None:

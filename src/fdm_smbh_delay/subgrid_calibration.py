@@ -903,15 +903,25 @@ class SubgridCalibrationTable:
                 upper.lower_separation_over_core_radius
                 > lower.upper_separation_over_core_radius + 1.0e-12
             ):
-                raise ValueError("separation interpolation crosses an unmeasured gap")
-            denominator = (
-                upper.reference_mean_separation_over_core_radius
-                - lower.reference_mean_separation_over_core_radius
-            )
-            weight = (
-                separation_ratio
-                - lower.reference_mean_separation_over_core_radius
-            ) / denominator
+                # Each accepted bin remains usable up to its measured edge,
+                # but the interval between the bins has no calibrated rate.
+                if separation_ratio <= lower.upper_separation_over_core_radius:
+                    upper = lower
+                    weight = 0.0
+                elif separation_ratio >= upper.lower_separation_over_core_radius:
+                    lower = upper
+                    weight = 0.0
+                else:
+                    raise ValueError("separation interpolation crosses an unmeasured gap")
+            else:
+                denominator = (
+                    upper.reference_mean_separation_over_core_radius
+                    - lower.reference_mean_separation_over_core_radius
+                )
+                weight = (
+                    separation_ratio
+                    - lower.reference_mean_separation_over_core_radius
+                ) / denominator
         return _interpolate_rate_rows(
             lower,
             upper,
