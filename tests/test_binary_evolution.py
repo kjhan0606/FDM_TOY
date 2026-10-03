@@ -5,6 +5,8 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
+import fdm_smbh_delay.binary_evolution as binary_evolution
+
 from fdm_smbh_delay.binary_evolution import (
     BinaryEvolutionConfig,
     BoundBinaryModel,
@@ -434,3 +436,41 @@ def test_qe_provider_rejects_unstructured_mapping_and_invalid_envelope() -> None
     )
     with pytest.raises(UncalibratedBinaryState, match="validated interval"):
         provider(1.0, 0.0)
+
+
+def test_unsupported_rk_endpoint_is_not_accepted_or_checkpointed(monkeypatch) -> None:
+    def bounded_rate(axis_pc: float, _eccentricity: float) -> FDMExchangeRates:
+        if axis_pc < 0.9:
+            raise UncalibratedBinaryState("outside measured axis support")
+        return FDMExchangeRates(-1.0, -1.0, "synthetic-bounded")
+
+    model = BoundBinaryModel(1.0e8, 1.0e8, fdm_rate_provider=bounded_rate)
+    initial = BoundBinaryState(0.0, 1.0, 0.3**2)
+
+    def unsupported_endpoint(state, _model, time_step):
+        return replace(
+            state,
+            elapsed_myr=state.elapsed_myr + time_step,
+            semimajor_axis_pc=0.89,
+            completed_steps=state.completed_steps + 1,
+        )
+
+    monkeypatch.setattr(
+        binary_evolution, "advance_bound_binary_rk4", unsupported_endpoint
+    )
+    result = integrate_bound_binary(
+        initial_state=initial,
+        model=model,
+        config=BinaryEvolutionConfig(
+            target_semimajor_axis_pc=0.01,
+            maximum_time_myr=1.0,
+            maximum_step_myr=0.001,
+            sample_interval_steps=2,
+            stop_at_gw_transition=False,
+        ),
+        step_budget=1,
+    )
+    assert result.status == "uncalibrated"
+    assert result.final_state == initial
+    assert result.samples[-1].semimajor_axis_pc == pytest.approx(1.0)
+    assert "outside measured axis support" in result.reason

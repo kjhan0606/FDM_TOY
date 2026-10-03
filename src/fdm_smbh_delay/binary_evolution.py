@@ -1088,7 +1088,16 @@ def integrate_bound_binary(
                 None,
             )
         try:
-            state = advance_bound_binary_rk4(state, model, time_step)
+            candidate = advance_bound_binary_rk4(state, model, time_step)
+            # RK stages can all be supported while their weighted endpoint
+            # lands outside a narrow measured (a,e) domain. Reject that
+            # endpoint before it becomes a restartable accepted state, even
+            # when no sample is due on this step.
+            binary_rate_budget(
+                model,
+                semimajor_axis_pc=candidate.semimajor_axis_pc,
+                eccentricity_squared=candidate.eccentricity_squared,
+            )
         except UncalibratedBinaryState as error:
             return BinaryEvolutionResult(
                 "uncalibrated",
@@ -1103,6 +1112,7 @@ def integrate_bound_binary(
                 str(error),
                 None,
             )
+        state = candidate
         steps_this_call += 1
         if state.completed_steps % config.sample_interval_steps == 0:
             samples.append(
