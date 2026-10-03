@@ -406,6 +406,16 @@ is 27.6%, but remains an n=256 allocation result only. Subsequent runs stamp
 `wave_density_layout=real_imag_addcmul_v1`; restarts and q/e box controls
 reject mismatched density layouts.
 
+The compact-mass Plummer field now uses 32-cell x slabs and one in-place
+inverse-square-root slab rather than full-grid distance and inverse-distance
+temporaries. Revision `8650d9a` (Slurm job `411454`) completed the same n=256
+one-step probe on syn04. Its saved energy, mass, SMBH-state, and radial-density
+arrays match job `411440` exactly, while its peak allocated memory was
+unchanged at 1,409,825,280 bytes. The source snapshot and summary are in
+`/gpfs/kjhan/FDM_TOY_RESULTS/qe_extension/torch/memory_probe_n256_slab_v1_411454/`.
+The equal global peak implies that some other stage dominates this particular
+n=256 run; it does not show that the slab change clears larger grids.
+
 The guarded q-e queue uses observed device-memory profiles rather than the
 uniform-grid estimate alone. An `n=512` stage requires at least 22 GiB total
 and 21 GiB free: this admits a 23,028 MiB A10 while retaining more than 2 GiB
