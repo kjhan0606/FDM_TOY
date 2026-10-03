@@ -385,9 +385,13 @@ summaries are in
 `/gpfs/kjhan/FDM_TOY_RESULTS/qe_extension/torch/memory_probe_n256_baseline_411438/`
 and `/gpfs/kjhan/FDM_TOY_RESULTS/qe_extension/torch/memory_probe_n256_411436/`.
 This is PyTorch peak **allocated** memory, not CUDA reserved memory or total
-device occupancy. A one-step n=256 probe does not validate numerical
-trajectories, longer-run peaks, or capacity at n=512, 768, or 1024; those
-larger grids remain unmeasured for the new solver revision.
+device occupancy. The saved one-step energy and mass arrays differ by at most
+`3.9e-16` relative to each array's maximum absolute value; the saved SMBH
+state differs by at most `1.01e-14` in its saved units and the radial-density
+profile by at most `8.8e-16` relative to its maximum. These small diagnostics
+do not validate the full wave state or longer trajectories. The one-step
+n=256 probe also does not establish longer-run peaks or capacity at n=512,
+768, or 1024; those larger grids remain unmeasured for the new solver revision.
 
 The guarded q-e queue uses observed device-memory profiles rather than the
 uniform-grid estimate alone. An `n=512` stage requires at least 22 GiB total
