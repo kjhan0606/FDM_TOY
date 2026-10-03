@@ -6,6 +6,7 @@ the registered physical-bin design and release provenance remain independent.
 
 from __future__ import annotations
 
+from dataclasses import asdict
 import json
 from pathlib import Path
 
@@ -286,5 +287,79 @@ def assess_qe_box_control(
         "bin_decisions": decisions,
         "raw_diagnostics_verified": verify_raw,
         "raw_verification": raw_verification,
+        "production_calibration_row_admitted": False,
+    }
+
+
+def prepare_qe_calibration_candidate(
+    resolution_pair: CalibrationSource,
+    doubled_box: CalibrationSource,
+) -> dict:
+    """Package only raw-verified, box-supported rows without releasing them."""
+
+    assessment = assess_qe_box_control(
+        resolution_pair, doubled_box, verify_raw=True
+    )
+    if assessment.get("raw_diagnostics_verified") is not True:
+        raise ValueError("q/e candidate requires raw-diagnostic verification")
+    if (assessment.get("production_calibration_row_admitted") is not False
+            or assessment.get("profile_id") != resolution_pair.profile_id):
+        raise ValueError("q/e candidate assessment identity is invalid")
+    pair_path = resolution_pair.convergence_summary.expanduser().resolve()
+    pair_bins = _fixed_bins(_read(pair_path))
+    source = build_source_rows(resolution_pair) if pair_bins else None
+    if _sha256(pair_path) != assessment["resolution_pair_sha256"]:
+        raise ValueError("q/e resolution summary changed after box assessment")
+    box_path = doubled_box.convergence_summary.expanduser().resolve()
+    if _sha256(box_path) != assessment["doubled_box_sha256"]:
+        raise ValueError("q/e box summary changed after box assessment")
+    for role, summary_path in (("resolution_pair", pair_path),
+                               ("doubled_box", box_path)):
+        comparison = assessment["raw_verification"][role]
+        if comparison["comparison_sha256"] != _sha256(summary_path):
+            raise ValueError("q/e raw verification summary identity is invalid")
+        expected_runs = {
+            (row["label"], str(Path(row["run"]).resolve()))
+            for row in _read(summary_path)["runs"]
+        }
+        actual_runs = {
+            (row["label"], str(Path(row["run"]).resolve()))
+            for row in comparison["raw_inputs"]
+        }
+        if actual_runs != expected_runs or len(comparison["raw_inputs"]) != 2:
+            raise ValueError("q/e raw verification run identity is invalid")
+        for run in comparison["raw_inputs"]:
+            if set(run["sha256"]) != set(_RAW_INPUTS):
+                raise ValueError("q/e raw verification input set is incomplete")
+            for name, expected_sha256 in run["sha256"].items():
+                path = Path(run["run"]) / name
+                if (not path.is_file()
+                        or path.stat().st_size > _MAX_DIAGNOSTIC_BYTES
+                        or _sha256(path) != expected_sha256):
+                    raise ValueError(f"q/e diagnostic changed after box assessment: {path}")
+    controlled = set(assessment["box_controlled_candidate_bins"])
+    accepted = (
+        {row.separation_bin_index: row for row in source.accepted_rows}
+        if source is not None else {}
+    )
+    if source is not None and source.source_case_id != assessment["case_id"]:
+        raise ValueError("q/e candidate case identity is invalid")
+    if not controlled <= accepted.keys():
+        raise ValueError("q/e box-controlled bins disagree with resolution acceptance")
+    rows = [asdict(accepted[index]) for index in sorted(controlled)]
+    return {
+        "schema_version": 1,
+        "status": (
+            "qe_box_controlled_candidate_not_released" if rows
+            else "qe_no_box_controlled_bins_censored"
+        ),
+        "profile_id": resolution_pair.profile_id,
+        "case_id": assessment["case_id"],
+        "candidate_row_count": len(rows),
+        "candidate_rows": rows,
+        "resolution_rejected_bins": (
+            list(source.rejected_bins) if source is not None else []
+        ),
+        "box_assessment": assessment,
         "production_calibration_row_admitted": False,
     }

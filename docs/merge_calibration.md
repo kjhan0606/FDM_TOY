@@ -265,23 +265,26 @@ accepts `--separation-bin-edges-pc` (comma-separated numbers) together with a
 matching `--separation-bins` count. It records the fixed edges and omits a bin
 unless the sampled mean separations in both calculations span its edges with
 the required complete orbits. This establishes common sampling support only;
-it does not by itself
-establish doubled-box agreement or authorize a production calibration release.
+it does not by itself establish doubled-box agreement or authorize a
+production calibration release.
 Once both summaries exist, compare them read-only with
 `scripts/assess_qe_box_control.py --profile-id PROFILE --resolution-pair PAIR.json
 --doubled-box BOX.json`. The reference of the box comparison must be the
 twice-larger box at unchanged cell size and softening, and its other run must
 be the resolution pair's fine run. Both comparisons must use the same fixed
 edges, SMBH/soliton initial conditions, numerical settings, and measured
-fine-run rates. The result reports
-candidate or censored bins only; `production_calibration_row_admitted` stays
-false until release provenance and the full calibration gates are implemented
-and verified.
+fine-run rates. The result reports candidate or censored bins only;
+`production_calibration_row_admitted` stays false until release provenance and
+the full calibration gates are implemented and verified.
 The command also recomputes each fixed-bin comparison from its named raw
 orbit and conservation diagnostics, verifies their checksums before and after
 the audit, and refuses any diagnostic larger than 16 MiB on the login node.
 An edited or stale comparison JSON is therefore not sufficient evidence of
 box agreement.
+Adding `--candidate-output PATH.json` creates a non-production candidate
+package with only box-supported rows, both comparison checksums, and the
+verified raw-input checksums. It refuses to overwrite an existing path and
+still does not produce a runtime-loadable calibration table.
 
 The corresponding resource-design calculation (which launches no solver) is
 

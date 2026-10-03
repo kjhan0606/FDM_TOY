@@ -25,6 +25,7 @@ from fdm_smbh_delay.subgrid_table_builder import (
 from fdm_smbh_delay.qe_box_control import (
     assess_qe_box_control as _assess_qe_box_control,
 )
+from fdm_smbh_delay import qe_box_control as qe_box_module
 
 
 def assess_qe_box_control(
@@ -562,6 +563,62 @@ def test_qe_box_control_rejects_inconsistent_shared_run(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="shared fine-run rate differs"):
         assess_qe_box_control(
             CalibrationSource("test", pair), CalibrationSource("test", box_path)
+        )
+
+
+def _mock_strict_box_assessment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Path, Path]:
+    pair_path, box_path = _write_qe_box_pair(tmp_path)
+    decision = assess_qe_box_control(
+        CalibrationSource("test", pair_path),
+        CalibrationSource("test", box_path),
+    )
+    verified = {}
+    for role, path in (("resolution_pair", pair_path), ("doubled_box", box_path)):
+        summary = json.loads(path.read_text())
+        inputs = []
+        for row in summary["runs"]:
+            run = Path(row["run"])
+            hashes = {}
+            for name in qe_box_module._RAW_INPUTS:
+                input_path = run / name
+                if not input_path.exists():
+                    input_path.write_text("fixture\n")
+                hashes[name] = hashlib.sha256(input_path.read_bytes()).hexdigest()
+            inputs.append({"label": row["label"], "run": str(run), "sha256": hashes})
+        verified[role] = {
+            "comparison_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "raw_inputs": inputs,
+        }
+    decision["raw_diagnostics_verified"] = True
+    decision["raw_verification"] = verified
+    monkeypatch.setattr(qe_box_module, "assess_qe_box_control", lambda *args, **kwargs: decision)
+    return pair_path, box_path
+
+
+def test_qe_candidate_package_retains_only_box_controlled_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pair, box = _mock_strict_box_assessment(tmp_path, monkeypatch)
+    package = qe_box_module.prepare_qe_calibration_candidate(
+        CalibrationSource("test", pair), CalibrationSource("test", box)
+    )
+    assert package["status"] == "qe_box_controlled_candidate_not_released"
+    assert package["candidate_row_count"] == 1
+    assert package["candidate_rows"][0]["separation_bin_index"] == 0
+    assert package["production_calibration_row_admitted"] is False
+
+
+def test_qe_candidate_package_rejects_changed_raw_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pair, box = _mock_strict_box_assessment(tmp_path, monkeypatch)
+    path = tmp_path / "n1024" / "conservation_summary.json"
+    path.write_text("changed\n")
+    with pytest.raises(ValueError, match="diagnostic changed after box assessment"):
+        qe_box_module.prepare_qe_calibration_candidate(
+            CalibrationSource("test", pair), CalibrationSource("test", box)
         )
 
 
