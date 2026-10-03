@@ -91,6 +91,7 @@ def _matched_bin(
     difference: float,
     scales,
 ) -> dict:
+    axis_mean = 0.52 * (lower + upper)
     reference_rates = {
         "orbital_power": {"estimate": -scales.orbital_power_msun_pc2_myr3},
         "orbital_torque": {
@@ -114,6 +115,9 @@ def _matched_bin(
                 "complete_orbits": 20,
                 "mean_separation_pc": 0.5 * (lower + upper),
                 "mean_eccentricity_osculating": 0.23,
+                "mean_semimajor_axis_osculating_pc": axis_mean,
+                "minimum_orbit_mean_semimajor_axis_pc": axis_mean * 0.98,
+                "maximum_orbit_mean_semimajor_axis_pc": axis_mean * 1.02,
                 "minimum_time_myr": 0.0,
                 "maximum_time_myr": 0.5,
                 "rates": reference_rates,
@@ -126,6 +130,9 @@ def _matched_bin(
                 "complete_orbits": 18,
                 "mean_separation_pc": 0.5 * (lower + upper),
                 "mean_eccentricity_osculating": 0.23,
+                "mean_semimajor_axis_osculating_pc": axis_mean,
+                "minimum_orbit_mean_semimajor_axis_pc": axis_mean * 0.98,
+                "maximum_orbit_mean_semimajor_axis_pc": axis_mean * 1.02,
                 "minimum_time_myr": 0.0,
                 "maximum_time_myr": 0.5,
                 "rates": comparison_rates,
@@ -689,6 +696,34 @@ def test_qe_box_control_rejects_inconsistent_shared_run(tmp_path: Path) -> None:
         )
 
 
+def test_qe_box_control_rejects_inconsistent_shared_osculating_axis(
+    tmp_path: Path,
+) -> None:
+    pair, box_path = _write_qe_box_pair(tmp_path)
+    box = json.loads(box_path.read_text())
+    box["matched_separation"]["bins"][0]["runs"][1][
+        "mean_semimajor_axis_osculating_pc"
+    ] *= 1.01
+    box_path.write_text(json.dumps(box))
+    with pytest.raises(ValueError, match="shared fine-run bin differs"):
+        assess_qe_box_control(
+            CalibrationSource("test", pair), CalibrationSource("test", box_path)
+        )
+
+
+def test_qe_box_control_rejects_missing_osculating_axis(tmp_path: Path) -> None:
+    pair_path, box = _write_qe_box_pair(tmp_path)
+    pair = json.loads(pair_path.read_text())
+    del pair["matched_separation"]["bins"][0]["runs"][0][
+        "mean_semimajor_axis_osculating_pc"
+    ]
+    pair_path.write_text(json.dumps(pair))
+    with pytest.raises(ValueError, match="lacks measured osculating-axis"):
+        assess_qe_box_control(
+            CalibrationSource("test", pair_path), CalibrationSource("test", box)
+        )
+
+
 def _mock_strict_box_assessment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[Path, Path]:
@@ -730,6 +765,16 @@ def test_qe_candidate_package_retains_only_box_controlled_rows(
     assert package["status"] == "qe_box_controlled_candidate_not_released"
     assert package["candidate_row_count"] == 1
     assert package["candidate_rows"][0]["separation_bin_index"] == 0
+    observations = package["mapping_observations_not_released"]
+    assert len(observations) == 1
+    assert observations[0]["separation_bin_index"] == 0
+    assert observations[0]["fine"]["mean_semimajor_axis_osculating_pc"] == (
+        observations[0]["coarse"]["mean_semimajor_axis_osculating_pc"]
+    )
+    assert observations[0]["fine"]["mean_semimajor_axis_osculating_pc"] == (
+        0.52 * (0.4 + 0.8)
+    )
+    assert observations[0]["doubled_box"]["complete_orbits"] == 20
     assert package["production_calibration_row_admitted"] is False
 
 

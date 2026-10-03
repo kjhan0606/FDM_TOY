@@ -28,6 +28,11 @@ from .subgrid_calibration import is_qe_extension_case
 
 
 _RATES = ("orbital_power", "orbital_torque", "wave_total_energy_rate")
+_MAPPING_COORDINATES = (
+    "mean_semimajor_axis_osculating_pc",
+    "minimum_orbit_mean_semimajor_axis_pc",
+    "maximum_orbit_mean_semimajor_axis_pc",
+)
 _RAW_INPUTS = (
     "fdm_adapter_metadata.json",
     "config.uldm",
@@ -81,6 +86,26 @@ def _fixed_bins(summary: dict) -> dict[int, dict]:
                 or not np.isclose(row.get("lower_separation_pc"), edges[index], rtol=0, atol=1e-12)
                 or not np.isclose(row.get("upper_separation_pc"), edges[index + 1], rtol=0, atol=1e-12)):
             raise ValueError("box-control bin is inconsistent with fixed edges")
+        run_rows = row.get("runs")
+        if not isinstance(run_rows, list) or len(run_rows) != 2:
+            raise ValueError("box-control bin requires two run rows")
+        for run_row in run_rows:
+            try:
+                mean, lower, upper = (
+                    float(run_row[field]) for field in _MAPPING_COORDINATES
+                )
+            except (KeyError, TypeError, ValueError) as error:
+                raise ValueError(
+                    "box-control bin lacks measured osculating-axis coordinates"
+                ) from error
+            if (
+                not all(np.isfinite(value) for value in (mean, lower, upper))
+                or lower <= 0.0
+                or not lower <= mean <= upper
+            ):
+                raise ValueError(
+                    "box-control bin has invalid osculating-axis coordinates"
+                )
         by_index[index] = row
     return by_index
 
@@ -90,6 +115,17 @@ def _run_bin(bin_row: dict, label: str) -> dict:
     if len(rows) != 1:
         raise ValueError("box-control bin lacks its shared run")
     return rows[0]
+
+
+def _mapping_observation(run_bin: dict) -> dict:
+    """Keep measured bin coordinates separate from the rate-release row."""
+
+    return {
+        "complete_orbits": run_bin["complete_orbits"],
+        "mean_separation_pc": run_bin["mean_separation_pc"],
+        "mean_eccentricity_osculating": run_bin["mean_eccentricity_osculating"],
+        **{field: run_bin[field] for field in _MAPPING_COORDINATES},
+    }
 
 
 def _numerical_settings(
@@ -343,7 +379,10 @@ def assess_qe_box_control(
             _check_rate_fractions(box_bins[index], box_ref["label"], box_other["label"])
             pair_shared = _run_bin(pair_bins[index], pair_ref["label"])
             box_shared = _run_bin(box_bins[index], box_other["label"])
-            for field in ("complete_orbits", "mean_separation_pc", "mean_eccentricity_osculating"):
+            for field in (
+                "complete_orbits", "mean_separation_pc",
+                "mean_eccentricity_osculating", *_MAPPING_COORDINATES,
+            ):
                 if not np.isclose(pair_shared[field], box_shared[field], rtol=1e-12, atol=1e-12):
                     raise ValueError(f"shared fine-run bin differs across comparisons: {index}/{field}")
             for field in _RATES:
@@ -429,6 +468,29 @@ def prepare_qe_calibration_candidate(
     if not controlled <= accepted.keys():
         raise ValueError("q/e box-controlled bins disagree with resolution acceptance")
     rows = [asdict(accepted[index]) for index in sorted(controlled)]
+    pair_summary = _read(pair_path)
+    box_summary = _read(box_path)
+    pair_ref, pair_coarse = _runs(pair_summary)
+    box_ref, _ = _runs(box_summary)
+    box_bins = _fixed_bins(box_summary)
+    mapping_observations = [
+        {
+            "separation_bin_index": index,
+            "fine": _mapping_observation(
+                _run_bin(pair_bins[index], pair_ref["label"])
+            ),
+            "coarse": _mapping_observation(
+                _run_bin(pair_bins[index], pair_coarse["label"])
+            ),
+            "doubled_box": _mapping_observation(
+                _run_bin(box_bins[index], box_ref["label"])
+            ),
+        }
+        for index in sorted(controlled)
+    ]
+    if (_sha256(pair_path) != assessment["resolution_pair_sha256"]
+            or _sha256(box_path) != assessment["doubled_box_sha256"]):
+        raise ValueError("q/e comparison changed while packaging mapping observations")
     return {
         "schema_version": 1,
         "status": (
@@ -439,6 +501,7 @@ def prepare_qe_calibration_candidate(
         "case_id": assessment["case_id"],
         "candidate_row_count": len(rows),
         "candidate_rows": rows,
+        "mapping_observations_not_released": mapping_observations,
         "resolution_rejected_bins": (
             list(source.rejected_bins) if source is not None else []
         ),

@@ -332,6 +332,12 @@ Adding `--candidate-output PATH.json` creates a non-production candidate
 package with only box-supported rows, both comparison checksums, and the
 verified raw-input checksums. It refuses to overwrite an existing path and
 still does not produce a runtime-loadable calibration table.
+The candidate package also retains fine, coarse, and doubled-box measurements
+of mean separation, osculating semimajor axis and eccentricity for each
+box-supported bin. The osculating-axis mean and per-orbit range must be
+present in both comparisons, and the reused fine-run values must agree.
+These observations are inputs to a future coordinate-mapping convergence
+test; they are not an accepted mapping or permission to apply a rate.
 
 The corresponding resource-design calculation (which launches no solver) is
 
