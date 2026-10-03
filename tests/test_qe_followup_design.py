@@ -39,6 +39,35 @@ def test_registered_q100e000_followup_is_bound_but_has_no_results(tmp_path: Path
     assert all(row.status_detail == "seed_missing" for row in plan)
 
 
+def test_registered_followup_refuses_unbound_pilot_and_accepts_fresh_roots(
+    tmp_path: Path,
+) -> None:
+    root = Path(__file__).resolve().parents[1]
+    cases = root / "results/wave_calibration_qe_extension/physical_cases.csv"
+    manifest = root / "results/wave_calibration_qe_followup_q100e000/run_manifest.csv"
+    design = root / "results/wave_calibration_qe_followup_q100e000/design.json"
+    initial_root = tmp_path / "old_initial"
+    old_seed = initial_root / "qe_q100_e000_a020_n256"
+    wave = old_seed / "Outputs" / "3Wfn" / "P3D_#000.npy"
+    wave.parent.mkdir(parents=True)
+    wave.write_bytes(b"old pilot")
+    (old_seed / "fdm_adapter_metadata.json").write_text(
+        json.dumps({"case_id": "qe_q100_e000_a020", "run_id": old_seed.name}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="different design binding"):
+        build_plan(
+            manifest, cases, initial_root, tmp_path / "old_torch",
+            tmp_path / "pyul", qe_design_path=design,
+        )
+    fresh = build_plan(
+        manifest, cases, tmp_path / "fresh_initial", tmp_path / "fresh_torch",
+        tmp_path / "pyul", qe_design_path=design,
+    )
+    assert len(fresh) == 3
+    assert all(row.status_detail == "seed_missing" for row in fresh)
+
+
 def _inputs(tmp_path: Path) -> tuple[Path, Path]:
     cases = tmp_path / "cases.csv"
     cases.write_text(

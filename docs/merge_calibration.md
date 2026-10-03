@@ -480,6 +480,25 @@ approval rule for heavy wave-response work remains in force. A failed common
 bin, conservation, spatial-rate, or doubled-box gate leaves this plane
 uncalibrated/censored and cannot release a production row.
 
+Use separate output roots for this registered follow-up. The default
+`qe_extension/pyul_initial/qe_q100_e000_a020_n256` and matching Torch
+directory already contain an older, unbound pilot; the design-bound planner
+correctly rejects them rather than relabelling or overwriting their data.
+The read-only plan succeeds with the reserved follow-up roots:
+
+```bash
+python scripts/plan_wave_calibration_runs.py \
+  --manifest results/wave_calibration_qe_followup_q100e000/run_manifest.csv \
+  --cases results/wave_calibration_qe_extension/physical_cases.csv \
+  --qe-design results/wave_calibration_qe_followup_q100e000/design.json \
+  --initial-root /gpfs/kjhan/FDM_TOY_RESULTS/qe_followup_q100e000_v1/pyul_initial \
+  --torch-root /gpfs/kjhan/FDM_TOY_RESULTS/qe_followup_q100e000_v1/torch
+```
+
+As checked on 2026-10-04, it reports zero seeds, zero completed Torch runs,
+and zero completed responses across the three planned resolutions. This is
+run-state evidence only, not approval to submit the triplet.
+
 A bounded read of the completed pilot
 `qe_q100_e060_a020_n768/torch_run_summary.json` (SHA-256
 `18f5b62137871479998720faede8bc65df2836797d9a4075b8e2b15ce1868a76`)
