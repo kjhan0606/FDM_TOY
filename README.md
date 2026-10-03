@@ -84,6 +84,7 @@ records:
 ```bash
 fdm-pta-delay \
   --z-sink 1.0 \
+  --capture-bridge results/case/capture_bridge.json \
   --backreaction-decision results/case/backreaction_decision.json \
   --backreaction-delay-record results/case/kpc_to_pc_delay.json \
   --fdm-summary results/case/summary.json \
@@ -96,7 +97,11 @@ Missing physics is never interpreted as zero delay. A bare `--kpc-to-pc-delay`
 or `--gw-delay` value is retained only as an explicit censored/operator-asserted
 record; it can never create a complete physical estimate. The kpc delay record
 must be bound to a verified live/frozen decision and its integrated separation
-interval must lie inside that decision's measured overlap.
+interval must lie inside that decision's measured overlap. The capture bridge
+is rechecked against its committed ledger event; the kpc interval must start
+at that pair's capture separation, end at 1 pc, and carry the event UID. The
+pure-FDM chain also requires an FDM backreaction decision and an available FDM
+channel in the capture environment; a CDM kpc stage cannot be substituted.
 `uncalibrated`, `outside-support`, and `stalled` FDM summaries are composed as
 explicitly censored intervals, distinct from absent inputs. The JSON result
 lists both `missing_segments` and `censored_segments`; its additive `segments`

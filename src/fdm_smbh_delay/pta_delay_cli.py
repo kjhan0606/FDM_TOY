@@ -37,6 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
     time_group = parser.add_mutually_exclusive_group(required=True)
     time_group.add_argument("--sink-time", help="cosmic numerical-capture time with units")
     time_group.add_argument("--z-sink", type=float, help="numerical-capture redshift")
+    parser.add_argument("--capture-bridge", type=Path, required=True)
     parser.add_argument("--backreaction-decision", type=Path, required=True)
     parser.add_argument("--backreaction-delay-record", type=Path, required=True)
     parser.add_argument("--fdm-summary", type=Path, required=True)
@@ -60,6 +61,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     estimate = compose_verified_pta_delay(
         sink_time_myr=sink_time,
+        capture_bridge_path=args.capture_bridge,
         backreaction_decision_path=args.backreaction_decision,
         backreaction_delay_record_path=args.backreaction_delay_record,
         fdm_summary_path=args.fdm_summary,

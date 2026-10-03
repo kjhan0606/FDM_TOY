@@ -19,7 +19,7 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from .capture_ledger import CaptureEvent
+from .capture_ledger import CaptureEvent, read_capture_ledger
 from .lagramses import PairOrbitalState, pair_orbital_state
 
 
@@ -516,3 +516,34 @@ class NuclearBridgeInput:
         except (OSError, json.JSONDecodeError) as error:
             raise ValueError(f"bridge input is unreadable: {path}") from error
         return cls.from_dict(record)
+
+
+def read_ledger_bound_bridge(path: str | Path) -> NuclearBridgeInput:
+    """Recheck the bridge pair against its committed capture-ledger event."""
+
+    bridge = NuclearBridgeInput.read_json(path)
+    ledger = read_capture_ledger(bridge.source_path)
+    matches = [event for event in ledger.events if event.event_uid == bridge.event_uid]
+    if len(matches) != 1:
+        raise ValueError("bridge requires exactly one committed capture event")
+    event = matches[0]
+    pair = event.binary_orbital_state
+    if pair is None:
+        raise ValueError("bridge capture event is not an unambiguous BINARY pair")
+    if event.event_sha256 != bridge.source_sha256:
+        raise ValueError("bridge capture event SHA-256 differs from ledger")
+    if not math.isclose(event.redshift, bridge.redshift, rel_tol=1.0e-12, abs_tol=1.0e-12):
+        raise ValueError("bridge capture redshift differs from ledger")
+    if pair.member_ids != bridge.pair.member_ids or not np.allclose(
+        pair.masses_msun, bridge.pair.masses_msun, rtol=1.0e-12, atol=0.0
+    ):
+        raise ValueError("bridge SMBH pair differs from capture ledger")
+    if not np.allclose(
+        pair.separation_vector_pc, bridge.pair.separation_vector_pc,
+        rtol=1.0e-12, atol=1.0e-12,
+    ) or not np.allclose(
+        pair.relative_velocity_pc_myr, bridge.pair.relative_velocity_pc_myr,
+        rtol=1.0e-12, atol=1.0e-12,
+    ):
+        raise ValueError("bridge SMBH pair state differs from capture ledger")
+    return bridge

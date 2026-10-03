@@ -545,7 +545,8 @@ def materialize_backreaction_delay_segment(
 
 
 def read_verified_backreaction_delay_record(
-    path: str | Path, *, decision: BackreactionDecision
+    path: str | Path, *, decision: BackreactionDecision,
+    expected_start_separation_pc: float | None = None,
 ) -> DelaySegment:
     """Read an integrated delay record bound to one verified decision.
 
@@ -573,6 +574,17 @@ def read_verified_backreaction_delay_record(
         raise ValueError("backreaction delay record fields are invalid")
     if record["schema_version"] != 1 or record["status"] != "integrated_delay":
         raise ValueError("backreaction delay record has unsupported schema/status")
+    if expected_start_separation_pc is not None:
+        expected_start = _finite(
+            expected_start_separation_pc, "expected_start_separation_pc", positive=True
+        )
+        recorded_start = _finite(
+            record["start_separation_pc"], "start_separation_pc", positive=True
+        )
+        if not math.isclose(recorded_start, expected_start, rel_tol=1.0e-8, abs_tol=1.0e-8):
+            raise ValueError(
+                "backreaction delay start separation differs from capture pair"
+            )
     name = _nonempty(record["name"], "backreaction delay name")
     model = _nonempty(record["model"], "backreaction delay model")
     if model != decision.model:

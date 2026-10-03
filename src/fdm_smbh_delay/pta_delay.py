@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -15,12 +16,14 @@ from .delay_budget import (
     compose_true_merge_time,
     read_verified_delay_segment_record,
 )
+from .nuclear_bridge import read_ledger_bound_bridge
 from .true_time_cli import _fdm_segment
 
 
 def compose_verified_pta_delay(
     *,
     sink_time_myr: float,
+    capture_bridge_path: str | Path,
     backreaction_decision_path: str | Path,
     backreaction_delay_record_path: str | Path,
     fdm_summary_path: str | Path,
@@ -35,12 +38,27 @@ def compose_verified_pta_delay(
     command-line delay enters this path.
     """
 
+    bridge = read_ledger_bound_bridge(capture_bridge_path)
+    if not bridge.ready_for_integration:
+        raise ValueError("capture bridge lacks a ready environment")
+    if not math.isclose(
+        sink_time_myr, bridge.capture_time_myr, rel_tol=1.0e-8, abs_tol=1.0e-6
+    ):
+        raise ValueError("PTA sink time differs from capture bridge time")
     decision = read_verified_backreaction_decision(backreaction_decision_path)
+    if decision.model != "fdm":
+        raise ValueError("FDM PTA delay requires an FDM kpc backreaction decision")
+    if bridge.environment.channel("fdm").status != "available":
+        raise ValueError("FDM PTA delay requires an available capture FDM channel")
     kpc = read_verified_backreaction_delay_record(
-        backreaction_delay_record_path, decision=decision
+        backreaction_delay_record_path,
+        decision=decision,
+        expected_start_separation_pc=bridge.pair.separation_pc,
     )
     if kpc.name != "kpc_to_pc":
         raise ValueError("backreaction delay record must name kpc_to_pc")
+    if kpc.source_case_id != bridge.event_uid:
+        raise ValueError("backreaction delay event UID differs from capture bridge")
     summary_path = Path(fdm_summary_path).expanduser().resolve()
     try:
         summary: Any = json.loads(summary_path.read_text(encoding="utf-8"))
