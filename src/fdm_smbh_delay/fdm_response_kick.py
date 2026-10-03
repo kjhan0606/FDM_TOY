@@ -8,10 +8,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+from typing import Mapping
 
 import numpy as np
 
 from .fdm_orbital_response import FDMProjectedOrbitalResponse
+from .fdm_outer_halo import FDMOuterHaloClosure
+
+
+MIN_WHITE_NOISE_COHERENCE_RATIO = 10.0
 
 
 @dataclass(frozen=True)
@@ -22,6 +27,7 @@ class FDMResponseKick:
     stochastic_increment_pc_myr: np.ndarray | None
     reason: str
     source_sha256: tuple[str, ...]
+    maximum_coherence_time_myr: float | None = None
 
 
 def sample_candidate_fdm_velocity_kick(
@@ -30,13 +36,17 @@ def sample_candidate_fdm_velocity_kick(
     time_step_myr: float,
     random_seed: int,
     completed_steps: int,
+    closure_by_source_sha256: Mapping[str, FDMOuterHaloClosure],
 ) -> FDMResponseKick:
     """Sample ``Cov[delta v] = D_v * dt`` with a restart-stable stream.
 
     The seed and accepted-step index select one draw independently of prior
     calls, so a resumed trajectory can reproduce its next numerical kick.
-    The caller must separately justify a white-noise limit from measured
-    coherence times; this function never returns a physical delay.
+    Every source corner must supply a calibrated, co-supported closure.  A
+    step shorter than ten times the largest corner coherence time is censored
+    instead of assuming independent Gaussian increments.  Passing this
+    conservative numerical gate is *not* a proof of a white-noise limit or a
+    physical delay.
     """
 
     if not math.isfinite(time_step_myr) or time_step_myr <= 0.0:
@@ -56,6 +66,27 @@ def sample_candidate_fdm_velocity_kick(
         return censored("FDM response has no source identifiers")
     if response.diffusion_convention != "velocity_covariance_rate":
         return censored("FDM velocity-diffusion covariance convention is unspecified")
+    if not isinstance(closure_by_source_sha256, Mapping):
+        raise ValueError("FDM source closure mapping is required")
+    maximum_coherence = 0.0
+    for source in dict.fromkeys(response.source_sha256):
+        closure = closure_by_source_sha256.get(source)
+        if not isinstance(closure, FDMOuterHaloClosure):
+            return censored(f"FDM source {source} lacks a measured coherence closure")
+        if closure.closure_status != "calibrated":
+            return censored(f"FDM source {source} coherence closure is not calibrated")
+        try:
+            coherence = float(closure.evaluate(response.radius_pc)["coherence_time_myr"])
+        except ValueError as error:
+            return censored(f"FDM source {source} coherence support: {error}")
+        if not math.isfinite(coherence) or coherence <= 0.0:
+            return censored(f"FDM source {source} coherence time is invalid")
+        maximum_coherence = max(maximum_coherence, coherence)
+    if time_step_myr < MIN_WHITE_NOISE_COHERENCE_RATIO * maximum_coherence:
+        return censored(
+            "FDM step is shorter than ten measured coherence times; "
+            "a colored-noise model is required"
+        )
     drift = response.drift_acceleration_pc_myr2
     diffusion = response.diffusion_tensor_pc2_myr3
     if drift is None or diffusion is None:
@@ -80,8 +111,9 @@ def sample_candidate_fdm_velocity_kick(
     if np.any(~np.isfinite(increment)):
         return censored("FDM velocity increment overflowed")
     return FDMResponseKick(
-        "candidate_pending_coherence_and_physical_validation",
+        "candidate_pending_physical_validation",
         increment, deterministic, stochastic,
-        "local white-noise numerical sample only; no physical delay inferred",
+        "coherence-gated numerical sample only; white-noise validity and physical delay unproven",
         response.source_sha256,
+        maximum_coherence,
     )

@@ -23,6 +23,11 @@ def _finite_array(value: Any, name: str, *, size: int | None = None) -> np.ndarr
     return result
 
 
+def _immutable_array(values: np.ndarray) -> np.ndarray:
+    contiguous = np.ascontiguousarray(values, dtype=np.float64)
+    return np.frombuffer(contiguous.tobytes(), dtype=np.float64).reshape(contiguous.shape)
+
+
 @dataclass(frozen=True)
 class FDMOuterHaloClosure:
     """Radial wave diagnostics needed before an outer-FDM closure is usable.
@@ -73,6 +78,15 @@ class FDMOuterHaloClosure:
             raise ValueError("diffusion must be non-negative and gradient scales positive")
         if self.closure_status not in {"calibrated", "uncalibrated", "censored"}:
             raise ValueError("unsupported outer-halo closure status")
+
+        # Keep serialized diagnostics and interpolators tied to one immutable
+        # measurement snapshot, even when callers mutate their input arrays.
+        radii = _immutable_array(radii)
+        current = _immutable_array(current)
+        coherence = _immutable_array(coherence)
+        wavelength = _immutable_array(wavelength)
+        diffusion = _immutable_array(diffusion)
+        gradient = _immutable_array(gradient)
 
         object.__setattr__(self, "radii_pc", radii)
         object.__setattr__(self, "mass_current_msun_pc2_myr", current)

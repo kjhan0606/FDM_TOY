@@ -258,9 +258,17 @@ an unspecified convention and cannot be sampled; q/e cells whose corners
 disagree on the convention are censored.  `sample_candidate_fdm_velocity_kick`
 uses the full-rate convention to sample one local Gaussian velocity increment
 with a seed and accepted-step index that reproduce the same draw after a
-restart.  This is a numerical component only: no measured coherence-time
-criterion, white-noise validity, source-convergence audit, coupled stochastic
-orbit integration, or physical delay follows from it.  Paired resolution,
+restart.  It now requires a calibrated radial `FDMOuterHaloClosure` for every
+response source SHA, rejects absent or unsupported coherence measurements,
+and uses the largest corner coherence time.  It censors a proposed white-noise
+step shorter than ten such coherence times; a colored-noise model would be
+needed there.  The ten-times rule is a conservative numerical precondition,
+not empirical proof of Markovian increments.  The closure snapshots its
+diagnostic arrays so post-construction mutation cannot change this gate.
+The source-key mapping itself is caller-supplied, not a verification of the
+underlying run files.  This remains a numerical component only: white-noise
+validity, source-convergence audit, coupled stochastic orbit integration, and
+physical delay do not follow from it.  Paired resolution,
 phase replication, independent source audit, and restartable stochastic orbit
 evolution are still required before any physical delay is inferred.  The
 static kpc integrator does not consume these candidate kicks.

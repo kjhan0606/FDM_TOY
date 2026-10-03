@@ -57,3 +57,31 @@ def test_outer_closure_rejects_invalid_dimensions() -> None:
             velocity_diffusion_pc2_myr3=np.ones(2),
             density_gradient_scale_pc=np.ones(2),
         )
+
+
+def test_outer_closure_snapshots_coherence_and_other_measurements() -> None:
+    radii = np.array([10.0, 20.0])
+    coherence = np.array([0.01, 0.02])
+    current = np.zeros((2, 3))
+    closure = FDMOuterHaloClosure(
+        radii_pc=radii,
+        mass_current_msun_pc2_myr=current,
+        coherence_time_myr=coherence,
+        de_broglie_wavelength_pc=np.ones(2),
+        velocity_diffusion_pc2_myr3=np.zeros(2),
+        density_gradient_scale_pc=np.ones(2),
+        closure_status="calibrated",
+    )
+    record = closure.as_dict()
+    radii[:] = [1.0, 2.0]
+    coherence[:] = 100.0
+    current[:] = 100.0
+    assert closure.as_dict() == record
+    assert closure.evaluate(15.0)["coherence_time_myr"] == pytest.approx(0.015)
+    for array in (
+        closure.radii_pc, closure.mass_current_msun_pc2_myr,
+        closure.coherence_time_myr, closure.de_broglie_wavelength_pc,
+        closure.velocity_diffusion_pc2_myr3, closure.density_gradient_scale_pc,
+    ):
+        with pytest.raises(ValueError, match="WRITEABLE"):
+            array.setflags(write=True)
