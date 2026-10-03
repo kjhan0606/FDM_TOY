@@ -14,7 +14,13 @@ set -euo pipefail
 module purge
 module load cuda/13.0.2
 
-cd /home/kjhan/BACKUP/FDM_SINK_MERGE/FDM_TOY
+source_root="${FDM_PROBE_SOURCE_ROOT:-/home/kjhan/BACKUP/FDM_SINK_MERGE/FDM_TOY}"
+probe_variant="${FDM_PROBE_VARIANT:-optimized}"
+if [[ ! "${probe_variant}" =~ ^[a-z0-9_]+$ ]]; then
+  printf 'invalid memory-probe variant: %s\n' "${probe_variant}" >&2
+  exit 1
+fi
+cd "${source_root}"
 export PYTHONPATH=.:src
 export OMP_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
@@ -23,7 +29,7 @@ export NUMEXPR_NUM_THREADS=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 reference=/gpfs/kjhan/FDM_TOY_RESULTS/qe_extension/pyul_initial/qe_q100_e000_a020_n256
-output="/gpfs/kjhan/FDM_TOY_RESULTS/qe_extension/torch/memory_probe_n256_${SLURM_JOB_ID}"
+output="/gpfs/kjhan/FDM_TOY_RESULTS/qe_extension/torch/memory_probe_n256_${probe_variant}_${SLURM_JOB_ID}"
 if [[ -e "${output}" ]]; then
   printf 'refusing existing memory-probe output: %s\n' "${output}" >&2
   exit 1
