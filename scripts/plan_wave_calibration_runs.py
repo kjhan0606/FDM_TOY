@@ -11,6 +11,11 @@ import math
 from pathlib import Path
 import shlex
 
+from fdm_smbh_delay.qe_followup_design import (
+    read_verified_qe_followup_design,
+    verify_qe_design_run_request,
+)
+
 
 DEFAULT_RESULT_ROOT = Path("/gpfs/kjhan/FDM_TOY_RESULTS/qe_extension")
 DEFAULT_PYUL_PATH = Path("/gpfs/kjhan/FDM_TOY_DEPS/PyUL_NBody")
@@ -42,6 +47,9 @@ class RunPlanRow:
     checkpoint_every_saves: int
     rk4_substeps: int
     device: str
+    qe_design_path: Path | None = None
+    qe_design_manifest_path: Path | None = None
+    qe_design_role: str | None = None
 
     @property
     def completed(self) -> bool:
@@ -57,8 +65,7 @@ class RunPlanRow:
 
     @property
     def seed_command(self) -> str:
-        return _shell_command(
-            [
+        arguments: list[str | Path] = [
                 "python",
                 "scripts/run_pyul_wave_case.py",
                 "--pyul-path",
@@ -81,7 +88,13 @@ class RunPlanRow:
                 "--output",
                 self.initial_root,
             ]
-        )
+        if self.qe_design_path is not None:
+            arguments.extend([
+                "--qe-design", self.qe_design_path,
+                "--qe-design-manifest", self.qe_design_manifest_path,
+                "--qe-design-role", self.qe_design_role,
+            ])
+        return _shell_command(arguments)
 
     @property
     def torch_command(self) -> str:
@@ -141,9 +154,9 @@ def _read_rows(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(stream))
 
 
-def _load_case_parameters(cases_path: Path) -> dict[str, tuple[float, int]]:
+def _load_case_parameters(cases_path: Path) -> dict[str, tuple[float, int, float]]:
     cases = _read_rows(cases_path)
-    parameters: dict[str, tuple[float, int]] = {}
+    parameters: dict[str, tuple[float, int, float]] = {}
     for row in cases:
         duration = float(row["target_duration_myr"])
         cadence = float(row["output_cadence_myr"])
@@ -152,8 +165,45 @@ def _load_case_parameters(cases_path: Path) -> dict[str, tuple[float, int]]:
         save_number = math.floor(duration / cadence + 1.0e-9)
         if save_number < 1:
             raise ValueError("output cadence must not exceed the case duration")
-        parameters[row["case_id"]] = (duration, save_number)
+        parameters[row["case_id"]] = (duration, save_number, cadence)
     return parameters
+
+
+def _verify_design_run_metadata(
+    run: Path,
+    *,
+    design: dict,
+    design_file_sha256: str,
+    design_path: Path,
+    cases_path: Path,
+    manifest_path: Path,
+    role: str,
+    initial_state_only: bool,
+) -> None:
+    path = run / "fdm_adapter_metadata.json"
+    if not path.is_file():
+        raise ValueError(f"registered q/e run lacks bound metadata: {run}")
+    metadata = json.loads(path.read_text(encoding="utf-8"))
+    expected_binding = {
+        "status": "qe_prospective_design_bound_not_a_calibration_release",
+        "path": str(design_path.resolve()),
+        "physical_cases_path": str(cases_path.resolve()),
+        "run_manifest_path": str(manifest_path.resolve()),
+        "file_sha256": design_file_sha256,
+        "design_sha256": design["design_sha256"],
+        "role": role,
+    }
+    if (
+        metadata.get("qe_design_binding") != expected_binding
+        or metadata.get("run_id") != run.name
+    ):
+        raise ValueError(f"registered q/e run has a different design binding: {run}")
+    verify_qe_design_run_request(
+        design, case_id=metadata["case_id"], role=role,
+        resolution=metadata["resolution"], box_size_pc=metadata["box_size_pc"],
+        duration_myr=metadata["duration_myr"],
+        initial_state_only=initial_state_only,
+    )
 
 
 def _summary_complete(
@@ -237,20 +287,84 @@ def build_plan(
     checkpoint_every_saves: int = 32,
     rk4_substeps: int = 9,
     device: str = "cuda:0",
+    qe_design_path: Path | None = None,
 ) -> list[RunPlanRow]:
     manifest = _read_rows(manifest_path)
     case_parameters = _load_case_parameters(cases_path)
+    design = None
+    design_file_sha256 = None
+    if qe_design_path is not None:
+        qe_design_path = qe_design_path.expanduser().resolve()
+        design, design_file_sha256 = read_verified_qe_followup_design(
+            qe_design_path, physical_cases=cases_path, run_manifest=manifest_path,
+        )
     plan: list[RunPlanRow] = []
     for row in manifest:
         run_id = row["run_id"]
         case_id = row["case_id"]
-        duration, derived_save_number = case_parameters[case_id]
+        duration, derived_save_number, cadence = case_parameters[case_id]
+        role = None
+        marker = row.get("requires_qe_design", "").strip().lower()
+        if marker not in ("", "false", "0", "true", "1"):
+            raise ValueError("q/e design requirement marker is invalid")
+        if marker in ("true", "1") and design is None:
+            raise ValueError("q/e follow-up manifest requires --qe-design")
+        if design is not None:
+            if case_id != design["case_id"]:
+                raise ValueError("registered q/e plan contains another physical case")
+            resolution = int(row["effective_grid_cells"])
+            box_size = float(row["box_size_pc"])
+            roles = {
+                "coarse": design["resolution_pair"]["coarse"],
+                "fine": design["resolution_pair"]["fine"],
+                "doubled_box_control": design["doubled_box_control"],
+            }
+            matching = [
+                name for name, geometry in roles.items()
+                if geometry["resolution"] == resolution
+            ]
+            if len(matching) != 1:
+                raise ValueError("registered q/e plan resolution lacks one role")
+            role = matching[0]
+            if run_id != f"{case_id}_n{resolution}":
+                raise ValueError("registered q/e run ID differs from seed naming")
+            duration = float(design["planned_duration_myr"])
+            verify_qe_design_run_request(
+                design, case_id=case_id, role=role,
+                resolution=resolution, box_size_pc=box_size,
+                duration_myr=duration,
+            )
+            derived_save_number = math.floor(duration / cadence + 1.0e-9)
+            if derived_save_number < 1:
+                raise ValueError("registered q/e output cadence exceeds planned duration")
+            if save_number is not None and save_number < derived_save_number:
+                raise ValueError(
+                    "registered q/e save-count override undersamples the planned cadence"
+                )
         initial_directory = initial_root / run_id
         torch_directory = torch_root / run_id
         seed_ready = (
             initial_directory / "Outputs" / "3Wfn" / "P3D_#000.npy"
         ).is_file()
+        if design is not None and initial_directory.exists():
+            if not seed_ready:
+                raise ValueError(f"registered q/e seed directory is incomplete: {initial_directory}")
+            _verify_design_run_metadata(
+                initial_directory, design=design, design_file_sha256=design_file_sha256,
+                design_path=qe_design_path, cases_path=cases_path,
+                manifest_path=manifest_path, role=role, initial_state_only=True,
+            )
         torch_directory_exists = torch_directory.is_dir()
+        if design is not None and torch_directory_exists:
+            if not seed_ready:
+                raise ValueError(
+                    f"registered q/e Torch run has no bound initial seed: {torch_directory}"
+                )
+            _verify_design_run_metadata(
+                torch_directory, design=design, design_file_sha256=design_file_sha256,
+                design_path=qe_design_path, cases_path=cases_path,
+                manifest_path=manifest_path, role=role, initial_state_only=False,
+            )
         torch_complete = _torch_summary_complete(
             torch_directory / "torch_run_summary.json",
             torch_directory,
@@ -288,6 +402,9 @@ def build_plan(
                 checkpoint_every_saves=checkpoint_every_saves,
                 rk4_substeps=rk4_substeps,
                 device=device,
+                qe_design_path=qe_design_path,
+                qe_design_manifest_path=(manifest_path if design is not None else None),
+                qe_design_role=role,
             )
         )
     return plan
@@ -391,6 +508,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--pyul-path", type=Path, default=DEFAULT_PYUL_PATH)
     parser.add_argument(
+        "--qe-design", type=Path,
+        help="verified prospective design required by a marked follow-up manifest",
+    )
+    parser.add_argument(
         "--save-number",
         type=int,
         help="override output-cadence-derived saved intervals for every case",
@@ -444,6 +565,7 @@ def main() -> int:
         checkpoint_every_saves=args.checkpoint_every_saves,
         rk4_substeps=args.rk4_substeps,
         device=args.device,
+        qe_design_path=args.qe_design,
     )
 
     _print_summary(plan)

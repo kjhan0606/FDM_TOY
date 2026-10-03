@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -11,7 +12,9 @@ import pytest
 from scripts.plan_wave_calibration_runs import (
     _response_summary_complete,
     _torch_summary_complete,
+    build_plan,
 )
+from fdm_smbh_delay.qe_followup_design import build_qe_followup_design
 
 
 PROJECT = Path(__file__).resolve().parents[1]
@@ -121,6 +124,115 @@ def _run_planner(
         text=True,
         capture_output=True,
     )
+
+
+def _registered_inputs(tmp_path: Path) -> tuple[Path, Path, Path]:
+    cases = tmp_path / "cases.csv"
+    manifest = tmp_path / "manifest.csv"
+    _write_csv(cases, [{
+        "case_id": "qe_test", "mass_ratio_q": "0.3", "eccentricity": "0.3",
+        "initial_separation_pc": "0.572", "core_radius_pc": "2.2",
+        "kepler_period_myr": "0.002", "target_duration_myr": "0.005",
+        "output_cadence_myr": "0.0001",
+    }])
+    _write_csv(manifest, [
+        {
+            "case_id": "qe_test", "run_id": f"qe_test_n{resolution}",
+            "effective_grid_cells": str(resolution), "box_size_pc": "26.4",
+            "finest_cell_size_pc": str(26.4 / resolution),
+            "requires_qe_design": "true",
+        }
+        for resolution in (256, 512)
+    ])
+    design = build_qe_followup_design(
+        case_id="qe_test", physical_cases=cases, run_manifest=manifest,
+        coarse_resolution=256, fine_resolution=512,
+        separation_bin_edges_pc=(0.43, 0.45), duration_myr=0.02,
+    )
+    path = tmp_path / "design.json"
+    path.write_text(json.dumps(design), encoding="utf-8")
+    return cases, manifest, path
+
+
+def test_registered_qe_plan_requires_design_and_uses_bound_duration(
+    tmp_path: Path,
+) -> None:
+    cases, manifest, design = _registered_inputs(tmp_path)
+    kwargs = (manifest, cases, tmp_path / "initial", tmp_path / "torch",
+              tmp_path / "PyUL_NBody")
+    with pytest.raises(ValueError, match="requires --qe-design"):
+        build_plan(*kwargs)
+    rows = build_plan(*kwargs, qe_design_path=design)
+    assert [row.qe_design_role for row in rows] == ["coarse", "fine"]
+    assert all(row.case_duration_myr == 0.02 for row in rows)
+    assert all(row.save_number == 200 for row in rows)
+    assert all("--qe-design-role" in row.seed_command for row in rows)
+    assert all("--duration-myr 0.02" in row.torch_command for row in rows)
+    assert all("--duration-myr 1e-6" in row.seed_command for row in rows)
+    with pytest.raises(ValueError, match="undersamples"):
+        build_plan(*kwargs, qe_design_path=design, save_number=17)
+
+
+def test_registered_qe_plan_rejects_unbound_existing_seed(tmp_path: Path) -> None:
+    cases, manifest, design = _registered_inputs(tmp_path)
+    initial = tmp_path / "initial"
+    wave = initial / "qe_test_n256/Outputs/3Wfn/P3D_#000.npy"
+    wave.parent.mkdir(parents=True)
+    wave.write_bytes(b"seed")
+    with pytest.raises(ValueError, match="lacks bound metadata"):
+        build_plan(
+            manifest, cases, initial, tmp_path / "torch",
+            tmp_path / "PyUL_NBody", qe_design_path=design,
+        )
+
+
+def test_registered_qe_plan_refuses_orphaned_torch_restart(tmp_path: Path) -> None:
+    cases, manifest, design = _registered_inputs(tmp_path)
+    torch_run = tmp_path / "torch/qe_test_n256"
+    torch_run.mkdir(parents=True)
+    with pytest.raises(ValueError, match="no bound initial seed"):
+        build_plan(
+            manifest, cases, tmp_path / "initial", tmp_path / "torch",
+            tmp_path / "PyUL_NBody", qe_design_path=design,
+        )
+
+
+def test_registered_qe_plan_accepts_bound_seed_but_rejects_short_torch_resume(
+    tmp_path: Path,
+) -> None:
+    cases, manifest, design_path = _registered_inputs(tmp_path)
+    design = json.loads(design_path.read_text(encoding="utf-8"))
+    initial = tmp_path / "initial"
+    wave = initial / "qe_test_n256/Outputs/3Wfn/P3D_#000.npy"
+    wave.parent.mkdir(parents=True)
+    wave.write_bytes(b"seed")
+    metadata = {
+        "run_id": "qe_test_n256", "case_id": "qe_test", "resolution": 256,
+        "box_size_pc": 26.4, "duration_myr": 1e-6,
+        "qe_design_binding": {
+            "status": "qe_prospective_design_bound_not_a_calibration_release",
+            "path": str(design_path.resolve()),
+            "physical_cases_path": str(cases.resolve()),
+            "run_manifest_path": str(manifest.resolve()),
+            "file_sha256": hashlib.sha256(design_path.read_bytes()).hexdigest(),
+            "design_sha256": design["design_sha256"], "role": "coarse",
+        },
+    }
+    (initial / "qe_test_n256/fdm_adapter_metadata.json").write_text(
+        json.dumps(metadata), encoding="utf-8",
+    )
+    kwargs = (manifest, cases, initial, tmp_path / "torch", tmp_path / "PyUL_NBody")
+    rows = build_plan(*kwargs, qe_design_path=design_path)
+    assert rows[0].seed_ready
+    assert [stage for stage, _ in rows[0].pending_commands] == ["torch"]
+    torch_run = tmp_path / "torch/qe_test_n256"
+    torch_run.mkdir(parents=True)
+    torch_metadata = dict(metadata, duration_myr=0.005)
+    (torch_run / "fdm_adapter_metadata.json").write_text(
+        json.dumps(torch_metadata), encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="run request disagrees"):
+        build_plan(*kwargs, qe_design_path=design_path)
 
 
 def test_plan_reports_each_pipeline_stage(tmp_path: Path) -> None:

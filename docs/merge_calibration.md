@@ -353,6 +353,14 @@ calculations. The PyUL seed runner accepts `--qe-design`,
 design identity into the seed metadata. The short PyUL initial-state seed is
 not required to cover the planned orbit budget; the Torch evolution is, and
 is rejected if its requested duration is shorter than the registered plan.
+For a separate follow-up run manifest, mark each row
+`requires_qe_design=true` and invoke `plan_wave_calibration_runs.py` with
+`--qe-design PATH` and the design-bound manifest and physical-case CSVs. The
+planner then emits seed commands with the design and role arguments, uses the
+registered duration rather than the pilot target duration for Torch evolution,
+and refuses missing or mismatched design bindings on existing seeds and
+restarts. It only prints commands; it does not submit jobs or certify their
+resource use. Without `--qe-design`, a marked follow-up manifest fails closed.
 The Torch runner re-verifies that binding before evolving the wave, including
 on restart. For a new comparison, pass `--qe-design`, `--qe-design-cases`,
 and `--qe-design-manifest` to `summarize_pyul_convergence.py`; it obtains the
