@@ -523,6 +523,14 @@ single-resolution diagnostics, not accepted rate rows: the `n=384` spatial
 comparison, `n=768` doubled-box control, conservation and wave-response
 checks, and a separately validated `(a,e) -> <r>` mapping remain required.
 
+For the registered `q=1, e=0.3, a/r_c=0.20` follow-up, the completed `n=256`
+run currently has seven initially resolved complete orbit means in the same
+preregistered `[0.430, 0.438] pc` bin. It therefore fails the fixed threshold
+of eight (`7/8`). This is a single-run design diagnostic and releases no
+calibration row. The pending e-axis `n=384` and `n=768` jobs 411953 and 411969
+were canceled before execution to avoid unjustified computational spend; they
+provide no numerical evidence.
+
 The separate `q=0.3, e=0` and `q=1, e=0.3` follow-ups do not by themselves
 support simultaneous interpolation in both variables: the runtime requires
 all four measured q/e corners with common mass and separation support. The
@@ -539,11 +547,13 @@ as the `n=384` fine run. The 16-array estimate is 54 GiB, below the design's
 `n=768` work measured 52.32 GiB of allocated device memory for another box;
 reserved CUDA memory, FFT workspace, concurrent users, long-run peak, and
 the CPU wave-response memory still require a new resource review. The
-design-bound planner reports three missing seeds and launches nothing. No
-seed, Torch, or response job is authorized by this registration; the project
-approval rule for heavy wave-response work remains in force. A failed common
-bin, conservation, spatial-rate, or doubled-box gate leaves this plane
-uncalibrated/censored and cannot release a production row.
+registration itself did not authorize or launch a seed, Torch, or response
+job. Subsequent user-approved submissions completed all three cross-corner
+seeds. As of 2026-10-04, Torch jobs 411964 (`n=256`) and 411963 (`n=768`) were
+running, while job 411965 (`n=384`) was pending. These execution states do not
+release a calibration row; the project approval rule for heavy wave-response
+work remains in force. A failed common-bin, conservation, spatial-rate, or
+doubled-box gate leaves this plane uncalibrated/censored.
 
 Use separate output roots for this registered follow-up. The default
 `qe_extension/pyul_initial/qe_q100_e000_a020_n256` and matching Torch
