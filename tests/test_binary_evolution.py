@@ -399,6 +399,48 @@ def test_qe_fdm_adapter_passes_runtime_e_and_censors_missing_plane() -> None:
         unsupported_similarity(1.0, 0.3)
 
 
+@pytest.mark.parametrize("missing_corner", range(4))
+def test_qe_fdm_adapter_requires_all_four_corners_with_common_separation_support(
+    missing_corner: int,
+) -> None:
+    profile_id = "four-corner"
+    corners = tuple(
+        replace(
+            _synthetic_row(
+                profile_id=profile_id,
+                similarity=1.0,
+                mass_ratio=mass_ratio,
+                eccentricity=eccentricity,
+            ),
+            binary_to_soliton_mass=0.16,
+        )
+        for mass_ratio in (0.3, 1.0)
+        for eccentricity in (0.0, 0.3)
+    )
+
+    def provider(rows: tuple[SubgridCalibrationRow, ...]):
+        return calibrated_qe_fdm_rate_provider(
+            _test_release(SubgridCalibrationTable(rows), 5),
+            profile_id=profile_id,
+            mass1_msun=1.0e8,
+            mass2_msun=6.0e7,
+            soliton_mass_msun=1.0e9,
+            core_radius_pc=5.0,
+            particle_mass_ev=_particle_mass_for_similarity(1.0, 5.0),
+            mean_separation_provider=_synthetic_kepler_mean,
+            mean_separation_provider_identity="synthetic-kepler",
+        )
+
+    rates = provider(corners)(1.0, 0.15)
+    assert np.isfinite(rates.orbital_power_msun_pc2_myr3)
+    assert np.isfinite(rates.orbital_torque_msun_pc2_myr2)
+    assert ":q=0.6:" in rates.calibration_id
+
+    incomplete = corners[:missing_corner] + corners[missing_corner + 1 :]
+    with pytest.raises(UncalibratedBinaryState, match="calibrated range"):
+        provider(incomplete)(1.0, 0.15)
+
+
 def test_qe_provider_requires_mapping_and_checks_measured_bin_boundary() -> None:
     core_radius = 5.0
     particle_mass = 1.0e-21
