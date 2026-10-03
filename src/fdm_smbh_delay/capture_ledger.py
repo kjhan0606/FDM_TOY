@@ -660,11 +660,14 @@ def _resolve_native_v2_lineage(
         raise CaptureLedgerError("selected capture lineage does not reach one fresh root")
     for attempt_uid, (cutoff, _) in cutoffs.items():
         sequences = committed_sequences.get(attempt_uid, set())
-        if sequences != set(range(1, max(sequences, default=0) + 1)):
+        maximum_sequence = max(sequences, default=0)
+        if sequences and (
+            min(sequences) != 1 or maximum_sequence != len(sequences)
+        ):
             raise CaptureLedgerError(
                 f"{attempt_uid}: committed batch sequence is not contiguous from one"
             )
-        if cutoff > max(sequences, default=0):
+        if cutoff > maximum_sequence:
             raise CaptureLedgerError(
                 f"{attempt_uid}: checkpoint high-water exceeds committed ledger batches"
             )

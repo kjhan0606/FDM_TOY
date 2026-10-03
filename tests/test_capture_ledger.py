@@ -308,6 +308,19 @@ def test_native_v2_lineage_sequence_mismatch_fails_closed(tmp_path) -> None:
         _read_capture_ledger(path, output_root=tmp_path)
 
 
+def test_native_v2_huge_sequence_rejects_without_range_allocation(tmp_path) -> None:
+    path = tmp_path / "ledger-v2.jsonl"
+    attempt = "attempt-a"
+    huge = 10**12
+    batch = _lineaged_batch(
+        _native_v2_batch(_native_binary_rows()), attempt, huge,
+    )
+    _write_rows(path, [_attempt_v2(attempt, path.name), *batch])
+    _write_lineage_marker(tmp_path, 1, attempt, huge, 10, path.name)
+    with pytest.raises(CaptureLedgerError, match="not contiguous from one"):
+        _read_capture_ledger(path, output_root=tmp_path)
+
+
 def test_native_v2_explicit_tip_disambiguates_sibling_leaves(tmp_path) -> None:
     path = tmp_path / "ledger-v2.jsonl"
     parent_checkpoint = _write_lineage_marker(
