@@ -189,6 +189,194 @@ def _read_native_v2(path, **kwargs):
     )
 
 
+def _attempt_v2(
+    uid: str, ledger_name: str, *, parent: str | None = None,
+    restart_output: int = 0, restart_step: int = 0,
+) -> dict:
+    return {
+        "schema_version": 2, "record_type": "attempt_begin",
+        "attempt_uid": uid, "run_uuid": "run-test", "ledger_file": ledger_name,
+        "parent_checkpoint_uid": parent,
+        "restart_output_index": restart_output,
+        "restart_nstep_coarse": restart_step,
+    }
+
+
+def _lineaged_batch(rows: list[dict], attempt_uid: str, sequence: int) -> list[dict]:
+    result = copy.deepcopy(rows)
+    for row in result:
+        if row["record_type"].startswith("batch_"):
+            row["attempt_uid"] = attempt_uid
+            row["committed_batch_seq"] = sequence
+    return result
+
+
+def _write_lineage_marker(
+    root, output_index: int, attempt_uid: str, sequence: int, step: int,
+    ledger_name: str,
+) -> str:
+    output = root / f"output_{output_index:05d}"
+    output.mkdir()
+    (output / "COMPLETE").write_text("", encoding="utf-8")
+    checkpoint = f"{attempt_uid}-output-{output_index:05d}"
+    (output / "SMBH_CAPTURE_LINEAGE").write_text(
+        "\n".join([
+            "LAGRAMSES_SMBH_CAPTURE_LINEAGE_V1",
+            f"checkpoint_uid={checkpoint}", f"attempt_uid={attempt_uid}",
+            "run_uuid=run-test", f"ledger_file={ledger_name}",
+            f"committed_batch_seq={sequence}", f"nstep_coarse={step}",
+            f"output_index={output_index}", "",
+        ]), encoding="utf-8",
+    )
+    return checkpoint
+
+
+def test_native_v2_complete_checkpoint_promotes_active_lineage(tmp_path) -> None:
+    path = tmp_path / "ledger-v2.jsonl"
+    attempt = "attempt-a"
+    rows = [
+        _attempt_v2(attempt, path.name),
+        *_lineaged_batch(_native_v2_batch(_native_binary_rows()), attempt, 1),
+    ]
+    uncheckpointed = _native_binary_rows()
+    uncheckpointed[0]["nstep_coarse"] = 11
+    rows.extend(_lineaged_batch(
+        _native_v2_batch(uncheckpointed, "uncheckpointed-tail"), attempt, 2,
+    ))
+    _write_rows(path, rows)
+    old_checkpoint = _write_lineage_marker(tmp_path, 1, attempt, 1, 10, path.name)
+    ledger = _read_capture_ledger(path, output_root=tmp_path)
+    assert len(ledger.events) == 1
+    assert ledger.events[0].event_uid == "10-1-7-9-2"
+    assert ledger.events[0].post_compaction_verified
+    assert ledger.events[0].lineage_verified
+
+    _write_lineage_marker(tmp_path, 2, attempt, 2, 11, path.name)
+    with pytest.raises(CaptureLedgerError, match="not the latest COMPLETE"):
+        _read_capture_ledger(
+            path, output_root=tmp_path, selected_checkpoint_uid=old_checkpoint,
+        )
+    assert len(_read_capture_ledger(path, output_root=tmp_path).events) == 2
+
+    (tmp_path / "output_00001" / "COMPLETE").unlink()
+    (tmp_path / "output_00002" / "COMPLETE").unlink()
+    with pytest.raises(CaptureLedgerError, match="no COMPLETE checkpoint"):
+        _read_capture_ledger(path, output_root=tmp_path)
+
+
+def test_native_v2_no_event_child_suppresses_ancestor_tail(tmp_path) -> None:
+    path = tmp_path / "ledger-v2.jsonl"
+    first = _lineaged_batch(
+        _native_v2_batch(_native_binary_rows(), "batch-one"), "attempt-a", 1,
+    )
+    later_event = _native_binary_rows()
+    later_event[0]["nstep_coarse"] = 11
+    later = _lineaged_batch(
+        _native_v2_batch(later_event, "batch-two"), "attempt-a", 2,
+    )
+    parent_checkpoint = _write_lineage_marker(
+        tmp_path, 1, "attempt-a", 1, 10, path.name,
+    )
+    child_checkpoint = _write_lineage_marker(
+        tmp_path, 2, "attempt-b", 0, 10, path.name,
+    )
+    _write_rows(path, [
+        _attempt_v2("attempt-a", path.name), *first, *later,
+        _attempt_v2(
+            "attempt-b", path.name, parent=parent_checkpoint,
+            restart_output=1, restart_step=10,
+        ),
+    ])
+    ledger = _read_capture_ledger(
+        path, output_root=tmp_path, selected_checkpoint_uid=child_checkpoint,
+    )
+    assert [event.event_uid for event in ledger.events] == ["10-1-7-9-2"]
+
+
+def test_native_v2_lineage_sequence_mismatch_fails_closed(tmp_path) -> None:
+    path = tmp_path / "ledger-v2.jsonl"
+    attempt = "attempt-a"
+    batch = _lineaged_batch(
+        _native_v2_batch(_native_binary_rows()), attempt, 1,
+    )
+    next(row for row in batch if row["record_type"] == "batch_prepared")[
+        "committed_batch_seq"
+    ] = 2
+    _write_rows(path, [_attempt_v2(attempt, path.name), *batch])
+    _write_lineage_marker(tmp_path, 1, attempt, 1, 10, path.name)
+    with pytest.raises(CaptureLedgerError, match="invalid batch_prepared"):
+        _read_capture_ledger(path, output_root=tmp_path)
+
+
+def test_native_v2_explicit_tip_disambiguates_sibling_leaves(tmp_path) -> None:
+    path = tmp_path / "ledger-v2.jsonl"
+    parent_checkpoint = _write_lineage_marker(
+        tmp_path, 1, "attempt-a", 1, 10, path.name,
+    )
+    child_event = _native_binary_rows()
+    child_event[0]["nstep_coarse"] = 11
+    child_batch = _lineaged_batch(
+        _native_v2_batch(child_event, "child-batch"), "attempt-b", 1,
+    )
+    child_b_tip = _write_lineage_marker(
+        tmp_path, 2, "attempt-b", 1, 11, path.name,
+    )
+    child_c_tip = _write_lineage_marker(
+        tmp_path, 3, "attempt-c", 0, 10, path.name,
+    )
+    _write_rows(path, [
+        _attempt_v2("attempt-a", path.name),
+        *_lineaged_batch(
+            _native_v2_batch(_native_binary_rows(), "parent-batch"),
+            "attempt-a", 1,
+        ),
+        _attempt_v2(
+            "attempt-b", path.name, parent=parent_checkpoint,
+            restart_output=1, restart_step=10,
+        ),
+        *child_batch,
+        _attempt_v2(
+            "attempt-c", path.name, parent=parent_checkpoint,
+            restart_output=1, restart_step=10,
+        ),
+    ])
+    with pytest.raises(CaptureLedgerError, match="2 leaves"):
+        _read_capture_ledger(path, output_root=tmp_path)
+    branch_b = _read_capture_ledger(
+        path, output_root=tmp_path, selected_checkpoint_uid=child_b_tip,
+    )
+    assert [event.event_uid for event in branch_b.events] == [
+        "10-1-7-9-2", "11-1-7-9-2",
+    ]
+    branch_c = _read_capture_ledger(
+        path, output_root=tmp_path, selected_checkpoint_uid=child_c_tip,
+    )
+    assert [event.event_uid for event in branch_c.events] == ["10-1-7-9-2"]
+
+
+def test_native_v2_checkpoint_step_cannot_include_later_batch(tmp_path) -> None:
+    path = tmp_path / "ledger-v2.jsonl"
+    event = _native_binary_rows()
+    event[0]["nstep_coarse"] = 11
+    _write_rows(path, [
+        _attempt_v2("attempt-a", path.name),
+        *_lineaged_batch(_native_v2_batch(event), "attempt-a", 1),
+    ])
+    _write_lineage_marker(tmp_path, 1, "attempt-a", 1, 10, path.name)
+    with pytest.raises(CaptureLedgerError, match="outside its restart/checkpoint interval"):
+        _read_capture_ledger(path, output_root=tmp_path)
+
+
+def test_native_v2_rejects_mixed_bare_and_attempt_protocol(tmp_path) -> None:
+    path = tmp_path / "ledger-v2.jsonl"
+    _write_rows(path, [
+        *_native_v2_batch(_native_binary_rows()),
+        _attempt_v2("attempt-a", path.name),
+    ])
+    with pytest.raises(CaptureLedgerError, match="mixes unlineaged batches"):
+        _read_native_v2(path)
+
+
 def test_native_v2_batch_requires_prepare_and_post_compaction_commit(tmp_path) -> None:
     path = tmp_path / "ledger-v2.jsonl"
     rows = _native_v2_batch(_native_binary_rows())
@@ -481,16 +669,23 @@ def test_committed_multiple_preserves_all_three_members_and_pairs(tmp_path) -> N
     assert event.native_conservation_verified
 
     v2_path = tmp_path / "ledger-v2.jsonl"
-    _write_rows(v2_path, _native_v2_batch(
+    attempt = "multiple-attempt"
+    v2_batch = _lineaged_batch(_native_v2_batch(
         [begin, *members, *pairs, end], batch_uid="10-1-7-11-3-27-456",
-    ))
-    v2_event = _read_native_v2(v2_path).events[0]
+    ), attempt, 1)
+    _write_rows(v2_path, [_attempt_v2(attempt, v2_path.name), *v2_batch])
+    checkpoint = _write_lineage_marker(
+        tmp_path, 3, attempt, 1, 10, v2_path.name,
+    )
+    v2_event = _read_capture_ledger(
+        v2_path, output_root=tmp_path, selected_checkpoint_uid=checkpoint,
+    ).events[0]
     assert v2_event.classification == "MULTIPLE"
     assert [member.sink_id for member in v2_event.members] == [7, 9, 11]
     assert len(v2_event.pairs) == 3
     assert v2_event.binary_orbital_state is None
     assert v2_event.post_compaction_verified
-    assert not v2_event.lineage_verified
+    assert v2_event.lineage_verified
 
 
 def test_bad_batch_conservation_and_bare_event_are_rejected(tmp_path) -> None:

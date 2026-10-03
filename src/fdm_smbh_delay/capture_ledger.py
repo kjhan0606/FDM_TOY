@@ -530,16 +530,161 @@ def _validate_batched_event_source(block: _OpenEvent) -> None:
             raise CaptureLedgerError(f"{block.uid}: inconsistent member primary flag")
 
 
+def _resolve_native_v2_lineage(
+    ledger_path: Path,
+    output_root: Path,
+    attempts: dict[str, dict[str, Any]],
+    committed_sequences: dict[str, set[int]],
+    *,
+    selected_checkpoint_uid: str | None,
+) -> dict[str, tuple[int, int]]:
+    """Resolve one COMPLETE checkpoint tip and its ancestor high-water marks."""
+
+    root = output_root.expanduser().resolve()
+    markers: dict[str, dict[str, Any]] = {}
+    expected_keys = (
+        "checkpoint_uid", "attempt_uid", "run_uuid", "ledger_file",
+        "committed_batch_seq", "nstep_coarse", "output_index",
+    )
+    for marker_path in sorted(root.glob("output_*/SMBH_CAPTURE_LINEAGE")):
+        if not (marker_path.parent / "COMPLETE").is_file():
+            continue
+        try:
+            lines = marker_path.read_text(encoding="utf-8").splitlines()
+            if len(lines) != 1 + len(expected_keys):
+                raise ValueError("wrong field count")
+            if lines[0] != "LAGRAMSES_SMBH_CAPTURE_LINEAGE_V1":
+                raise ValueError("bad magic")
+            pairs = [line.split("=", 1) for line in lines[1:]]
+            if any(len(pair) != 2 for pair in pairs):
+                raise ValueError("malformed field")
+            values = dict(pairs)
+            if tuple(key for key, _ in pairs) != expected_keys:
+                raise ValueError("unexpected field order")
+            marker = {
+                **values,
+                "committed_batch_seq": int(values["committed_batch_seq"]),
+                "nstep_coarse": int(values["nstep_coarse"]),
+                "output_index": int(values["output_index"]),
+            }
+            if marker["committed_batch_seq"] < 0 or marker["nstep_coarse"] < 0:
+                raise ValueError("negative marker count")
+            if marker["output_index"] < 1:
+                raise ValueError("invalid output index")
+            if marker_path.parent.name != f"output_{marker['output_index']:05d}":
+                raise ValueError("output directory/index mismatch")
+            expected_uid = (
+                f"{marker['attempt_uid']}-output-{marker['output_index']:05d}"
+            )
+            if marker["checkpoint_uid"] != expected_uid:
+                raise ValueError("checkpoint UID mismatch")
+            uid = marker["checkpoint_uid"]
+            if uid in markers:
+                raise ValueError("duplicate checkpoint UID")
+            markers[uid] = marker
+        except (OSError, ValueError) as exc:
+            raise CaptureLedgerError(f"{marker_path}: invalid lineage marker: {exc}") from exc
+
+    parent_attempts: set[str] = set()
+    parents: dict[str, tuple[str, int]] = {}
+    for attempt_uid, attempt in attempts.items():
+        parent_checkpoint = attempt["parent_checkpoint_uid"]
+        if parent_checkpoint is None:
+            if attempt["restart_output_index"] != 0 or attempt["restart_nstep_coarse"] != 0:
+                raise CaptureLedgerError(f"{attempt_uid}: invalid fresh-attempt restart metadata")
+            continue
+        marker = markers.get(parent_checkpoint)
+        if marker is None:
+            raise CaptureLedgerError(f"{attempt_uid}: parent checkpoint marker is unavailable")
+        parent_uid = marker["attempt_uid"]
+        parent = attempts.get(parent_uid)
+        if parent is None:
+            raise CaptureLedgerError(f"{attempt_uid}: parent attempt is absent")
+        if (
+            marker["run_uuid"] != attempt["run_uuid"]
+            or marker["ledger_file"] != attempt["ledger_file"]
+            or parent["run_uuid"] != attempt["run_uuid"]
+            or parent["ledger_file"] != attempt["ledger_file"]
+            or marker["output_index"] != attempt["restart_output_index"]
+            or marker["nstep_coarse"] != attempt["restart_nstep_coarse"]
+        ):
+            raise CaptureLedgerError(f"{attempt_uid}: parent checkpoint identity mismatch")
+        parents[attempt_uid] = (parent_uid, marker["committed_batch_seq"])
+        parent_attempts.add(parent_uid)
+
+    leaves = set(attempts) - parent_attempts
+    if selected_checkpoint_uid is None:
+        if len(leaves) != 1:
+            raise CaptureLedgerError(f"capture lineage has {len(leaves)} leaves")
+        leaf = next(iter(leaves))
+    else:
+        selected = markers.get(selected_checkpoint_uid)
+        if selected is None or selected["attempt_uid"] not in leaves:
+            raise CaptureLedgerError(
+                "selected checkpoint does not identify a COMPLETE lineage leaf"
+            )
+        leaf = selected["attempt_uid"]
+    leaf_markers = [marker for marker in markers.values()
+                    if marker["attempt_uid"] == leaf]
+    if not leaf_markers:
+        raise CaptureLedgerError("leaf attempt has no COMPLETE checkpoint")
+    tip = max(leaf_markers, key=lambda marker: marker["output_index"])
+    if selected_checkpoint_uid is not None and selected_checkpoint_uid != tip["checkpoint_uid"]:
+        raise CaptureLedgerError(
+            "selected checkpoint is not the latest COMPLETE leaf checkpoint"
+        )
+
+    leaf_attempt = attempts[leaf]
+    ledger_reference = Path(leaf_attempt["ledger_file"]).expanduser()
+    expected_ledger = (ledger_reference if ledger_reference.is_absolute()
+                       else root / ledger_reference).resolve()
+    if expected_ledger != ledger_path or (
+        tip["run_uuid"] != leaf_attempt["run_uuid"]
+        or tip["ledger_file"] != leaf_attempt["ledger_file"]
+    ):
+        raise CaptureLedgerError("selected checkpoint ledger identity mismatch")
+
+    cutoffs = {
+        leaf: (tip["committed_batch_seq"], tip["nstep_coarse"]),
+    }
+    cursor = leaf
+    while cursor in parents:
+        parent_uid, cutoff = parents[cursor]
+        if parent_uid in cutoffs:
+            raise CaptureLedgerError("capture lineage contains a cycle")
+        parent_marker = markers[attempts[cursor]["parent_checkpoint_uid"]]
+        cutoffs[parent_uid] = (cutoff, parent_marker["nstep_coarse"])
+        cursor = parent_uid
+    roots = [uid for uid in cutoffs if attempts[uid]["parent_checkpoint_uid"] is None]
+    if len(roots) != 1:
+        raise CaptureLedgerError("selected capture lineage does not reach one fresh root")
+    for attempt_uid, (cutoff, _) in cutoffs.items():
+        sequences = committed_sequences.get(attempt_uid, set())
+        if sequences != set(range(1, max(sequences, default=0) + 1)):
+            raise CaptureLedgerError(
+                f"{attempt_uid}: committed batch sequence is not contiguous from one"
+            )
+        if cutoff > max(sequences, default=0):
+            raise CaptureLedgerError(
+                f"{attempt_uid}: checkpoint high-water exceeds committed ledger batches"
+            )
+    return cutoffs
+
+
 def _read_native_v2_capture_ledger(
     resolved: Path, *, allow_incomplete_tail: bool,
-    allow_lineage_unverified_v2: bool,
+    allow_lineage_unverified_v2: bool, output_root: Path | None,
+    selected_checkpoint_uid: str | None,
 ) -> CaptureLedger:
     """Read the native lagRamses v2 prepare/commit transaction format."""
 
     current: _OpenEvent | None = None
     batch: _OpenBatch | None = None
     prepared = False
-    committed: list[tuple[_OpenBatch, str]] = []
+    committed: list[tuple[_OpenBatch, str, str | None, int | None]] = []
+    attempts: dict[str, dict[str, Any]] = {}
+    active_attempt: str | None = None
+    lineage_protocol = False
     incomplete: list[str] = []
     censored: list[str] = []
 
@@ -557,7 +702,49 @@ def _read_native_v2_capture_ledger(
                 raise CaptureLedgerError(f"{resolved}:{line_number}: record is not an object")
             record_type = record.get("record_type")
 
-            if record_type == "batch_begin":
+            if record_type == "attempt_begin":
+                if not lineage_protocol and (batch is not None or committed):
+                    raise CaptureLedgerError(
+                        "native v2 ledger mixes unlineaged batches with attempt protocol"
+                    )
+                lineage_protocol = True
+                if batch is not None:
+                    if current is not None:
+                        incomplete.append(current.uid)
+                    censored.append(batch.uid)
+                    current = None
+                    batch = None
+                    prepared = False
+                uid = record.get("attempt_uid")
+                parent = record.get("parent_checkpoint_uid")
+                run_uuid = record.get("run_uuid")
+                ledger_file = record.get("ledger_file")
+                restart_output = record.get("restart_output_index")
+                restart_step = record.get("restart_nstep_coarse")
+                if (
+                    record.get("schema_version") != 2
+                    or not isinstance(uid, str) or not uid
+                    or not isinstance(run_uuid, str) or not run_uuid
+                    or not isinstance(ledger_file, str) or not ledger_file
+                    or not (parent is None or isinstance(parent, str) and parent)
+                    or isinstance(restart_output, bool) or not isinstance(restart_output, int)
+                    or restart_output < 0
+                    or isinstance(restart_step, bool) or not isinstance(restart_step, int)
+                    or restart_step < 0
+                    or ((parent is None) != (restart_output == 0))
+                ):
+                    raise CaptureLedgerError(f"{resolved}:{line_number}: invalid attempt_begin")
+                signature = {
+                    "run_uuid": run_uuid, "ledger_file": ledger_file,
+                    "parent_checkpoint_uid": parent,
+                    "restart_output_index": restart_output,
+                    "restart_nstep_coarse": restart_step,
+                }
+                if uid in attempts and attempts[uid] != signature:
+                    raise CaptureLedgerError(f"{uid}: conflicting attempt_begin")
+                attempts[uid] = signature
+                active_attempt = uid
+            elif record_type == "batch_begin":
                 if batch is not None:
                     raise CaptureLedgerError(
                         f"{batch.uid}: missing batch_commit before next batch; "
@@ -570,6 +757,14 @@ def _read_native_v2_capture_ledger(
                     or record.get("committed") is not False
                 ):
                     raise CaptureLedgerError("invalid v2 batch_begin")
+                if lineage_protocol:
+                    if (
+                        record.get("attempt_uid") != active_attempt
+                        or _ledger_int(record, "committed_batch_seq", minimum=1) < 1
+                    ):
+                        raise CaptureLedgerError("invalid v2 batch lineage metadata")
+                elif "attempt_uid" in record or "committed_batch_seq" in record:
+                    raise CaptureLedgerError("v2 batch lineage appears before attempt_begin")
                 _ledger_int(record, "nstep_coarse")
                 _ledger_int(record, "ilevel", minimum=1)
                 _ledger_int(record, "expected_events", minimum=1)
@@ -615,6 +810,11 @@ def _read_native_v2_capture_ledger(
                 if (
                     record.get("schema_version") != 2
                     or record.get("batch_uid") != batch.uid
+                    or (lineage_protocol and (
+                        record.get("attempt_uid") != batch.begin.get("attempt_uid")
+                        or record.get("committed_batch_seq")
+                        != batch.begin.get("committed_batch_seq")
+                    ))
                     or record.get("prepared") is not True
                     or record.get("committed") is not False
                     or _ledger_int(record, "event_count", minimum=1) != expected
@@ -629,6 +829,11 @@ def _read_native_v2_capture_ledger(
                 if (
                     record.get("schema_version") != 2
                     or record.get("batch_uid") != batch.uid
+                    or (lineage_protocol and (
+                        record.get("attempt_uid") != batch.begin.get("attempt_uid")
+                        or record.get("committed_batch_seq")
+                        != batch.begin.get("committed_batch_seq")
+                    ))
                     or record.get("committed") is not True
                     or _ledger_int(record, "event_count", minimum=1) != expected
                 ):
@@ -656,7 +861,10 @@ def _read_native_v2_capture_ledger(
                 digest = hashlib.sha256(
                     json.dumps(digest_payload, sort_keys=True).encode()
                 ).hexdigest()
-                committed.append((batch, digest))
+                committed.append((
+                    batch, digest, batch.begin.get("attempt_uid"),
+                    batch.begin.get("committed_batch_seq"),
+                ))
                 batch = None
                 prepared = False
             else:
@@ -671,7 +879,29 @@ def _read_native_v2_capture_ledger(
             raise CaptureLedgerError(f"{batch.uid}: incomplete v2 batch at end of ledger")
         censored.append(batch.uid)
 
-    if committed and not allow_lineage_unverified_v2:
+    committed_sequences: dict[str, set[int]] = {}
+    for _, _, attempt_uid, sequence in committed:
+        if attempt_uid is None or sequence is None:
+            continue
+        attempt_sequences = committed_sequences.setdefault(attempt_uid, set())
+        if sequence in attempt_sequences:
+            raise CaptureLedgerError(
+                f"{attempt_uid}:{sequence}: duplicate committed batch sequence"
+            )
+        attempt_sequences.add(sequence)
+
+    active_cutoffs: dict[str, tuple[int, int]] | None = None
+    if output_root is not None:
+        if not lineage_protocol or not attempts:
+            raise CaptureLedgerError("native v2 ledger lacks attempt lineage protocol")
+        active_cutoffs = _resolve_native_v2_lineage(
+            resolved, output_root, attempts,
+            committed_sequences,
+            selected_checkpoint_uid=selected_checkpoint_uid,
+        )
+    elif selected_checkpoint_uid is not None:
+        raise CaptureLedgerError("selected_checkpoint_uid requires output_root")
+    elif committed and not allow_lineage_unverified_v2:
         raise CaptureLedgerError(
             "native v2 committed batches lack attempt/checkpoint lineage provenance; "
             "use allow_lineage_unverified_v2=True only for diagnostic inspection"
@@ -680,17 +910,34 @@ def _read_native_v2_capture_ledger(
     events: dict[str, CaptureEvent] = {}
     batch_digests: dict[str, str] = {}
     duplicates = 0
-    for committed_batch, digest in committed:
-        previous_batch = batch_digests.get(committed_batch.uid)
+    for committed_batch, digest, attempt_uid, sequence in committed:
+        if active_cutoffs is not None and (
+            attempt_uid not in active_cutoffs or sequence is None
+            or sequence > active_cutoffs[attempt_uid][0]
+        ):
+            continue
+        if active_cutoffs is not None:
+            restart_step = attempts[attempt_uid]["restart_nstep_coarse"]
+            checkpoint_step = active_cutoffs[attempt_uid][1]
+            batch_step = _ledger_int(committed_batch.begin, "nstep_coarse")
+            if not restart_step <= batch_step <= checkpoint_step:
+                raise CaptureLedgerError(
+                    f"{attempt_uid}:{sequence}: batch step lies outside its "
+                    "restart/checkpoint interval"
+                )
+        batch_key = (
+            f"{attempt_uid}:{sequence}" if attempt_uid is not None
+            else committed_batch.uid
+        )
+        previous_batch = batch_digests.get(batch_key)
         if previous_batch is not None and previous_batch != digest:
             raise CaptureLedgerError(
                 f"{committed_batch.uid}: conflicting deterministic batch UID"
             )
-        batch_digests[committed_batch.uid] = digest
+        batch_digests[batch_key] = digest
         for event in committed_batch.events:
-            verified = replace(
-                event, post_compaction_verified=True, lineage_verified=False,
-            )
+            verified = replace(event, post_compaction_verified=True,
+                               lineage_verified=active_cutoffs is not None)
             previous_event = events.get(event.event_uid)
             if previous_event is None:
                 events[event.event_uid] = verified
@@ -711,6 +958,8 @@ def read_capture_ledger(
     path: str | Path, *, allow_incomplete_tail: bool = False,
     allow_incomplete_batches: bool = True, allow_legacy_events: bool = False,
     allow_lineage_unverified_v2: bool = False,
+    output_root: str | Path | None = None,
+    selected_checkpoint_uid: str | None = None,
 ) -> CaptureLedger:
     """Read only committed events on the final restart lineage.
 
@@ -723,9 +972,15 @@ def read_capture_ledger(
     ``allow_incomplete_batches`` applies only to the v1 protocol, whose restart
     markers can prove that a later attempt supersedes an open batch. Native v2
     has no such marker, so a following batch never silently supersedes an open
-    one. Native v2 committed events are diagnostic-only unless callers pass
-    ``allow_lineage_unverified_v2=True``; those events remain explicitly marked
-    ``lineage_verified=False`` and are rejected by physical entry points.
+    one. Native v2 events become lineage-verified only when ``output_root``
+    supplies one COMPLETE checkpoint tip and all parent sidecars needed to
+    apply the batch high-water cutoffs. Without those markers, committed events
+    are diagnostic-only and require ``allow_lineage_unverified_v2=True``; they
+    remain explicitly marked ``lineage_verified=False`` and are rejected by
+    physical entry points. The leaf is capped at its highest-index COMPLETE
+    output. Multiple leaves remain ambiguous unless ``selected_checkpoint_uid``
+    names the latest COMPLETE checkpoint of one leaf; it never selects an
+    attempt merely because it was appended last.
     """
 
     resolved = Path(path).expanduser().resolve()
@@ -740,6 +995,8 @@ def read_capture_ledger(
             return _read_native_v2_capture_ledger(
                 resolved, allow_incomplete_tail=allow_incomplete_tail,
                 allow_lineage_unverified_v2=allow_lineage_unverified_v2,
+                output_root=(None if output_root is None else Path(output_root)),
+                selected_checkpoint_uid=selected_checkpoint_uid,
             )
     current: _OpenEvent | None = None
     batch: _OpenBatch | None = None
