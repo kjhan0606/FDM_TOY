@@ -13,6 +13,11 @@ PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT / "scripts"))
 
 import run_torch_wave_case  # noqa: E402
+from fdm_smbh_delay.torch_wave import (  # noqa: E402
+    apply_kinetic_phase_in_place,
+    periodic_poisson_torch,
+    spectral_grid,
+)
 
 
 def _state(offset: float = 0.0) -> np.ndarray:
@@ -133,3 +138,57 @@ def test_torch_checkpoint_rejects_marker_state_disagreement(
         run_torch_wave_case._load_checkpoint(
             run=run, device=torch.device("cpu")
         )
+
+
+def test_self_gravitating_wave_restart_matches_uninterrupted_split_steps(
+    tmp_path: Path,
+) -> None:
+    """The separable drift preserves the actual split-step restart trajectory."""
+
+    grid = spectral_grid(
+        resolution=8, box_length=4.0, time_step=0.001,
+        device=torch.device("cpu"),
+    )
+    rng = np.random.default_rng(2394)
+    initial = torch.as_tensor(
+        1.0 + 0.01 * rng.normal(size=(8, 8, 8))
+        + 0.01j * rng.normal(size=(8, 8, 8)),
+        dtype=torch.complex128,
+    )
+
+    def advance(wavefunction: torch.Tensor, count: int) -> torch.Tensor:
+        for _ in range(count):
+            density = wavefunction.abs().square()
+            potential = periodic_poisson_torch(
+                density, grid.poisson_inverse_wavenumber_squared
+            )
+            wavefunction.mul_(torch.exp(-0.5j * 0.001 * potential))
+            spectrum = torch.fft.fftn(wavefunction)
+            apply_kinetic_phase_in_place(spectrum, grid.kinetic_axis_phase)
+            wavefunction = torch.fft.ifftn(spectrum)
+            density = wavefunction.abs().square()
+            potential = periodic_poisson_torch(
+                density, grid.poisson_inverse_wavenumber_squared
+            )
+            wavefunction.mul_(torch.exp(-0.5j * 0.001 * potential))
+        return wavefunction
+
+    uninterrupted = advance(initial.clone(), 4)
+    run = tmp_path / "run"
+    run.mkdir()
+    partial = advance(initial.clone(), 2)
+    run_torch_wave_case._save_checkpoint(
+        run=run, wavefunction=partial, state=_state(), step=2, save_index=2,
+    )
+    resumed, state, step, save_index = run_torch_wave_case._load_checkpoint(
+        run=run, device=torch.device("cpu"),
+    )
+    assert (step, save_index) == (2, 2)
+    np.testing.assert_array_equal(state, _state())
+    torch.testing.assert_close(resumed, partial, rtol=0, atol=0)
+    torch.testing.assert_close(advance(resumed, 2), uninterrupted, rtol=0, atol=0)
+    torch.testing.assert_close(
+        torch.sum(uninterrupted.abs().square()),
+        torch.sum(initial.abs().square()),
+        rtol=1e-12, atol=1e-12,
+    )
