@@ -22,6 +22,12 @@ the lagRamses `capture_event_uid`, and the ordered stages
 Every stage records status, elapsed time since numerical capture, and
 separation. The capture boundary must be complete at zero elapsed time. Later
 complete times must increase and separations must decrease.
+Before comparing resolutions, call `bind_zoom_result_to_capture_ledger` on each
+read result. It reads the active committed lagRamses ledger lineage and
+requires a native-conservation-verified two-member event whose UID, SMBH
+masses, mass ratio, and separation agree with the zoom capture boundary.
+An unbound UID string, an old bare event, a superseded event, or a MULTIPLE
+event cannot supply a zoom calibration row.
 
 The result diagnostics must include:
 
@@ -41,8 +47,9 @@ to the analytic delay. The initial table performs exact physical-point lookup;
 interpolation and extrapolation remain prohibited until the populated grid
 demonstrates support between points.
 The correction's source SHA-256 identifies the ordered fine/coarse result pair,
-and the row retains each result's individual SHA-256 and case ID. Changing
-either run therefore changes the correction provenance.
+and the row retains each result's individual SHA-256 and case ID together with
+the verified capture-event SHA-256. Changing either run or the capture event
+therefore changes the correction provenance.
 
 ## Static-host applicability boundary
 

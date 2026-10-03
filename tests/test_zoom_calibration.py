@@ -3,17 +3,47 @@ from __future__ import annotations
 from dataclasses import replace
 import json
 
+import numpy as np
 import pytest
 
+from capture_protocol_fixture import write_committed_capture
+from test_capture_ledger import _binary_rows
+from fdm_smbh_delay.capture_ledger import CaptureLedgerError, read_capture_ledger
+from fdm_smbh_delay.constants import G_INTERNAL
 from fdm_smbh_delay.zoom_calibration import (
     KpcDelayCalibrationTable,
     ZoomPhysicsPoint,
     accepted_kpc_delay_row,
     apply_kpc_delay_calibration,
+    bind_zoom_result_to_capture_ledger,
     build_zoom_grid,
     compare_zoom_resolution_pair,
     read_zoom_result,
 )
+
+
+def _committed_zoom_capture(tmp_path):
+    rows = _binary_rows()
+    rows[0]["boxlen"] = 20000.0
+    rows[0]["merge_radius_code"] = 6000.0
+    speed = np.sqrt(G_INTERNAL * 2.0e8 * 0.5 / 5000.0)
+    rows[1]["position_code"] = [2500.0, 0.0, 0.0]
+    rows[2]["position_code"] = [-2500.0, 0.0, 0.0]
+    rows[1]["velocity_code"] = [0.0, 0.5 * speed, 0.0]
+    rows[2]["velocity_code"] = [0.0, -0.5 * speed, 0.0]
+    rows[3]["legacy_pair_bound"] = False
+    path = tmp_path / "capture.jsonl"
+    uid = write_committed_capture(path, rows)
+    event = read_capture_ledger(path).events[0]
+    assert event.event_uid == uid
+    assert event.post_compaction_verified and event.native_conservation_verified
+    return path
+
+
+def _bound_result(path, case, ledger_path):
+    return bind_zoom_result_to_capture_ledger(
+        read_zoom_result(path, case), ledger_path,
+    )
 
 
 def _specification() -> dict:
@@ -81,7 +111,7 @@ def _write_result(path, case, *, delay_scale: float = 1.0, cells: float = 8.0):
         "schema_version": 1,
         "case_id": case.case_id,
         "case": case.as_dict(),
-        "capture_event_uid": "capture-1",
+        "capture_event_uid": "10-1-7-9-2",
         "stages": stages,
         "analytic_kpc_to_hard_delay_myr": 25.0,
         "integration_time_myr": 30.0,
@@ -125,8 +155,9 @@ def test_resolution_pair_builds_exact_point_delay_row(tmp_path) -> None:
     fine_path = tmp_path / "fine.json"
     _write_result(coarse_path, coarse_case, delay_scale=1.1)
     _write_result(fine_path, fine_case, delay_scale=1.0)
-    coarse = read_zoom_result(coarse_path, coarse_case)
-    fine = read_zoom_result(fine_path, fine_case)
+    ledger_path = _committed_zoom_capture(tmp_path)
+    coarse = _bound_result(coarse_path, coarse_case, ledger_path)
+    fine = _bound_result(fine_path, fine_case, ledger_path)
     convergence = compare_zoom_resolution_pair(fine, coarse)
     assert convergence.status == "accepted"
     assert convergence.maximum_stage_delay_systematic_fraction == pytest.approx(0.1)
@@ -135,6 +166,7 @@ def test_resolution_pair_builds_exact_point_delay_row(tmp_path) -> None:
     assert row.reference_result_sha256 == fine.source_sha256
     assert row.comparison_result_sha256 == coarse.source_sha256
     assert row.source_sha256 not in {fine.source_sha256, coarse.source_sha256}
+    assert row.capture_event_sha256 == fine.capture_event_sha256
     table = KpcDelayCalibrationTable((row,))
     assert table.lookup(fine_case.physics) == row
     unmeasured = replace(fine_case.physics, mass_ratio_q=0.7)
@@ -162,12 +194,14 @@ def test_resolution_pair_builds_exact_point_delay_row(tmp_path) -> None:
         KpcDelayCalibrationTable((malformed,))
     with pytest.raises(ValueError, match="provenance is incomplete"):
         KpcDelayCalibrationTable((replace(row, comparison_result_sha256="0" * 64),))
+    with pytest.raises(ValueError, match="provenance is incomplete"):
+        KpcDelayCalibrationTable((replace(row, capture_event_sha256="0" * 64),))
 
     revised_coarse = json.loads(coarse_path.read_text())
     revised_coarse["stages"]["hard_binary"]["elapsed_since_capture_myr"] = 21.0
     coarse_path.write_text(json.dumps(revised_coarse), encoding="utf-8")
     changed_convergence = compare_zoom_resolution_pair(
-        fine, read_zoom_result(coarse_path, coarse_case)
+        fine, _bound_result(coarse_path, coarse_case, ledger_path)
     )
     assert changed_convergence.status == "accepted"
     assert accepted_kpc_delay_row(changed_convergence).source_sha256 != row.source_sha256
@@ -189,6 +223,53 @@ def test_resolution_pair_rejects_different_capture_events(tmp_path) -> None:
         )
 
 
+def test_zoom_pair_requires_committed_capture_binding(tmp_path) -> None:
+    coarse_case, fine_case = build_zoom_grid(_specification()).cases[:2]
+    coarse_path = tmp_path / "coarse.json"
+    fine_path = tmp_path / "fine.json"
+    _write_result(coarse_path, coarse_case)
+    _write_result(fine_path, fine_case)
+    with pytest.raises(ValueError, match="verified ledger capture"):
+        compare_zoom_resolution_pair(
+            read_zoom_result(fine_path, fine_case),
+            read_zoom_result(coarse_path, coarse_case),
+        )
+    ledger_path = _committed_zoom_capture(tmp_path)
+    altered = json.loads(fine_path.read_text())
+    altered["capture_event_uid"] = "10-1-7-10-2"
+    fine_path.write_text(json.dumps(altered), encoding="utf-8")
+    with pytest.raises(ValueError, match="absent from the active ledger lineage"):
+        _bound_result(fine_path, fine_case, ledger_path)
+
+
+def test_zoom_capture_binding_rejects_changed_physical_state(tmp_path) -> None:
+    case = build_zoom_grid(_specification()).cases[0]
+    result_path = tmp_path / "result.json"
+    _write_result(result_path, case)
+    ledger_path = _committed_zoom_capture(tmp_path)
+    different_mass = replace(case.physics, binary_total_mass_msun=2.1e8)
+    altered_case = replace(case, physics=different_mass)
+    altered = json.loads(result_path.read_text())
+    altered["case_id"] = altered_case.case_id
+    altered["case"] = altered_case.as_dict()
+    result_path.write_text(json.dumps(altered), encoding="utf-8")
+    with pytest.raises(ValueError, match="disagrees with the committed ledger"):
+        _bound_result(result_path, altered_case, ledger_path)
+
+
+def test_zoom_capture_binding_rejects_legacy_bare_event(tmp_path) -> None:
+    case = build_zoom_grid(_specification()).cases[0]
+    result_path = tmp_path / "result.json"
+    _write_result(result_path, case)
+    bare = tmp_path / "bare.jsonl"
+    bare.write_text(
+        "".join(json.dumps(row) + "\n" for row in _binary_rows()),
+        encoding="utf-8",
+    )
+    with pytest.raises(CaptureLedgerError, match="legacy bare events"):
+        _bound_result(result_path, case, bare)
+
+
 @pytest.mark.parametrize("coarse_baseline", [None, 30.0])
 def test_resolution_pair_rejects_missing_or_changed_analytic_baseline(
     tmp_path, coarse_baseline
@@ -201,9 +282,10 @@ def test_resolution_pair_rejects_missing_or_changed_analytic_baseline(
     record = json.loads(coarse_path.read_text())
     record["analytic_kpc_to_hard_delay_myr"] = coarse_baseline
     coarse_path.write_text(json.dumps(record), encoding="utf-8")
+    ledger_path = _committed_zoom_capture(tmp_path)
     comparison = compare_zoom_resolution_pair(
-        read_zoom_result(fine_path, fine_case),
-        read_zoom_result(coarse_path, coarse_case),
+        _bound_result(fine_path, fine_case, ledger_path),
+        _bound_result(coarse_path, coarse_case, ledger_path),
     )
     assert comparison.status == "rejected"
     assert any("baseline" in reason for reason in comparison.reasons)
@@ -231,10 +313,11 @@ def test_kpc_delay_consumer_rejects_invalid_baseline(tmp_path, baseline) -> None
     fine_path = tmp_path / "fine.json"
     _write_result(coarse_path, coarse_case, delay_scale=1.1)
     _write_result(fine_path, fine_case, delay_scale=1.0)
+    ledger_path = _committed_zoom_capture(tmp_path)
     row = accepted_kpc_delay_row(
         compare_zoom_resolution_pair(
-            read_zoom_result(fine_path, fine_case),
-            read_zoom_result(coarse_path, coarse_case),
+            _bound_result(fine_path, fine_case, ledger_path),
+            _bound_result(coarse_path, coarse_case, ledger_path),
         )
     )
     table = KpcDelayCalibrationTable((row,))
@@ -249,9 +332,10 @@ def test_underresolved_transition_rejects_zoom_pair(tmp_path) -> None:
     fine_path = tmp_path / "fine.json"
     _write_result(coarse_path, coarse_case, cells=3.0)
     _write_result(fine_path, fine_case, cells=8.0)
+    ledger_path = _committed_zoom_capture(tmp_path)
     convergence = compare_zoom_resolution_pair(
-        read_zoom_result(fine_path, fine_case),
-        read_zoom_result(coarse_path, coarse_case),
+        _bound_result(fine_path, fine_case, ledger_path),
+        _bound_result(coarse_path, coarse_case, ledger_path),
     )
     assert convergence.status == "rejected"
     assert any("underresolved" in reason for reason in convergence.reasons)

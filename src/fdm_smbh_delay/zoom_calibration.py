@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import hashlib
 import json
 from pathlib import Path
@@ -13,6 +13,7 @@ import numpy as np
 import yaml
 
 from .delay_budget import DelaySegment
+from .capture_ledger import read_capture_ledger
 
 
 ZOOM_SCHEMA_VERSION = 1
@@ -386,6 +387,7 @@ class ZoomRunResult:
     maximum_relative_angular_momentum_error: float
     minimum_transition_radius_cells: float
     integration_time_myr: float
+    capture_event_sha256: str | None = None
 
     def stage(self, name: str) -> ZoomStageResult:
         return dict(self.stages)[name]
@@ -497,6 +499,40 @@ def read_zoom_result(path: str | Path, case: GalaxyMergerZoomCase) -> ZoomRunRes
     )
 
 
+def bind_zoom_result_to_capture_ledger(
+    result: ZoomRunResult, ledger_path: str | Path,
+) -> ZoomRunResult:
+    """Bind a zoom result to one active, committed native binary event."""
+
+    ledger = read_capture_ledger(ledger_path)
+    matches = [event for event in ledger.events
+               if event.event_uid == result.capture_event_uid]
+    if len(matches) != 1:
+        raise ValueError("zoom capture event is absent from the active ledger lineage")
+    event = matches[0]
+    orbit = event.binary_orbital_state
+    if (
+        not event.post_compaction_verified
+        or not event.native_conservation_verified
+        or orbit is None
+    ):
+        raise ValueError("zoom capture lacks a committed native binary event")
+    masses = [member.mass_msun for member in event.members]
+    total = sum(masses)
+    q = min(masses) / max(masses)
+    if (
+        not np.isclose(total, result.case.physics.binary_total_mass_msun,
+                       rtol=1.0e-10, atol=0.0)
+        or not np.isclose(q, result.case.physics.mass_ratio_q,
+                          rtol=1.0e-10, atol=0.0)
+        or not np.isclose(orbit.separation_pc,
+                          result.stage("numerical_capture").separation_pc,
+                          rtol=1.0e-10, atol=0.0)
+    ):
+        raise ValueError("zoom capture state disagrees with the committed ledger event")
+    return replace(result, capture_event_sha256=event.event_sha256)
+
+
 @dataclass(frozen=True)
 class ZoomConvergenceResult:
     status: str
@@ -529,6 +565,12 @@ def compare_zoom_resolution_pair(
         raise ValueError("zoom resolution pair does not share one physical realization")
     if reference.capture_event_uid != comparison.capture_event_uid:
         raise ValueError("zoom resolution pair uses different capture events")
+    if (
+        reference.capture_event_sha256 is None
+        or comparison.capture_event_sha256 is None
+        or reference.capture_event_sha256 != comparison.capture_event_sha256
+    ):
+        raise ValueError("zoom resolution pair lacks one verified ledger capture event")
     if (
         reference.case.numerics.finest_cell_size_pc
         >= comparison.case.numerics.finest_cell_size_pc
@@ -589,6 +631,7 @@ class KpcDelayCalibrationRow:
     reference_result_sha256: str
     comparison_case_id: str
     comparison_result_sha256: str
+    capture_event_sha256: str
 
 
 def _zoom_pair_sha256(
@@ -596,12 +639,14 @@ def _zoom_pair_sha256(
     reference_result_sha256: str,
     comparison_case_id: str,
     comparison_result_sha256: str,
+    capture_event_sha256: str,
 ) -> str:
     return _canonical_sha256({
         "reference_case_id": reference_case_id,
         "reference_result_sha256": reference_result_sha256,
         "comparison_case_id": comparison_case_id,
         "comparison_result_sha256": comparison_result_sha256,
+        "capture_event_sha256": capture_event_sha256,
     })
 
 
@@ -614,6 +659,7 @@ def accepted_kpc_delay_row(convergence: ZoomConvergenceResult) -> KpcDelayCalibr
     if simulated is None or simulated <= 0.0 or analytic is None:
         raise ValueError("accepted zoom lacks a positive simulated/analytic delay pair")
     assert convergence.maximum_stage_delay_systematic_fraction is not None
+    assert reference.capture_event_sha256 is not None
     return KpcDelayCalibrationRow(
         physics=reference.case.physics,
         simulated_kpc_to_hard_delay_myr=float(simulated),
@@ -628,10 +674,12 @@ def accepted_kpc_delay_row(convergence: ZoomConvergenceResult) -> KpcDelayCalibr
             reference.source_sha256,
             convergence.comparison.case.case_id,
             convergence.comparison.source_sha256,
+            reference.capture_event_sha256,
         ),
         reference_result_sha256=reference.source_sha256,
         comparison_case_id=convergence.comparison.case.case_id,
         comparison_result_sha256=convergence.comparison.source_sha256,
+        capture_event_sha256=reference.capture_event_sha256,
     )
 
 
@@ -682,11 +730,14 @@ class KpcDelayCalibrationTable:
                 or re.fullmatch(r"[0-9a-fA-F]{64}", row.reference_result_sha256) is None
                 or not isinstance(row.comparison_result_sha256, str)
                 or re.fullmatch(r"[0-9a-fA-F]{64}", row.comparison_result_sha256) is None
+                or not isinstance(row.capture_event_sha256, str)
+                or re.fullmatch(r"[0-9a-fA-F]{64}", row.capture_event_sha256) is None
                 or row.source_sha256 != _zoom_pair_sha256(
                     row.source_case_id,
                     row.reference_result_sha256,
                     row.comparison_case_id,
                     row.comparison_result_sha256,
+                    row.capture_event_sha256,
                 )
             ):
                 raise ValueError("kpc delay calibration provenance is incomplete")
