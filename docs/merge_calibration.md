@@ -373,6 +373,22 @@ for its doubled-box controls; merely extending the current run duration or
 submitting the same grids on an 80 GiB card cannot establish the required
 calibration.
 
+An A/B **n=256, one-wave-step memory probe** used the same
+`qe_q100_e000_a020_n256` PyUL seed, 0.000001 Myr duration, nine RK4 substeps,
+Torch 2.11.0+cu130, and an NVIDIA A10 on syn04. The baseline source at
+`391f6e9` (Slurm job `411438`) peaked at 1,946,683,904 allocated device
+bytes (1.813 GiB); the separable-phase and early-buffer-release source at
+`aacbc15` (job `411436`) peaked at 1,544,036,864 bytes (1.438 GiB). The
+matched reduction is 383.994 MiB, or 20.7% of the baseline peak. Both runs
+completed exactly one wave step. Their source snapshots, run metadata, and
+summaries are in
+`/gpfs/kjhan/FDM_TOY_RESULTS/qe_extension/torch/memory_probe_n256_baseline_411438/`
+and `/gpfs/kjhan/FDM_TOY_RESULTS/qe_extension/torch/memory_probe_n256_411436/`.
+This is PyTorch peak **allocated** memory, not CUDA reserved memory or total
+device occupancy. A one-step n=256 probe does not validate numerical
+trajectories, longer-run peaks, or capacity at n=512, 768, or 1024; those
+larger grids remain unmeasured for the new solver revision.
+
 The guarded q-e queue uses observed device-memory profiles rather than the
 uniform-grid estimate alone. An `n=512` stage requires at least 22 GiB total
 and 21 GiB free: this admits a 23,028 MiB A10 while retaining more than 2 GiB
