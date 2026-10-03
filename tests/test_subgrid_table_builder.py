@@ -396,12 +396,7 @@ def test_writer_is_loadable_by_the_runtime_table(tmp_path: Path) -> None:
 def test_qe_candidate_cannot_be_released_without_doubled_box_control(
     tmp_path: Path,
 ) -> None:
-    path = _write_summary(tmp_path)
-    for name in ("n512", "n384"):
-        metadata_path = tmp_path / name / "fdm_adapter_metadata.json"
-        metadata = json.loads(metadata_path.read_text())
-        metadata["case_id"] = "qe_test"
-        metadata_path.write_text(json.dumps(metadata))
+    path, _ = _write_qe_box_pair(tmp_path)
     output = tmp_path / "subgrid.csv"
     with pytest.raises(ValueError, match="verified doubled-box control"):
         write_calibration_table([CalibrationSource("test", path)], output=output)
@@ -464,6 +459,28 @@ def _write_qe_box_pair(tmp_path: Path) -> tuple[Path, Path]:
         bin_row["runs"][1]["label"] = "n512"
     box_path = tmp_path / "box_control.json"
     box_path.write_text(json.dumps(box))
+    for name in ("n384", "n512", "n1024"):
+        metadata_path = tmp_path / name / "fdm_adapter_metadata.json"
+        metadata = json.loads(metadata_path.read_text())
+        metadata["semi_major_axis_pc"] = 0.6
+        metadata["initial_separation_pc"] = 0.6
+        metadata_path.write_text(json.dumps(metadata))
+        config_path = tmp_path / name / "config.uldm"
+        config = json.loads(config_path.read_text())
+        config["Matter Particles"].update({
+            "Mass Units": "solar_masses", "Position Units": "pc",
+            "Velocity Units": "km/s",
+            "Condition": [
+                [2.0e7, [0.3, 0.0, 0.0], [0.0, 260.0, 0.0]],
+                [2.0e7, [-0.3, 0.0, 0.0], [0.0, -260.0, 0.0]],
+            ],
+        })
+        config["ULDM Solitons"].update({
+            "Mass Units": "solar_masses", "Position Units": "pc",
+            "Velocity Units": "km/s",
+            "Condition": [[1.0e9, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], 0.0]],
+        })
+        config_path.write_text(json.dumps(config))
     return pair_path, box_path
 
 
@@ -506,12 +523,32 @@ def test_qe_box_control_rejects_changed_initial_conditions(tmp_path: Path) -> No
     pair, box = _write_qe_box_pair(tmp_path)
     config_path = tmp_path / "n1024" / "config.uldm"
     config = json.loads(config_path.read_text())
-    config["Matter Particles"]["Condition"][0].append([0.1, 0.0, 0.0])
+    config["Matter Particles"]["Condition"][0][2][1] += 1.0
     config_path.write_text(json.dumps(config))
-    with pytest.raises(ValueError, match="initial SMBH and soliton conditions differ"):
+    with pytest.raises(ValueError, match="do not share one q/e physical case"):
         assess_qe_box_control(
             CalibrationSource("test", pair), CalibrationSource("test", box)
         )
+
+
+def test_qe_resolution_pair_rejects_changed_initial_orbit(tmp_path: Path) -> None:
+    pair, _ = _write_qe_box_pair(tmp_path)
+    config_path = tmp_path / "n384" / "config.uldm"
+    config = json.loads(config_path.read_text())
+    config["Matter Particles"]["Condition"][0][2][1] += 1.0
+    config_path.write_text(json.dumps(config))
+    with pytest.raises(ValueError, match="same physical case"):
+        build_source_rows(CalibrationSource("test", pair))
+
+
+def test_qe_resolution_pair_requires_consistent_axes(tmp_path: Path) -> None:
+    pair, _ = _write_qe_box_pair(tmp_path)
+    metadata_path = tmp_path / "n384" / "fdm_adapter_metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata["semi_major_axis_pc"] = 0.7
+    metadata_path.write_text(json.dumps(metadata))
+    with pytest.raises(ValueError, match="inconsistent q/e initial-orbit axes"):
+        build_source_rows(CalibrationSource("test", pair))
 
 
 def test_qe_box_control_censors_missing_control_bin(tmp_path: Path) -> None:

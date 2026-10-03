@@ -87,6 +87,41 @@ def _physical_definition(run: Path) -> dict:
     plummer_radius = float(metadata["plummer_radius_pc"])
     if not np.isfinite(plummer_radius) or plummer_radius <= 0.0:
         raise ValueError(f"{run} has an invalid Plummer radius")
+    initial_separation = metadata.get("initial_separation_pc")
+    semimajor_axis = metadata.get("semi_major_axis_pc")
+    if is_qe_extension_case(str(metadata["case_id"])):
+        if initial_separation is None or semimajor_axis is None:
+            raise ValueError(f"{run} lacks q/e initial-orbit provenance")
+        initial_separation = float(initial_separation)
+        semimajor_axis = float(semimajor_axis)
+        if (not np.isfinite(initial_separation) or initial_separation <= 0.0
+                or not np.isfinite(semimajor_axis) or semimajor_axis <= 0.0
+                or not np.isclose(initial_separation,
+                                  semimajor_axis * (1.0 + eccentricity),
+                                  rtol=1.0e-10, atol=0.0)):
+            raise ValueError(f"{run} has inconsistent q/e initial-orbit axes")
+        if (config["Matter Particles"].get("Mass Units") != "solar_masses"
+                or config["Matter Particles"].get("Position Units") != "pc"
+                or config["Matter Particles"].get("Velocity Units") != "km/s"
+                or config["ULDM Solitons"].get("Mass Units") != "solar_masses"
+                or config["ULDM Solitons"].get("Position Units") != "pc"
+                or config["ULDM Solitons"].get("Velocity Units") != "km/s"
+                or any(len(row) != 3 for row in particles)
+                or len(solitons[0]) != 4):
+            raise ValueError(f"{run} has incomplete q/e initial phase-space units or rows")
+        positions = np.asarray([row[1] for row in particles], dtype=float)
+        velocities = np.asarray([row[2] for row in particles], dtype=float)
+        if (positions.shape != (2, 3) or velocities.shape != (2, 3)
+                or np.any(~np.isfinite(positions))
+                or np.any(~np.isfinite(velocities))
+                or not np.isfinite(float(solitons[0][3]))
+                or np.asarray(solitons[0][1], dtype=float).shape != (3,)
+                or np.asarray(solitons[0][2], dtype=float).shape != (3,)
+                or not np.all(np.isfinite(np.asarray(solitons[0][1], dtype=float)))
+                or not np.all(np.isfinite(np.asarray(solitons[0][2], dtype=float)))
+                or not np.isclose(np.linalg.norm(positions[0] - positions[1]),
+                                  initial_separation, rtol=1.0e-10, atol=0.0)):
+            raise ValueError(f"{run} has inconsistent q/e initial phase space")
     return {
         "case_id": str(metadata["case_id"]),
         "mass1_msun": mass1,
@@ -100,6 +135,10 @@ def _physical_definition(run: Path) -> dict:
         / int(metadata["resolution"]),
         "resolution": int(metadata["resolution"]),
         "plummer_radius_pc": plummer_radius,
+        "initial_separation_pc": initial_separation,
+        "semi_major_axis_pc": semimajor_axis,
+        "initial_particle_conditions": json.dumps(particles, sort_keys=True),
+        "initial_soliton_conditions": json.dumps(solitons, sort_keys=True),
     }
 
 
@@ -115,7 +154,7 @@ def _same_physical_case(reference: dict, comparison: dict) -> bool:
         "mass_ratio_q",
         "initial_eccentricity",
     )
-    return all(
+    scalar_match = all(
         np.isclose(
             reference[field],
             comparison[field],
@@ -123,6 +162,16 @@ def _same_physical_case(reference: dict, comparison: dict) -> bool:
             atol=0.0,
         )
         for field in fields_to_compare
+    )
+    orbit_match = all(
+        reference[field] is None and comparison[field] is None
+        or reference[field] is not None and comparison[field] is not None
+        and np.isclose(reference[field], comparison[field], rtol=1.0e-12, atol=0.0)
+        for field in ("initial_separation_pc", "semi_major_axis_pc")
+    )
+    return scalar_match and orbit_match and all(
+        reference[field] == comparison[field]
+        for field in ("initial_particle_conditions", "initial_soliton_conditions")
     )
 
 
