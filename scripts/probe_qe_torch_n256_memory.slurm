@@ -38,6 +38,10 @@ fi
 # A single wave step exercises FFTs, the live SMBH force, and both energy
 # diagnostics. This is only a memory probe, never a calibration trajectory.
 printf 'solver_revision=%s output=%s\n' "$(git rev-parse HEAD)" "${output}"
+profile_args=()
+if [[ "${FDM_PROBE_STAGE_PROFILE:-0}" == "1" ]]; then
+  profile_args=(--profile-memory-stages)
+fi
 srun /home/kjhan/miniconda3/bin/python scripts/launch_torch_wave_case.py \
   "${reference}" \
   --output "${output}" \
@@ -48,4 +52,5 @@ srun /home/kjhan/miniconda3/bin/python scripts/launch_torch_wave_case.py \
   --checkpoint-every-saves 0 \
   --rk4-substeps 9 \
   --time-step-factor 1.0 \
-  --device cuda:0
+  --device cuda:0 \
+  "${profile_args[@]}"

@@ -243,6 +243,7 @@ def main() -> int:
     parser.add_argument("--time-step-factor", type=float, default=1.0)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--checkpoint-every-saves", type=int, default=64)
+    parser.add_argument("--profile-memory-stages", action="store_true")
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
     if args.duration_myr <= 0.0 or args.save_number < 1:
@@ -311,6 +312,8 @@ def main() -> int:
     save_number = args.save_number
     if actual_steps % save_number != 0:
         raise ValueError("actual step count must be divisible by saved intervals")
+    if args.profile_memory_stages and (args.resume or actual_steps > 16):
+        raise ValueError("stage memory profiling requires a fresh run of at most 16 steps")
     steps_per_save = actual_steps // save_number
     time_step = duration_code / actual_steps
     duration_completed_myr = time_step * actual_steps * units.time_myr
@@ -320,6 +323,20 @@ def main() -> int:
         raise RuntimeError("CUDA was requested but no CUDA device is available")
     if device.type == "cuda":
         torch.cuda.set_device(device)
+        torch.cuda.reset_peak_memory_stats(device)
+    if args.profile_memory_stages and device.type != "cuda":
+        raise ValueError("stage memory profiling requires a CUDA device")
+    stage_peaks: list[dict[str, int | str]] = []
+
+    def profile_stage(label: str) -> None:
+        if not args.profile_memory_stages:
+            return
+        torch.cuda.synchronize(device)
+        stage_peaks.append({
+            "stage": label,
+            "peak_allocated_bytes": torch.cuda.max_memory_allocated(device),
+            "live_allocated_bytes": torch.cuda.memory_allocated(device),
+        })
         torch.cuda.reset_peak_memory_stats(device)
 
     movie_indices = _selected_indices(save_number, args.movie_frame_number)
@@ -348,6 +365,7 @@ def main() -> int:
             "wave_buffer_lifetime": "release_previous_state_before_fft_v1",
             "wave_density_layout": "real_imag_addcmul_v1",
             "compact_potential_layout": "x_slab32_inplace_rsqrt_v1",
+            "memory_stage_profile_enabled": args.profile_memory_stages,
             "checkpoint_every_saved_intervals": args.checkpoint_every_saves,
             "wave_acceleration_during_particle_rk4": (
                 "interpolated_from_a_local_potential_patch_at_each_rk4_stage"
@@ -401,6 +419,7 @@ def main() -> int:
         wavefunction = wavefunction.to(torch.complex128)
     if start_step != start_save_index * steps_per_save:
         raise ValueError("checkpoint is not aligned with a saved interval")
+    profile_stage("initial_wave_loaded")
 
     grid = spectral_grid(
         resolution=resolution,
@@ -408,17 +427,22 @@ def main() -> int:
         time_step=time_step,
         device=device,
     )
+    profile_stage("spectral_grid")
     density = wave_density(wavefunction)
+    profile_stage("initial_density")
     wave_potential = periodic_poisson_torch(
         density, grid.poisson_inverse_wavenumber_squared
     )
+    profile_stage("initial_poisson")
     compact_potential = plummer_potential_torch(
         coordinate=grid.coordinate,
         masses=masses_code,
         positions=state.reshape(2, 6)[:, :3],
         plummer_radius=plummer_code,
     )
+    profile_stage("initial_compact_potential")
     total_potential = wave_potential + compact_potential
+    profile_stage("initial_total_potential")
 
     if args.resume:
         logs = _load_energy_logs(output, start_save_index)
@@ -442,6 +466,7 @@ def main() -> int:
             kinetic_axis_wavenumber_squared=grid.kinetic_axis_wavenumber_squared,
             cell_volume=grid.cell_volume,
         )
+        profile_stage(f"save_{index:06d}_energy")
         point_potential, _ = sample_potential_and_acceleration(
             potential=wave_potential,
             positions=state.reshape(2, 6)[:, :3],
@@ -465,6 +490,7 @@ def main() -> int:
             wave_indices=wave_indices,
         )
         _save_energy_logs(output, logs)
+        profile_stage(f"save_{index:06d}_output")
 
     if not args.resume:
         save(0)
@@ -480,19 +506,25 @@ def main() -> int:
         half_phase = torch.exp(-0.5j * time_step * total_potential)
         wavefunction.mul_(half_phase)
         del half_phase
+        profile_stage(f"step_{step:06d}_first_kick")
         # None of the previous density/potential buffers enters the FFT drift.
         # Release them before allocating its complex work arrays, rather than
         # retaining an entire old wave state until the next assignment.
         del total_potential, density, wave_potential, compact_potential
         wavefunction_k = torch.fft.fftn(wavefunction)
         del wavefunction
+        profile_stage(f"step_{step:06d}_forward_fft")
         apply_kinetic_phase_in_place(wavefunction_k, grid.kinetic_axis_phase)
+        profile_stage(f"step_{step:06d}_spectral_drift")
         wavefunction = torch.fft.ifftn(wavefunction_k)
         del wavefunction_k
+        profile_stage(f"step_{step:06d}_inverse_fft")
         density = wave_density(wavefunction)
+        profile_stage(f"step_{step:06d}_density")
         wave_potential = periodic_poisson_torch(
             density, grid.poisson_inverse_wavenumber_squared
         )
+        profile_stage(f"step_{step:06d}_poisson")
         wave_patches, patch_starts = potential_patches(
             potential=wave_potential,
             positions=state.reshape(2, 6)[:, :3],
@@ -510,14 +542,17 @@ def main() -> int:
             substeps=args.rk4_substeps,
         )
         del wave_patches, patch_starts
+        profile_stage(f"step_{step:06d}_particle_rk4")
         compact_potential = plummer_potential_torch(
             coordinate=grid.coordinate,
             masses=masses_code,
             positions=state.reshape(2, 6)[:, :3],
             plummer_radius=plummer_code,
         )
+        profile_stage(f"step_{step:06d}_compact_potential")
         total_potential = wave_potential + compact_potential
         wavefunction.mul_(torch.exp(-0.5j * time_step * total_potential))
+        profile_stage(f"step_{step:06d}_second_kick")
         if step % steps_per_save == 0:
             save_index = step // steps_per_save
             save(save_index)
@@ -556,7 +591,15 @@ def main() -> int:
 
     if device.type == "cuda":
         torch.cuda.synchronize(device)
-        peak_memory = torch.cuda.max_memory_allocated(device)
+        if args.profile_memory_stages:
+            profile_stage("final")
+            peak_memory = max(row["peak_allocated_bytes"] for row in stage_peaks)
+            (output / "memory_stage_profile.json").write_text(
+                json.dumps({"stages": stage_peaks}, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        else:
+            peak_memory = torch.cuda.max_memory_allocated(device)
     else:
         peak_memory = 0
     summary = {
