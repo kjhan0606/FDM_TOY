@@ -80,7 +80,8 @@ def test_phase_aware_initial_state_outside_profile_is_censored() -> None:
     assert result.final_state.inspiral_state.phase is InspiralPhase.CENSORED
     assert result.final_state.dynamical_state.completed_steps == 0
     assert result.samples == ()
-    assert result.delay_segment.status == "timeout"
+    assert result.delay_segment.status == "censored"
+    assert result.delay_segment.reason == result.reason
 
 
 def test_phase_aware_trial_outside_profile_preserves_last_valid_state(monkeypatch) -> None:
@@ -113,7 +114,8 @@ def test_phase_aware_trial_outside_profile_preserves_last_valid_state(monkeypatc
     assert result.final_state.dynamical_state.completed_steps == 0
     assert result.final_state.dynamical_state.radius_pc == pytest.approx(25.0)
     assert len(result.samples) == 1
-    assert result.delay_segment.status == "timeout"
+    assert result.delay_segment.status == "censored"
+    assert result.delay_segment.reason == result.reason
 
 
 def test_geometric_kpc_path_censors_profile_extrapolation() -> None:
@@ -124,7 +126,7 @@ def test_geometric_kpc_path_censors_profile_extrapolation() -> None:
         config=KpcIntegrationConfig(1.0, 1.0, 0.1),
     )
     assert result.status == "outside"
-    assert result.delay_segment.status == "timeout"
+    assert result.delay_segment.status == "censored"
     assert result.samples == ()
 
 
@@ -169,6 +171,8 @@ def test_conservative_orbit_closes_energy_without_drag() -> None:
         ),
     )
     assert result.status == "timeout"
+    assert result.delay_segment.status == "timeout"
+    assert result.delay_segment.reason == result.reason
     initial_energy = result.samples[0].specific_orbital_energy_pc2_myr2
     final_energy = result.samples[-1].specific_orbital_energy_pc2_myr2
     assert (final_energy - initial_energy) / initial_energy == pytest.approx(
@@ -228,6 +232,8 @@ def test_combined_stellar_gas_fdm_drag_closes_orbital_work(tmp_path) -> None:
         initial_state=initial, model=model, config=config,
     )
     assert result.status == "timeout"
+    assert result.delay_segment.status == "timeout"
+    assert result.delay_segment.reason == result.reason
     times = np.asarray([sample.elapsed_myr for sample in result.samples])
     work_rates = np.asarray([
         sample.drag_work_rate_pc2_myr3 for sample in result.samples
@@ -327,7 +333,8 @@ def test_core_stall_is_a_censored_physical_result() -> None:
         config=KpcIntegrationConfig(1.0, 100.0, 0.1),
     )
     assert result.status == "stalled"
-    assert result.delay_segment.status == "timeout"
+    assert result.delay_segment.status == "censored"
+    assert result.delay_segment.reason == result.reason
 
 
 def test_stellar_friction_reaches_common_nucleus_boundary() -> None:
@@ -622,7 +629,8 @@ def test_unbound_exit_is_censored_outside_static_host_domain(monkeypatch) -> Non
     )
     assert result.status == "outside"
     assert result.final_state.inspiral_state.phase is InspiralPhase.CENSORED
-    assert result.delay_segment.status == "timeout"
+    assert result.delay_segment.status == "censored"
+    assert result.delay_segment.reason == result.reason
 
 
 @pytest.mark.parametrize("initially_bound", [False, True])
@@ -668,7 +676,8 @@ def test_bound_energy_outside_common_nucleus_cannot_be_promoted(
     assert result.status == "outside"
     assert result.final_state.inspiral_state.phase is InspiralPhase.CENSORED
     assert result.binary_initial_state is None
-    assert result.delay_segment.status == "timeout"
+    assert result.delay_segment.status == "censored"
+    assert result.delay_segment.reason == result.reason
 
 
 def test_primary_mass_must_match_static_host_central_mass() -> None:

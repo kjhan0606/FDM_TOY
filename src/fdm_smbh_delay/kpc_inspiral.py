@@ -186,9 +186,10 @@ class KpcInspiralResult:
         if self.status in {"timeout", "stalled", "outside"}:
             return DelaySegment(
                 "kpc_to_pc",
-                "timeout",
+                "timeout" if self.status == "timeout" else "censored",
                 None,
                 elapsed_lower_bound_myr=self.final_state.elapsed_myr,
+                reason=self.reason,
             )
         if self.status == "checkpoint":
             return DelaySegment(
@@ -196,8 +197,9 @@ class KpcInspiralResult:
                 "missing",
                 None,
                 elapsed_lower_bound_myr=self.final_state.elapsed_myr,
+                reason=self.reason,
             )
-        return DelaySegment("kpc_to_pc", "invalid", None)
+        return DelaySegment("kpc_to_pc", "invalid", None, reason=self.reason)
 
 
 @dataclass(frozen=True)
@@ -301,13 +303,18 @@ class KpcToHardResult:
             return DelaySegment("kpc_to_hard", "complete", elapsed)
         if self.status in {"timeout", "stalled", "outside"}:
             return DelaySegment(
-                "kpc_to_hard", "timeout", None, elapsed_lower_bound_myr=elapsed
+                "kpc_to_hard",
+                "timeout" if self.status == "timeout" else "censored",
+                None,
+                elapsed_lower_bound_myr=elapsed,
+                reason=self.reason,
             )
         if self.status == "checkpoint":
             return DelaySegment(
-                "kpc_to_hard", "missing", None, elapsed_lower_bound_myr=elapsed
+                "kpc_to_hard", "missing", None,
+                elapsed_lower_bound_myr=elapsed, reason=self.reason,
             )
-        return DelaySegment("kpc_to_hard", "invalid", None)
+        return DelaySegment("kpc_to_hard", "invalid", None, reason=self.reason)
 
 
 def initial_dual_nucleus_state(
