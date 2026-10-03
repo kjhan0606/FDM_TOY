@@ -542,6 +542,12 @@ python scripts/plan_wave_calibration_runs.py \
 As checked on 2026-10-04, it reports zero seeds, zero completed Torch runs,
 and zero completed responses across the three planned resolutions. This is
 run-state evidence only, not approval to submit the triplet.
+The guarded GPU runner now accepts the same `--qe-design` option and passes it
+to this planner before any stage starts. A registered manifest without that
+option fails closed; the seed command carries the design binding, and the Torch
+stage inherits it from the verified seed metadata. Use this runner only inside
+an appropriately requested Slurm GPU allocation, after the separate resource
+review. This interface change does not launch or approve any run.
 
 A bounded read of the completed pilot
 `qe_q100_e060_a020_n768/torch_run_summary.json` (SHA-256

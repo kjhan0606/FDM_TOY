@@ -217,6 +217,85 @@ def _runner(
     )
 
 
+def test_guarded_runner_forwards_registered_design_to_planner(tmp_path: Path) -> None:
+    design = tmp_path / "design.json"
+    received = []
+
+    def capture_plan(*args, **kwargs):
+        received.append((args, kwargs))
+        return []
+
+    runner = GuardedQeRunner(
+        planner_inputs=PlannerInputs(
+            manifest=tmp_path / "manifest.csv",
+            cases=tmp_path / "cases.csv",
+            initial_root=tmp_path / "initial",
+            torch_root=tmp_path / "torch",
+            pyul_path=tmp_path / "PyUL_NBody",
+            qe_design_path=design,
+        ),
+        log_root=tmp_path / "logs",
+        gpu_index=0,
+        poll_seconds=10.0,
+        interrupt_grace_seconds=30.0,
+        plan_builder=capture_plan,
+    )
+    assert runner.run() == 0
+    assert len(received) == 1
+    assert received[0][1]["qe_design_path"] == design
+    assert received[0][1]["device"] == "cuda:0"
+
+
+def test_registered_followup_is_plannable_without_launch(tmp_path: Path) -> None:
+    design_root = PROJECT / "results/wave_calibration_qe_followup_q100e000"
+    options = run_guarded_qe_plan.build_parser().parse_args([
+        "--manifest", str(design_root / "run_manifest.csv"),
+        "--cases", str(PROJECT / "results/wave_calibration_qe_extension/physical_cases.csv"),
+        "--qe-design", str(design_root / "design.json"),
+        "--initial-root", str(tmp_path / "initial"),
+        "--torch-root", str(tmp_path / "torch"),
+        "--pyul-path", str(tmp_path / "PyUL_NBody"),
+        "--log-root", str(tmp_path / "logs"),
+    ])
+    runner = GuardedQeRunner(
+        planner_inputs=PlannerInputs(
+            manifest=options.manifest,
+            cases=options.cases,
+            initial_root=options.initial_root,
+            torch_root=options.torch_root,
+            pyul_path=options.pyul_path,
+            qe_design_path=options.qe_design,
+        ),
+        log_root=options.log_root,
+        gpu_index=0,
+        poll_seconds=10.0,
+        interrupt_grace_seconds=30.0,
+    )
+    rows = runner._plan()
+    assert {row.qe_design_role for row in rows} == {
+        "coarse", "fine", "doubled_box_control"
+    }
+    assert all(row.qe_design_path == options.qe_design for row in rows)
+    assert all("--qe-design" in row.seed_command for row in rows)
+    assert all(str(row.initial_directory) in row.torch_command for row in rows)
+    assert all(not row.seed_ready and not row.torch_complete for row in rows)
+    without_design = GuardedQeRunner(
+        planner_inputs=PlannerInputs(
+            manifest=options.manifest,
+            cases=options.cases,
+            initial_root=options.initial_root,
+            torch_root=options.torch_root,
+            pyul_path=options.pyul_path,
+        ),
+        log_root=options.log_root,
+        gpu_index=0,
+        poll_seconds=10.0,
+        interrupt_grace_seconds=30.0,
+    )
+    with pytest.raises(ValueError, match="requires --qe-design"):
+        without_design._plan()
+
+
 def test_normal_stages_run_sequentially_by_run_id_and_skip_response(tmp_path: Path) -> None:
     states = {
         "b_case_n128": _state(),

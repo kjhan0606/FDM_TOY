@@ -99,6 +99,7 @@ class PlannerInputs:
     initial_root: Path
     torch_root: Path
     pyul_path: Path
+    qe_design_path: Path | None = None
 
 
 def _utc_now() -> str:
@@ -255,6 +256,7 @@ class GuardedQeRunner:
             self.inputs.torch_root,
             self.inputs.pyul_path,
             device="cuda:0",
+            qe_design_path=self.inputs.qe_design_path,
         )
 
     def _stage_status_path(self, row: RunPlanRow, stage: str) -> Path:
@@ -640,6 +642,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--initial-root", type=Path, required=True)
     parser.add_argument("--torch-root", type=Path, required=True)
     parser.add_argument("--pyul-path", type=Path, required=True)
+    parser.add_argument(
+        "--qe-design", type=Path,
+        help="registered follow-up design required by a design-bound manifest",
+    )
     parser.add_argument("--log-root", type=Path, required=True)
     parser.add_argument("--gpu-index", type=int, default=0)
     parser.add_argument("--run-id", action="append", dest="run_ids")
@@ -742,6 +748,10 @@ def main() -> int:
                 initial_root=arguments.initial_root.expanduser().resolve(),
                 torch_root=arguments.torch_root.expanduser().resolve(),
                 pyul_path=arguments.pyul_path.expanduser().resolve(),
+                qe_design_path=(
+                    None if arguments.qe_design is None
+                    else arguments.qe_design.expanduser().resolve()
+                ),
             ),
             log_root=log_root,
             gpu_index=arguments.gpu_index,
