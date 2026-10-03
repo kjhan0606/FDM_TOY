@@ -182,7 +182,16 @@ class KpcInspiralResult:
     @property
     def delay_segment(self) -> DelaySegment:
         if self.status == "reached_common_nucleus":
-            return DelaySegment("kpc_to_pc", "complete", self.final_state.elapsed_myr)
+            # A geometric encounter does not establish a bound pair, a hard
+            # binary, or even arrival at 1 pc. It is only a lower bound on
+            # the still-unresolved physical kpc-to-pc delay.
+            return DelaySegment(
+                "kpc_to_pc",
+                "missing",
+                None,
+                elapsed_lower_bound_myr=self.final_state.elapsed_myr,
+                reason=self.reason,
+            )
         if self.status in {"timeout", "stalled", "outside"}:
             return DelaySegment(
                 "kpc_to_pc",

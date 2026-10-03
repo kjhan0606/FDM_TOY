@@ -7,6 +7,7 @@ import pytest
 
 import fdm_smbh_delay.kpc_inspiral as kpc_inspiral
 from fdm_smbh_delay.constants import G_INTERNAL
+from fdm_smbh_delay.delay_budget import DelaySegment, compose_true_merge_time
 from fdm_smbh_delay.galaxy_environment import (
     CompositePotential,
     DehnenProfile,
@@ -361,7 +362,20 @@ def test_stellar_friction_reaches_common_nucleus_boundary() -> None:
     assert result.status == "reached_common_nucleus"
     assert result.final_state.radius_pc <= 50.0
     assert result.samples[-1].elapsed_myr == result.final_state.elapsed_myr
-    assert result.delay_segment.status == "complete"
+    assert result.delay_segment.status == "missing"
+    assert result.delay_segment.delay_myr is None
+    assert result.delay_segment.elapsed_lower_bound_myr == pytest.approx(
+        result.final_state.elapsed_myr
+    )
+    assert result.delay_segment.reason == result.reason
+    estimate = compose_true_merge_time(
+        100.0,
+        result.delay_segment,
+        DelaySegment("fdm", "complete", 2.0),
+        DelaySegment("gw", "complete", 1.0),
+    )
+    assert estimate.status == "incomplete"
+    assert estimate.true_merge_time_myr is None
 
 
 def _phase_aware_model() -> KpcInspiralModel:
