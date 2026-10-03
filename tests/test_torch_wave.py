@@ -127,6 +127,31 @@ def test_torch_plummer_potential_has_expected_central_value() -> None:
     assert float(potential[8, 8, 8]) == pytest.approx(-20.0)
 
 
+def test_torch_plummer_slabs_match_full_two_mass_reference() -> None:
+    grid = spectral_grid(
+        resolution=40, box_length=8.0, time_step=1.0e-3,
+        device=torch.device("cpu"),
+    )
+    masses = np.array([2.0, 0.7])
+    positions = np.array([[0.13, -0.21, 0.42], [-0.35, 0.12, -0.25]])
+    measured = plummer_potential_torch(
+        coordinate=grid.coordinate, masses=masses, positions=positions,
+        plummer_radius=0.07,
+    )
+    x, y, z = np.meshgrid(
+        grid.coordinate.numpy(), grid.coordinate.numpy(),
+        grid.coordinate.numpy(), indexing="ij",
+    )
+    expected = np.zeros((40, 40, 40))
+    for mass, position in zip(masses, positions, strict=True):
+        radius_squared = (
+            (x - position[0]) ** 2 + (y - position[1]) ** 2
+            + (z - position[2]) ** 2 + 0.07**2
+        )
+        expected -= mass / np.sqrt(radius_squared)
+    np.testing.assert_allclose(measured.numpy(), expected, rtol=2e-14, atol=2e-14)
+
+
 def test_field_sampler_recovers_a_linear_acceleration() -> None:
     grid = spectral_grid(
         resolution=16,

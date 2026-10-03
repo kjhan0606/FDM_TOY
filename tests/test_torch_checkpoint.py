@@ -46,16 +46,20 @@ def test_remaining_time_uses_only_steps_completed_since_resume() -> None:
     ) is None
 
 
-def test_restart_rejects_missing_or_changed_density_layout() -> None:
+@pytest.mark.parametrize(
+    "field", ("wave_density_layout", "compact_potential_layout")
+)
+def test_restart_rejects_missing_or_changed_numerical_layout(field: str) -> None:
     requested = {key: 1 for key in run_torch_wave_case._RESTART_METADATA_KEYS}
     requested["wave_density_layout"] = "real_imag_addcmul_v1"
+    requested["compact_potential_layout"] = "x_slab32_inplace_rsqrt_v1"
     run_torch_wave_case._require_resume_metadata(dict(requested), requested)
     saved = dict(requested)
-    del saved["wave_density_layout"]
-    with pytest.raises(ValueError, match="wave_density_layout"):
+    del saved[field]
+    with pytest.raises(ValueError, match=field):
         run_torch_wave_case._require_resume_metadata(saved, requested)
-    saved["wave_density_layout"] = "other_layout"
-    with pytest.raises(ValueError, match="wave_density_layout"):
+    saved[field] = "other_layout"
+    with pytest.raises(ValueError, match=field):
         run_torch_wave_case._require_resume_metadata(saved, requested)
 
 

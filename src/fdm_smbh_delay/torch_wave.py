@@ -135,7 +135,7 @@ def plummer_potential_torch(
     positions: np.ndarray,
     plummer_radius: float,
 ) -> torch.Tensor:
-    """Return the softened potential of compact masses on a Cartesian grid."""
+    """Return the softened potential using bounded x-slab work arrays."""
 
     masses_array = np.asarray(masses, dtype=float)
     positions_array = np.asarray(positions, dtype=float)
@@ -147,16 +147,24 @@ def plummer_potential_torch(
     potential = torch.zeros(
         (n, n, n), dtype=torch.float64, device=coordinate.device
     )
+    slab_depth = 32
     for mass, position in zip(masses_array, positions_array, strict=True):
-        distance_squared = (coordinate - float(position[0])).square()[:, None, None]
-        distance_squared = distance_squared + (
-            coordinate - float(position[1])
-        ).square()[None, :, None]
-        distance_squared = distance_squared + (
-            coordinate - float(position[2])
-        ).square()[None, None, :]
-        distance_squared.add_(plummer_radius**2)
-        potential.add_(torch.rsqrt(distance_squared), alpha=-float(mass))
+        x_squared = (coordinate - float(position[0])).square()
+        y_squared = (coordinate - float(position[1])).square()
+        z_squared = (coordinate - float(position[2])).square()
+        for start in range(0, n, slab_depth):
+            stop = min(start + slab_depth, n)
+            distance_squared = torch.empty(
+                (stop - start, n, n), dtype=potential.dtype,
+                device=potential.device,
+            )
+            xy_squared = (
+                x_squared[start:stop, None, None] + y_squared[None, :, None]
+            )
+            torch.add(xy_squared, z_squared[None, None, :], out=distance_squared)
+            distance_squared.add_(plummer_radius**2)
+            distance_squared.rsqrt_()
+            potential[start:stop].add_(distance_squared, alpha=-float(mass))
     return potential
 
 

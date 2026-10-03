@@ -41,6 +41,7 @@ _RESTART_METADATA_KEYS = (
     "kinetic_phase_layout",
     "wave_buffer_lifetime",
     "wave_density_layout",
+    "compact_potential_layout",
 )
 
 
@@ -346,6 +347,7 @@ def main() -> int:
             "kinetic_phase_layout": "separable_axis_v1",
             "wave_buffer_lifetime": "release_previous_state_before_fft_v1",
             "wave_density_layout": "real_imag_addcmul_v1",
+            "compact_potential_layout": "x_slab32_inplace_rsqrt_v1",
             "checkpoint_every_saved_intervals": args.checkpoint_every_saves,
             "wave_acceleration_during_particle_rk4": (
                 "interpolated_from_a_local_potential_patch_at_each_rk4_stage"
