@@ -140,6 +140,7 @@ def _registered_inputs(tmp_path: Path) -> tuple[Path, Path, Path]:
             "case_id": "qe_test", "run_id": f"qe_test_n{resolution}",
             "effective_grid_cells": str(resolution), "box_size_pc": "26.4",
             "finest_cell_size_pc": str(26.4 / resolution),
+            "plummer_radius_pc": str(13.2 / resolution),
             "requires_qe_design": "true",
         }
         for resolution in (256, 512)

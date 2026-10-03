@@ -88,6 +88,11 @@ def build_qe_followup_design(
     fine_box = float(fine["box_size_pc"])
     coarse_cell = float(coarse["finest_cell_size_pc"])
     fine_cell = float(fine["finest_cell_size_pc"])
+    try:
+        coarse_plummer = float(coarse["plummer_radius_pc"])
+        fine_plummer = float(fine["plummer_radius_pc"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("q/e design requires both Plummer radii") from error
     period = float(case["kepler_period_myr"])
     initial_separation = float(case["initial_separation_pc"])
     core_radius = float(case["core_radius_pc"])
@@ -96,7 +101,7 @@ def build_qe_followup_design(
     if (
         any(not math.isfinite(value) or value <= 0.0 for value in
             (coarse_box, fine_box, coarse_cell, fine_cell, period,
-             initial_separation, core_radius))
+             coarse_plummer, fine_plummer, initial_separation, core_radius))
         or not math.isfinite(mass_ratio) or not 0.0 < mass_ratio <= 1.0
         or not math.isfinite(eccentricity) or not 0.0 <= eccentricity < 1.0
         or not math.isclose(coarse_box, fine_box, rel_tol=1.0e-12)
@@ -107,6 +112,17 @@ def build_qe_followup_design(
         or fine_cell >= coarse_cell
     ):
         raise ValueError("q/e resolution-pair geometry is inconsistent")
+    # A bin whose upper edge is below either run's hard spatial gate cannot
+    # contain even one accepted orbit. This is necessary, not sufficient:
+    # pericentre resolution, time coverage, and convergence still need data.
+    minimum_mean_separation = max(
+        2.0 * coarse_cell, 2.0 * fine_cell,
+        2.0 * coarse_plummer, 2.0 * fine_plummer,
+    )
+    if any(upper <= minimum_mean_separation for upper in edges[1:]):
+        raise ValueError(
+            "q/e fixed bin is wholly below the necessary spatial-resolution limit"
+        )
     minimum_orbits = (len(edges) - 1) * minimum_orbits_per_bin
     if duration_myr < period * minimum_orbits:
         raise ValueError("q/e design duration is shorter than the necessary orbit budget")

@@ -78,9 +78,10 @@ def _inputs(tmp_path: Path) -> tuple[Path, Path]:
     )
     manifest = tmp_path / "manifest.csv"
     manifest.write_text(
-        "case_id,run_id,effective_grid_cells,box_size_pc,finest_cell_size_pc\n"
-        "qe_test,qe_test_n256,256,26.4,0.103125\n"
-        "qe_test,qe_test_n512,512,26.4,0.0515625\n",
+        "case_id,run_id,effective_grid_cells,box_size_pc,finest_cell_size_pc,"
+        "plummer_radius_pc\n"
+        "qe_test,qe_test_n256,256,26.4,0.103125,0.0515625\n"
+        "qe_test,qe_test_n512,512,26.4,0.0515625,0.02578125\n",
         encoding="utf-8",
     )
     return cases, manifest
@@ -129,6 +130,36 @@ def test_design_rejects_short_duration_and_invalid_edges(tmp_path: Path) -> None
             coarse_resolution=256, fine_resolution=512,
             separation_bin_edges_pc=(0.45, 0.43), duration_myr=0.02,
         )
+
+
+def test_design_rejects_bins_wholly_below_spatial_gate(tmp_path: Path) -> None:
+    cases, manifest = _inputs(tmp_path)
+    with pytest.raises(ValueError, match="spatial-resolution limit"):
+        build_qe_followup_design(
+            case_id="qe_test", physical_cases=cases, run_manifest=manifest,
+            coarse_resolution=256, fine_resolution=512,
+            separation_bin_edges_pc=(0.10, 0.20), duration_myr=0.02,
+        )
+
+    changed = manifest.read_text().replace(
+        "0.103125,0.0515625", "0.103125,0.25",
+    )
+    manifest.write_text(changed)
+    with pytest.raises(ValueError, match="spatial-resolution limit"):
+        build_qe_followup_design(
+            case_id="qe_test", physical_cases=cases, run_manifest=manifest,
+            coarse_resolution=256, fine_resolution=512,
+            separation_bin_edges_pc=(0.43, 0.45), duration_myr=0.02,
+        )
+
+
+def test_design_requires_both_softening_radii(tmp_path: Path) -> None:
+    cases, manifest = _inputs(tmp_path)
+    manifest.write_text(manifest.read_text().replace(
+        "plummer_radius_pc", "missing_softening",
+    ))
+    with pytest.raises(ValueError, match="requires both Plummer radii"):
+        _design(cases, manifest)
 
 
 def test_design_rejects_tampering_or_changed_source(tmp_path: Path) -> None:

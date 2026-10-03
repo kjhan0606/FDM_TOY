@@ -449,6 +449,11 @@ unregistered comparison, or two different designs, cannot be combined. This
 path still does not authorize a GPU run or a
 calibration release. The present 128–432 GiB doubled-box estimates require
 an independently reviewed resource/solver design.
+The design registration also requires both run-manifest Plummer radii and
+rejects any fixed separation bin whose entire span lies below the necessary
+two-cell or two-Plummer-radius limit of either resolution. Passing this
+preflight is not evidence of resolved pericentres, eight complete orbits,
+conservation, or a converged rate; those remain measurements from the runs.
 The seed and comparison path refuse a doubled-box role when its uniform-grid
 estimate exceeds the design's declared reference GPU memory. Raising that
 declaration without an actual capacity and peak-memory review is not a

@@ -414,9 +414,10 @@ def test_registered_fixed_comparison_recomputes_and_rechecks_design(
     )
     manifest = tmp_path / "manifest.csv"
     manifest.write_text(
-        "case_id,run_id,effective_grid_cells,box_size_pc,finest_cell_size_pc\n"
-        "qe_test,qe_test_n128,128,32,0.25\n"
-        "qe_test,qe_test_n256,256,32,0.125\n"
+        "case_id,run_id,effective_grid_cells,box_size_pc,finest_cell_size_pc,"
+        "plummer_radius_pc\n"
+        "qe_test,qe_test_n128,128,32,0.25,0.125\n"
+        "qe_test,qe_test_n256,256,32,0.125,0.0625\n"
     )
     design = build_qe_followup_design(
         case_id="qe_test", physical_cases=cases, run_manifest=manifest,
