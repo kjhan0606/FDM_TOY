@@ -171,6 +171,7 @@ def _runner(
     resolutions=None,
     wait_until_gpu_empty: bool = False,
     gpu_empty_timeout_seconds: float | None = None,
+    maximum_gpu_stages: int | None = None,
     sleep=None,
     monotonic=None,
 ) -> GuardedQeRunner:
@@ -189,6 +190,7 @@ def _runner(
         marker_timeout_seconds=1.0,
         wait_until_gpu_empty=wait_until_gpu_empty,
         gpu_empty_timeout_seconds=gpu_empty_timeout_seconds,
+        maximum_gpu_stages=maximum_gpu_stages,
         plan_builder=_builder(tmp_path, states, resolutions),
         monitor_factory=(
             (lambda _index: FakeMonitor())
@@ -294,6 +296,101 @@ def test_registered_followup_is_plannable_without_launch(tmp_path: Path) -> None
     )
     with pytest.raises(ValueError, match="requires --qe-design"):
         without_design._plan()
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        [],
+        ["--run-id", "qe_q100_e000_a020_n256"],
+        ["--run-id", "qe_q100_e000_a020_n256", "--maximum-gpu-stages", "2"],
+        ["--run-id", "qe_q100_e000_a020_n256", "--run-id",
+         "qe_q100_e000_a020_n384", "--maximum-gpu-stages", "1"],
+    ],
+)
+def test_registered_execution_requires_one_run_and_one_stage(
+    monkeypatch, tmp_path: Path, extra: list[str]
+) -> None:
+    monkeypatch.setattr(sys, "argv", [
+        "run_guarded_qe_plan.py",
+        "--qe-design", str(tmp_path / "design.json"),
+        "--initial-root", str(tmp_path / "initial"),
+        "--torch-root", str(tmp_path / "torch"),
+        "--pyul-path", str(tmp_path / "PyUL_NBody"),
+        "--log-root", str(tmp_path / "logs"),
+        *extra,
+    ])
+    with pytest.raises(SystemExit) as error:
+        run_guarded_qe_plan.main()
+    assert error.value.code == 2
+
+
+def test_gpu_stage_limit_stops_after_verified_seed(tmp_path: Path) -> None:
+    states = {"bounded_case_n128": _state()}
+    popen = FakePopenFactory(states)
+    runner = _runner(
+        tmp_path, states, popen_factory=popen, maximum_gpu_stages=1,
+    )
+    assert runner.run({"bounded_case_n128"}) == 0
+    assert [(run_id, stage) for run_id, stage, _args in popen.calls] == [
+        ("bounded_case_n128", "seed")
+    ]
+    assert states["bounded_case_n128"]["seed"] is True
+    assert states["bounded_case_n128"]["torch"] is False
+    assert runner.run({"bounded_case_n128"}) == 0
+    assert [(run_id, stage) for run_id, stage, _args in popen.calls] == [
+        ("bounded_case_n128", "seed"),
+        ("bounded_case_n128", "torch"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("visible", "allocated"),
+    [("1", "1"), ("0", "0,1"), ("0,1", "0,1"), ("GPU-uuid", None)],
+)
+def test_slurm_gpu_mismatch_rejects_before_monitor_or_launch(
+    tmp_path: Path, monkeypatch, visible: str, allocated: str | None
+) -> None:
+    monkeypatch.setenv("SLURM_JOB_ID", "12345")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", visible)
+    if allocated is None:
+        monkeypatch.delenv("SLURM_JOB_GPUS", raising=False)
+    else:
+        monkeypatch.setenv("SLURM_JOB_GPUS", allocated)
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("GPU mismatch must fail before monitor or solver")
+
+    runner = _runner(
+        tmp_path, {"case_n128": _state()},
+        monitor_factory=forbidden,
+        popen_factory=forbidden,
+    )
+    assert runner.run() == EX_CONFIG
+    status = json.loads((tmp_path / "logs/status/case_n128.seed.json").read_text())
+    assert status["status"] == "slurm_gpu_binding_rejected"
+
+
+@pytest.mark.parametrize("physical_gpu_id", ["0", "1"])
+def test_matching_slurm_gpu_binding_is_preserved_for_child(
+    tmp_path: Path, monkeypatch, physical_gpu_id: str
+) -> None:
+    monkeypatch.setenv("SLURM_JOB_ID", "12345")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
+    monkeypatch.setenv("SLURM_JOB_GPUS", physical_gpu_id)
+    states = {"case_n128": _state()}
+    popen = FakePopenFactory(states)
+    child_devices = []
+
+    def recording_popen(*args, **kwargs):
+        child_devices.append(kwargs["env"]["CUDA_VISIBLE_DEVICES"])
+        return popen(*args, **kwargs)
+
+    runner = _runner(
+        tmp_path, states, popen_factory=recording_popen, maximum_gpu_stages=1,
+    )
+    assert runner.run() == 0
+    assert child_devices == ["0"]
 
 
 def test_normal_stages_run_sequentially_by_run_id_and_skip_response(tmp_path: Path) -> None:

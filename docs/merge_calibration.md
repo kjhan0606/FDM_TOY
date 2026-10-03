@@ -547,7 +547,18 @@ to this planner before any stage starts. A registered manifest without that
 option fails closed; the seed command carries the design binding, and the Torch
 stage inherits it from the verified seed metadata. Use this runner only inside
 an appropriately requested Slurm GPU allocation, after the separate resource
-review. This interface change does not launch or approve any run.
+review. For a registered design, the runner also requires exactly one
+`--run-id` and `--maximum-gpu-stages 1`: the first invocation can create and
+verify a seed but cannot silently continue into Torch evolution. A subsequent
+invocation can run the next pending stage after its own preflight. This
+interface change does not launch or approve any run.
+Inside Slurm, `--gpu-index` must match the single numeric
+`CUDA_VISIBLE_DEVICES`; `SLURM_JOB_GPUS`, when present, must name one physical
+GPU but need not have the same number. A one-second diagnostic job (411924 on
+syn01, 2026-10-04) measured `CUDA_VISIBLE_DEVICES=0`, `SLURM_JOB_GPUS=1`, and
+only NVML index 0 visible within the allocation. The runner preserves Slurm's
+device selection instead of overriding it; ambiguous or mismatched visible
+devices fail before opening the NVML monitor or launching a solver.
 
 A bounded read of the completed pilot
 `qe_q100_e060_a020_n768/torch_run_summary.json` (SHA-256

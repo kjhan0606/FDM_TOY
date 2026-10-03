@@ -223,6 +223,7 @@ class GuardedQeRunner:
         marker_timeout_seconds: float = 60.0,
         wait_until_gpu_empty: bool = False,
         gpu_empty_timeout_seconds: float | None = None,
+        maximum_gpu_stages: int | None = None,
         plan_builder: Callable[..., list[RunPlanRow]] = build_plan,
         monitor_factory: Callable[[int], GpuMonitor] = NvmlGpuMonitor,
         popen_factory: Callable[..., subprocess.Popen] = subprocess.Popen,
@@ -239,6 +240,9 @@ class GuardedQeRunner:
         self.marker_timeout_seconds = marker_timeout_seconds
         self.wait_until_gpu_empty = wait_until_gpu_empty
         self.gpu_empty_timeout_seconds = gpu_empty_timeout_seconds
+        if maximum_gpu_stages is not None and maximum_gpu_stages < 1:
+            raise ValueError("maximum_gpu_stages must be positive")
+        self.maximum_gpu_stages = maximum_gpu_stages
         self.plan_builder = plan_builder
         self.monitor_factory = monitor_factory
         self.popen_factory = popen_factory
@@ -299,7 +303,6 @@ class GuardedQeRunner:
         environment = os.environ.copy()
         environment.update(
             {
-                "CUDA_VISIBLE_DEVICES": str(self.gpu_index),
                 "OMP_NUM_THREADS": "1",
                 "MKL_NUM_THREADS": "1",
                 "OPENBLAS_NUM_THREADS": "1",
@@ -308,11 +311,33 @@ class GuardedQeRunner:
                 "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
             }
         )
+        if "SLURM_JOB_ID" not in environment:
+            environment["CUDA_VISIBLE_DEVICES"] = str(self.gpu_index)
         if marker is None:
             environment.pop("FDM_SOLVER_PID_FILE", None)
         else:
             environment["FDM_SOLVER_PID_FILE"] = str(marker)
         return environment
+
+    def _slurm_gpu_binding_error(self) -> str | None:
+        if "SLURM_JOB_ID" not in os.environ:
+            return None
+        expected = str(self.gpu_index)
+        visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+        allocated = os.environ.get("SLURM_JOB_GPUS")
+        # On this cluster a one-GPU Slurm cgroup can expose physical GPU 1
+        # as CUDA/NVML index 0 (measured by job 411924). SLURM_JOB_GPUS is
+        # the physical allocation, not an index in the job's device namespace.
+        if (
+            visible != expected
+            or (allocated is not None and (not allocated.isdecimal()))
+        ):
+            return (
+                "Slurm GPU allocation is not one unambiguous visible device "
+                f"matching --gpu-index {expected}: "
+                f"CUDA_VISIBLE_DEVICES={visible!r}, SLURM_JOB_GPUS={allocated!r}"
+            )
+        return None
 
     def _command_arguments(self, command: str) -> list[str]:
         arguments = shlex.split(command)
@@ -412,6 +437,18 @@ class GuardedQeRunner:
         if stage not in GPU_STAGES:
             raise ValueError(f"CPU response stage is forbidden: {stage}")
         started_at = _utc_now()
+        binding_error = self._slurm_gpu_binding_error()
+        if binding_error is not None:
+            self._write_stage_status(
+                row,
+                stage,
+                status="slurm_gpu_binding_rejected",
+                pid=None,
+                started_at=started_at,
+                exit_code=EX_CONFIG,
+                detail=binding_error,
+            )
+            return EX_CONFIG
         monitor = self.monitor_factory(self.gpu_index)
         try:
             occupied = sorted(monitor.pids())
@@ -602,6 +639,7 @@ class GuardedQeRunner:
         if unknown:
             raise ValueError(f"unknown selected run IDs: {sorted(unknown)}")
 
+        completed_gpu_stages = 0
         for run_id in sorted(selected):
             while True:
                 rows = {row.run_id: row for row in self._plan()}
@@ -622,6 +660,12 @@ class GuardedQeRunner:
                 status = self._mark_verification(refreshed, stage, verified)
                 if status != 0:
                     return status
+                completed_gpu_stages += 1
+                if (
+                    self.maximum_gpu_stages is not None
+                    and completed_gpu_stages >= self.maximum_gpu_stages
+                ):
+                    return 0
         return 0
 
 
@@ -649,6 +693,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--log-root", type=Path, required=True)
     parser.add_argument("--gpu-index", type=int, default=0)
     parser.add_argument("--run-id", action="append", dest="run_ids")
+    parser.add_argument("--maximum-gpu-stages", type=int)
     parser.add_argument("--poll-seconds", type=float, default=10.0)
     parser.add_argument("--interrupt-grace-seconds", type=float, default=30.0)
     parser.add_argument("--marker-timeout-seconds", type=float, default=60.0)
@@ -688,6 +733,20 @@ def main() -> int:
         parser.error("--interrupt-grace-seconds must be nonnegative")
     if arguments.marker_timeout_seconds <= 0.0:
         parser.error("--marker-timeout-seconds must be positive")
+    if (
+        arguments.maximum_gpu_stages is not None
+        and arguments.maximum_gpu_stages < 1
+    ):
+        parser.error("--maximum-gpu-stages must be positive")
+    if arguments.qe_design is not None and (
+        arguments.run_ids is None
+        or len(arguments.run_ids) != 1
+        or arguments.maximum_gpu_stages != 1
+    ):
+        parser.error(
+            "registered q/e execution requires exactly one --run-id "
+            "and --maximum-gpu-stages 1"
+        )
     if (
         arguments.gpu_empty_timeout_seconds is not None
         and arguments.gpu_empty_timeout_seconds <= 0.0
@@ -760,6 +819,7 @@ def main() -> int:
             marker_timeout_seconds=arguments.marker_timeout_seconds,
             wait_until_gpu_empty=arguments.wait_until_gpu_empty,
             gpu_empty_timeout_seconds=arguments.gpu_empty_timeout_seconds,
+            maximum_gpu_stages=arguments.maximum_gpu_stages,
         )
         return runner.run(None if arguments.run_ids is None else set(arguments.run_ids))
     finally:
