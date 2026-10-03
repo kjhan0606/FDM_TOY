@@ -11,6 +11,7 @@ from fdm_smbh_delay.convergence import (
     summarize_convergence,
 )
 from scripts.summarize_pyul_convergence import _parse_edges
+from fdm_smbh_delay.qe_box_control import verify_fixed_comparison_summary
 
 
 def _write_run(path: Path, *, scale: float, time_step_factor: float) -> None:
@@ -292,6 +293,47 @@ def test_fixed_edge_cli_parser_rejects_non_numeric_edges() -> None:
     assert _parse_edges("0.1,0.2") == (0.1, 0.2)
     with pytest.raises(argparse.ArgumentTypeError):
         _parse_edges("0.1,bad")
+
+
+def test_fixed_comparison_is_recomputed_from_raw_diagnostics(
+    tmp_path: Path,
+) -> None:
+    first_path = tmp_path / "first"
+    second_path = tmp_path / "second"
+    _write_run(first_path, scale=1.0, time_step_factor=1.0)
+    _write_run(second_path, scale=1.0, time_step_factor=0.5)
+    for run in (first_path, second_path):
+        (run / "wave_response_timeseries.csv").write_text(
+            "time_myr,measured_half_density_radius_pc\n0,1\n1,1\n"
+        )
+        (run / "torch_run_summary.json").write_text(
+            json.dumps({"status": "complete", "run": str(run)})
+        )
+        (run / "wave_response_summary.json").write_text(
+            json.dumps({"status": "diagnosed", "run": str(run)})
+        )
+    summary = summarize_convergence(
+        (load_convergence_run("first", first_path),
+         load_convergence_run("second", second_path)),
+        separation_bins=1, minimum_orbits_per_separation_bin=2,
+        separation_bin_edges_pc=(0.88, 0.98),
+    )
+    path = tmp_path / "fixed.json"
+    path.write_text(json.dumps(summary))
+    verified = verify_fixed_comparison_summary(path)
+    assert len(verified["raw_inputs"]) == 2
+    assert len(verified["comparison_sha256"]) == 64
+    config_path = first_path / "config.uldm"
+    config = json.loads(config_path.read_text())
+    config["Temporal Step Factor"] = 1.1
+    config_path.write_text(json.dumps(config))
+    # The metadata field takes precedence, so alter that too.
+    metadata_path = first_path / "fdm_adapter_metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata["time_step_factor"] = 1.1
+    metadata_path.write_text(json.dumps(metadata))
+    with pytest.raises(ValueError, match="not reproducible from raw diagnostics"):
+        verify_fixed_comparison_summary(path)
 
 
 @pytest.mark.parametrize("edges", [(0.98, 0.88), (0.88, 0.88),

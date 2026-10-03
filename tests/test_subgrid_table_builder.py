@@ -22,7 +22,19 @@ from fdm_smbh_delay.subgrid_table_builder import (
     build_source_rows,
     write_calibration_table,
 )
-from fdm_smbh_delay.qe_box_control import assess_qe_box_control
+from fdm_smbh_delay.qe_box_control import (
+    assess_qe_box_control as _assess_qe_box_control,
+)
+
+
+def assess_qe_box_control(
+    resolution_pair: CalibrationSource, doubled_box: CalibrationSource,
+) -> dict:
+    """Synthetic comparison fixtures lack raw trajectory diagnostics."""
+
+    return _assess_qe_box_control(
+        resolution_pair, doubled_box, verify_raw=False
+    )
 
 
 def _write_run(
@@ -465,6 +477,16 @@ def test_qe_box_control_compares_same_fixed_bin_without_releasing(
     assert result["candidate_bins"] == [0]
     assert result["box_controlled_candidate_bins"] == [0]
     assert result["production_calibration_row_admitted"] is False
+
+
+def test_qe_box_control_requires_raw_diagnostics_by_default(
+    tmp_path: Path,
+) -> None:
+    pair, box = _write_qe_box_pair(tmp_path)
+    with pytest.raises(ValueError, match="raw diagnostic is absent"):
+        _assess_qe_box_control(
+            CalibrationSource("test", pair), CalibrationSource("test", box)
+        )
 
 
 def test_qe_box_control_rejects_wrong_box_size(tmp_path: Path) -> None:

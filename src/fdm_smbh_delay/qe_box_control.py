@@ -11,6 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .convergence import load_convergence_run, summarize_convergence
 from .subgrid_table_builder import (
     CalibrationSource,
     _physical_definition,
@@ -22,6 +23,18 @@ from .subgrid_calibration import is_qe_extension_case
 
 
 _RATES = ("orbital_power", "orbital_torque", "wave_total_energy_rate")
+_RAW_INPUTS = (
+    "fdm_adapter_metadata.json",
+    "config.uldm",
+    "torch_run_summary.json",
+    "wave_response_summary.json",
+    "conservation_summary.json",
+    "orbit_averaged_exchange_summary.json",
+    "conservation_timeseries.csv",
+    "orbit_averaged_exchange.csv",
+    "wave_response_timeseries.csv",
+)
+_MAX_DIAGNOSTIC_BYTES = 16 * 1024 * 1024
 
 
 def _read(path: Path) -> dict:
@@ -118,9 +131,67 @@ def _check_rate_fractions(bin_row: dict, reference_label: str, comparison_label:
             raise ValueError(f"box-control rate difference is inconsistent: {field}")
 
 
+def verify_fixed_comparison_summary(path: Path) -> dict:
+    """Recompute a fixed-bin comparison from bounded named raw diagnostics."""
+
+    path = path.expanduser().resolve()
+    if path.stat().st_size > _MAX_DIAGNOSTIC_BYTES:
+        raise ValueError(f"box-control comparison exceeds size limit: {path}")
+    initial_summary_sha256 = _sha256(path)
+    saved = _read(path)
+    _fixed_bins(saved)
+    rows = saved.get("runs")
+    if not isinstance(rows, list) or len(rows) != 2:
+        raise ValueError("box-control comparison requires exactly two runs")
+    source_inputs = []
+    loaded = []
+    for row in rows:
+        run = Path(row["run"]).expanduser().resolve()
+        label = row["label"]
+        hashes = {}
+        for name in _RAW_INPUTS:
+            input_path = run / name
+            if (not input_path.is_file()
+                    or input_path.stat().st_size > _MAX_DIAGNOSTIC_BYTES):
+                raise ValueError(f"box-control raw diagnostic is absent or too large: {input_path}")
+            hashes[name] = _sha256(input_path)
+        for name, expected in (
+            ("torch_run_summary.json", "complete"),
+            ("wave_response_summary.json", "diagnosed"),
+        ):
+            run_status = json.loads((run / name).read_text(encoding="utf-8"))
+            if run_status.get("status") != expected:
+                raise ValueError(f"box-control raw run is incomplete: {run}/{name}")
+            if ("run" in run_status
+                    and Path(run_status["run"]).resolve() != run):
+                raise ValueError(f"box-control raw run identity differs: {run}/{name}")
+        source_inputs.append({"label": label, "run": str(run), "sha256": hashes})
+        loaded.append(load_convergence_run(label, run))
+    matched = saved["matched_separation"]
+    recomputed = summarize_convergence(
+        loaded,
+        separation_bins=matched["requested_bins"],
+        minimum_orbits_per_separation_bin=(
+            matched["minimum_complete_orbits_per_run_per_bin"]
+        ),
+        separation_bin_edges_pc=tuple(matched["separation_bin_edges_pc"]),
+    )
+    if recomputed != saved:
+        raise ValueError(f"box-control comparison is not reproducible from raw diagnostics: {path}")
+    for row, loaded_run in zip(source_inputs, loaded, strict=True):
+        for name in _RAW_INPUTS:
+            if _sha256(Path(loaded_run["run"]) / name) != row["sha256"][name]:
+                raise ValueError(f"box-control raw diagnostic changed during audit: {loaded_run['run']}/{name}")
+    if _sha256(path) != initial_summary_sha256:
+        raise ValueError("box-control comparison changed during audit")
+    return {"comparison_sha256": initial_summary_sha256, "raw_inputs": source_inputs}
+
+
 def assess_qe_box_control(
     resolution_pair: CalibrationSource,
     doubled_box: CalibrationSource,
+    *,
+    verify_raw: bool = True,
 ) -> dict:
     """Return candidate/censored bin decisions without admitting table rows."""
 
@@ -130,6 +201,12 @@ def assess_qe_box_control(
     box_path = doubled_box.convergence_summary.expanduser().resolve()
     pair = _read(pair_path)
     box = _read(box_path)
+    raw_verification = None
+    if verify_raw:
+        raw_verification = {
+            "resolution_pair": verify_fixed_comparison_summary(pair_path),
+            "doubled_box": verify_fixed_comparison_summary(box_path),
+        }
     pair_bins = _fixed_bins(pair)
     box_bins = _fixed_bins(box)
     pair_edges = pair["matched_separation"]["separation_bin_edges_pc"]
@@ -207,5 +284,7 @@ def assess_qe_box_control(
         "candidate_bins": sorted(candidate_indices),
         "box_controlled_candidate_bins": sorted(candidate_indices & controlled_indices),
         "bin_decisions": decisions,
+        "raw_diagnostics_verified": verify_raw,
+        "raw_verification": raw_verification,
         "production_calibration_row_admitted": False,
     }

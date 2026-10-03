@@ -277,6 +277,11 @@ fine-run rates. The result reports
 candidate or censored bins only; `production_calibration_row_admitted` stays
 false until release provenance and the full calibration gates are implemented
 and verified.
+The command also recomputes each fixed-bin comparison from its named raw
+orbit and conservation diagnostics, verifies their checksums before and after
+the audit, and refuses any diagnostic larger than 16 MiB on the login node.
+An edited or stale comparison JSON is therefore not sufficient evidence of
+box agreement.
 
 The corresponding resource-design calculation (which launches no solver) is
 
