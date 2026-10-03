@@ -22,6 +22,7 @@ from fdm_smbh_delay.binary_evolution import (
 )
 from fdm_smbh_delay.constants import KM_S_TO_PC_MYR
 from fdm_smbh_delay.exchange_scaling import schrodinger_poisson_similarity_parameter
+from fdm_smbh_delay.orbital_exchange import keplerian_time_mean_separation_pc
 from fdm_smbh_delay.subgrid_calibration import (
     InterpolatedSubgridRates,
     SubgridCalibrationRow,
@@ -273,6 +274,7 @@ def test_qe_fdm_adapter_passes_runtime_e_and_censors_missing_plane() -> None:
         soliton_mass_msun=1.0e9,
         core_radius_pc=5.0,
         particle_mass_ev=_particle_mass_for_similarity(1.0, 5.0),
+        mean_separation_provider=keplerian_time_mean_separation_pc,
     )
     rates = provider(1.0, 0.3)
     assert rates.calibration_id == "v4:boey2025:eta=1:q=0.3:e=0.3"
@@ -288,12 +290,13 @@ def test_qe_fdm_adapter_passes_runtime_e_and_censors_missing_plane() -> None:
         soliton_mass_msun=1.0e9,
         core_radius_pc=5.0,
         particle_mass_ev=2.0 * _particle_mass_for_similarity(1.0, 5.0),
+        mean_separation_provider=keplerian_time_mean_separation_pc,
     )
     with pytest.raises(UncalibratedBinaryState, match="similarity parameter"):
         unsupported_similarity(1.0, 0.3)
 
 
-def test_qe_provider_uses_mean_separation_at_measured_bin_boundary() -> None:
+def test_qe_provider_requires_mapping_and_checks_measured_bin_boundary() -> None:
     core_radius = 5.0
     particle_mass = 1.0e-21
     similarity = schrodinger_poisson_similarity_parameter(
@@ -325,14 +328,27 @@ def test_qe_provider_uses_mean_separation_at_measured_bin_boundary() -> None:
         mass_ratio_q=0.3,
         reference_eccentricity=0.3,
     )
-    provider = calibrated_qe_fdm_rate_provider(
-        SubgridCalibrationTable((row,)),
+    table = SubgridCalibrationTable((row,))
+    provider_without_mapping = calibrated_qe_fdm_rate_provider(
+        table,
         profile_id="test_soliton",
         mass1_msun=1.0e8,
         mass2_msun=3.0e7,
         soliton_mass_msun=1.0e9,
         core_radius_pc=core_radius,
         particle_mass_ev=particle_mass,
+    )
+    with pytest.raises(UncalibratedBinaryState, match="mapping is unavailable"):
+        provider_without_mapping(1.0, 0.3)
+    provider = calibrated_qe_fdm_rate_provider(
+        table,
+        profile_id="test_soliton",
+        mass1_msun=1.0e8,
+        mass2_msun=3.0e7,
+        soliton_mass_msun=1.0e9,
+        core_radius_pc=core_radius,
+        particle_mass_ev=particle_mass,
+        mean_separation_provider=keplerian_time_mean_separation_pc,
     )
     assert provider(1.0, 0.3).orbital_power_msun_pc2_myr3 < 0.0
     with pytest.raises(UncalibratedBinaryState, match="separation"):

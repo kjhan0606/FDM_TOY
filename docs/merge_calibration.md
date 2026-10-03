@@ -131,12 +131,22 @@ The production table schema is version 4. Each accepted row now carries the
 SMBH mass ratio and the duration-weighted, orbit-averaged osculating
 eccentricity in addition to profile, binary mass fraction, and separation.
 Its separation coordinate is the orbit-mean physical SMBH distance, not the
-semimajor axis. The bound-binary runtime maps its secular `(a,e)` state to
-`<r>_t=a(1+e^2/2)` before lookup, matching the Kepler mean used in the run
-manifest. This mapping is a Kepler approximation: a strongly non-Keplerian
-orbit in a disturbed core requires an explicitly measured mean separation,
-not silent use of `a` as a substitute. If the mapped mean lies outside
-accepted bins, the binary is uncalibrated/censored.
+semimajor axis. The run manifest uses the Kepler estimate
+`<r>_t=a(1+e^2/2)` for *prospective resolution planning*, but the bound-binary
+runtime does not assume that mapping for rates. The completed pilot orbit
+tables report time-averaged separation and osculating `(a,e)` separately.
+Their ratio to the Kepler estimate differs by up to 6.9% for the circular
+`a/r_c=0.20, n=512` run and 12.6% for the eccentric
+`q=1, e=0.6, a/r_c=0.20, n=768` run (orbit CSV SHA-256
+`fe4b44c30a022ac434c4e85c99ac62aa9f829dc938a8bd59312cf2c9b514ab81`
+and `5e4f5bbd7f471eada8894247347bcbd78a453a360f9a84e61b834c30597fb98f`,
+respectively). These pilot discrepancies are not accepted mapping
+calibrations, and can exceed a proposed fixed-bin width. The q/e runtime
+therefore requires an explicitly supplied, independently validated
+`(a,e) -> <r>` mapping; without one, or if its mapped mean leaves accepted
+bins, it returns uncalibrated/censored. The next release must establish and
+verify that mapping from accepted orbit diagnostics, not silently substitute
+either `a` or its Kepler estimate.
 The manifest's input eccentricity remains separate provenance because the
 extended soliton potential shifts the point-mass osculating diagnostic.
 Runtime lookup interpolates in `q` or `e` only when

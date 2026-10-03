@@ -12,10 +12,7 @@ from scipy.optimize import brentq
 from .constants import G_INTERNAL
 from .delay_budget import DelaySegment
 from .gw import peters_orbital_rates, peters_time_myr
-from .orbital_exchange import (
-    keplerian_exchange_rates,
-    keplerian_time_mean_separation_pc,
-)
+from .orbital_exchange import keplerian_exchange_rates
 
 if TYPE_CHECKING:
     from .subgrid_calibration import SubgridCalibrationTable
@@ -184,12 +181,16 @@ def calibrated_qe_fdm_rate_provider(
     soliton_mass_msun: float,
     core_radius_pc: float,
     particle_mass_ev: float,
+    mean_separation_provider: Callable[[float, float], float] | None = None,
 ) -> FDMRateProvider:
     """Adapt an accepted schema-v4 table without q, e, or a extrapolation.
 
     The table admits interpolation only when measured ``(q, e)`` planes
     bracket the state and share mass/separation support. Its separation bins
-    are orbit-mean distances, so ``a,e`` first map to their Kepler time mean.
+    are measured orbit-mean distances, which can differ materially from the
+    Kepler mean in a disturbed soliton. The caller must supply a separately
+    validated mapping from secular ``(a,e)`` to orbit-mean separation; an
+    absent mapping censors the state rather than assuming Kepler motion.
     Converting a failure to
     ``UncalibratedBinaryState`` makes the orbit integrator return a censored
     calibration gap instead of silently substituting another plane.
@@ -206,9 +207,16 @@ def calibrated_qe_fdm_rate_provider(
         from .subgrid_calibration import physical_subgrid_rates
 
         try:
-            mean_separation_pc = keplerian_time_mean_separation_pc(
-                semimajor_axis_pc, eccentricity
-            )
+            if mean_separation_provider is None:
+                raise UncalibratedBinaryState(
+                    "validated orbit-mean separation mapping is unavailable"
+                )
+            mapped = mean_separation_provider(semimajor_axis_pc, eccentricity)
+            if isinstance(mapped, bool):
+                raise ValueError("orbit-mean separation mapping returned a boolean")
+            mean_separation_pc = float(mapped)
+            if not np.isfinite(mean_separation_pc) or mean_separation_pc <= 0.0:
+                raise ValueError("orbit-mean separation mapping is invalid")
             rates = physical_subgrid_rates(
                 table,
                 profile_id=profile_id,
@@ -220,7 +228,7 @@ def calibrated_qe_fdm_rate_provider(
                 separation_pc=mean_separation_pc,
                 eccentricity=eccentricity,
             )
-        except ValueError as error:
+        except (TypeError, ValueError) as error:
             raise UncalibratedBinaryState(str(error)) from error
         dimensionless = rates.dimensionless
         calibration_id = (
