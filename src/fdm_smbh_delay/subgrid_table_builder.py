@@ -29,6 +29,7 @@ from .subgrid_calibration import (
     SubgridCalibrationRow,
     SubgridCalibrationTable,
     _release_input_sha256,
+    _qe_candidate_rows_sha256,
     _verify_qe_release_controls,
     is_qe_extension_case,
     summarize_calibrated_domains,
@@ -758,6 +759,9 @@ def write_qe_calibration_table(
             "doubled_box_summary": str(box.convergence_summary.expanduser().resolve()),
             "selected_bin_indices": sorted(
                 row.separation_bin_index for row in result.accepted_rows
+            ),
+            "candidate_rows_sha256": _qe_candidate_rows_sha256(
+                package["candidate_rows"]
             ),
             "design_binding": binding,
             "raw_verification": assessment["raw_verification"],

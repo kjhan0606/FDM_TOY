@@ -341,8 +341,9 @@ selection step, not a release. `write_qe_calibration_table` is the separate
 version-5 release path: it requires registered design binding, raw-verified
 resolution and doubled-box comparisons, and only their common accepted bins.
 The loader checks selected-bin coverage, recorded comparison and raw-input
-digest completeness, and the release-input identity. The writer recomputes
-the source diagnostics before publication. The legacy writer still refuses
+digest completeness, the exact candidate-row value checksum, and the
+release-input identity. The writer recomputes the source diagnostics before
+publication. The legacy writer still refuses
 q/e rows.
 The release path cannot prove that a design was committed before the runs;
 that temporal provenance must be audited from the pre-run Git commit and
@@ -355,6 +356,9 @@ PROFILE=PAIR.json,BOX.json --output NEW_TABLE.csv`. This command never starts
 a wave calculation and refuses to overwrite either release file. No current
 q/e follow-up run supplies the required accepted measurements, so this is
 an interface contract rather than a present production table.
+If publication stops between the CSV and its commit sidecar, the loader
+rejects the incomplete pair. Retry under a new output name after checking
+the partial files; the q/e writer will not overwrite them.
 The candidate package also retains fine, coarse, and doubled-box measurements
 of mean separation, osculating semimajor axis and eccentricity for each
 box-supported bin. The osculating-axis mean and per-orbit range must be

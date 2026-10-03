@@ -962,6 +962,7 @@ def test_qe_release_requires_registered_design_and_verifies_box_provenance(
     summary = write_qe_calibration_table(controls, output=output)
     assert summary["schema_version"] == 5
     assert summary["qe_controls"][0]["selected_bin_indices"] == [0]
+    assert len(summary["qe_controls"][0]["candidate_rows_sha256"]) == 64
     loaded = SubgridCalibrationTable.from_release(output)
     assert len(loaded.rows) == 1
     assert loaded.rows[0].source_case_id == "qe_test"
@@ -995,8 +996,28 @@ def test_qe_release_requires_registered_design_and_verifies_box_provenance(
     sidecar.write_text(json.dumps(tampered))
     with pytest.raises(ValueError, match="input provenance digest does not close"):
         SubgridCalibrationTable.from_release(output)
+    original_csv = output.read_bytes()
+    table_rows = list(csv.DictReader(output.read_text().splitlines()))
+    table_rows[0]["dimensionless_orbital_power"] = str(
+        float(table_rows[0]["dimensionless_orbital_power"]) * 1.1
+    )
+    with output.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(table_rows[0]))
+        writer.writeheader()
+        writer.writerows(table_rows)
+    tampered = deepcopy(saved)
+    tampered["table"]["sha256"] = hashlib.sha256(output.read_bytes()).hexdigest()
+    sidecar.write_text(json.dumps(tampered))
+    with pytest.raises(ValueError, match="box-control provenance is invalid"):
+        SubgridCalibrationTable.from_release(output)
+    output.write_bytes(original_csv)
     sidecar.write_text(json.dumps(saved))
     assert len(SubgridCalibrationTable.from_release(output).rows) == 1
+    sidecar.unlink()
+    with pytest.raises(ValueError, match="commit sidecar is absent"):
+        SubgridCalibrationTable.from_release(output)
+    with pytest.raises(FileExistsError, match="already exists"):
+        write_qe_calibration_table(controls, output=output)
 
 
 def test_qe_candidate_package_rejects_changed_raw_input(

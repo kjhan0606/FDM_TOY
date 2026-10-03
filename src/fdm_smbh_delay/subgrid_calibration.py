@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import csv
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import hashlib
 import json
 from pathlib import Path
@@ -85,6 +85,13 @@ def _sha256_text(value: object) -> bool:
     return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
 
 
+def _qe_candidate_rows_sha256(rows: Iterable[dict]) -> str:
+    ordered = sorted(rows, key=lambda row: row["separation_bin_index"])
+    return hashlib.sha256(
+        json.dumps(ordered, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
 def _verify_qe_release_controls(summary: dict, rows: tuple[SubgridCalibrationRow, ...]) -> None:
     """Check that every released q/e bin has one registered box-control proof."""
 
@@ -112,6 +119,10 @@ def _verify_qe_release_controls(summary: dict, rows: tuple[SubgridCalibrationRow
             row.separation_bin_index for row in rows
             if (row.profile_id, row.source_case_id) == key
         )
+        candidate_rows = [
+            asdict(row) for row in rows
+            if (row.profile_id, row.source_case_id) == key
+        ]
         binding = control.get("design_binding")
         raw = control.get("raw_verification")
         if (
@@ -120,6 +131,9 @@ def _verify_qe_release_controls(summary: dict, rows: tuple[SubgridCalibrationRow
             or any(type(index) is not int for index in indices)
             or indices != expected
             or len(indices) != source["accepted_bins"]
+            or not _sha256_text(control.get("candidate_rows_sha256"))
+            or control["candidate_rows_sha256"]
+            != _qe_candidate_rows_sha256(candidate_rows)
             or control.get("resolution_pair_sha256") != source["source_sha256"]
             or not _sha256_text(control.get("doubled_box_sha256"))
             or not isinstance(control.get("doubled_box_summary"), str)
