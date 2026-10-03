@@ -600,7 +600,12 @@ def test_resume_payload_rejects_malformed_transition_history() -> None:
             (time_reversed,) + valid.transition_history[1:],
         )
 
-    skipped = replace(valid.inspiral_state, phase=InspiralPhase.HARD_BINARY)
+    skipped = replace(
+        valid.inspiral_state,
+        phase=InspiralPhase.HARD_BINARY,
+        semimajor_axis_pc=1.0,
+        eccentricity=0.1,
+    )
     with pytest.raises(ValueError, match="invalid phase edge"):
         KpcToHardState(
             valid.dynamical_state,
@@ -645,6 +650,46 @@ def test_unbound_exit_is_censored_outside_static_host_domain(monkeypatch) -> Non
     assert result.final_state.inspiral_state.phase is InspiralPhase.CENSORED
     assert result.delay_segment.status == "censored"
     assert result.delay_segment.reason == result.reason
+
+
+def test_bound_to_unbound_clears_axis_across_checkpoint(monkeypatch, tmp_path) -> None:
+    model = _phase_aware_model()
+    config = _phase_aware_config()
+    initial = initial_kpc_to_hard_state(
+        event_uid="capture-bound-to-unbound",
+        dynamical_state=initial_dual_nucleus_state(
+            position_pc=np.array([10.0, 0.0, 0.0]),
+            velocity_pc_myr=_tangential_velocity_for_axis(15.0),
+            model=model,
+        ),
+        model=model,
+        config=config,
+    )
+    assert initial.inspiral_state.phase is InspiralPhase.BOUND_BINARY
+
+    def become_unbound(state, _model, time_step):
+        return DualNucleusState(
+            state.elapsed_myr + time_step,
+            state.position_pc,
+            np.array([0.0, 1000.0, 0.0]),
+            state.envelope_truncation_radius_pc,
+            state.completed_steps + 1,
+        )
+
+    monkeypatch.setattr(kpc_inspiral, "_advance_phase_aware_rk4", become_unbound)
+    result = integrate_dual_nucleus_to_hard(
+        initial_state=initial, model=model, config=config,
+    )
+    assert result.status == "outside"
+    phase = result.final_state.inspiral_state
+    assert phase.phase is InspiralPhase.CENSORED
+    assert phase.semimajor_axis_pc is None
+    assert phase.eccentricity is not None and phase.eccentricity >= 1.0
+    checkpoint = tmp_path / "unbound.json"
+    write_kpc_to_hard_checkpoint(checkpoint, result.final_state, model, config)
+    resumed = read_kpc_to_hard_checkpoint(checkpoint, model, config)
+    assert resumed.inspiral_state == phase
+    assert resumed.transition_history == result.final_state.transition_history
 
 
 @pytest.mark.parametrize("initially_bound", [False, True])

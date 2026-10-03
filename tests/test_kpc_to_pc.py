@@ -213,3 +213,35 @@ def test_state_transitions_are_monotonic_and_explicit() -> None:
             elapsed_myr=1.0,
             reason="time reversal",
         )
+
+
+def test_explicitly_undefined_axis_clears_old_bound_orbit() -> None:
+    state = classify_capture_state(
+        _event(separation_pc=3.0),
+        common_nucleus_radius_pc=5.0,
+        sigma_pc_myr=200.0 * KM_S_TO_PC_MYR,
+    )
+    assert state.phase is InspiralPhase.BOUND_BINARY
+    assert state.semimajor_axis_pc is not None
+    censored = transition_state(
+        state,
+        InspiralPhase.CENSORED,
+        elapsed_myr=1.0,
+        semimajor_axis_pc=None,
+        eccentricity=1.2,
+        reason="osculating orbit became unbound",
+    )
+    assert censored.semimajor_axis_pc is None
+    assert censored.eccentricity == pytest.approx(1.2)
+
+
+def test_bound_phase_rejects_unbound_elements() -> None:
+    state = classify_capture_state(
+        _event(separation_pc=3.0),
+        common_nucleus_radius_pc=5.0,
+        sigma_pc_myr=200.0 * KM_S_TO_PC_MYR,
+    )
+    with pytest.raises(ValueError, match="bound phase requires"):
+        replace(state, eccentricity=1.0)
+    with pytest.raises(ValueError, match="bound phase requires"):
+        replace(state, semimajor_axis_pc=None)

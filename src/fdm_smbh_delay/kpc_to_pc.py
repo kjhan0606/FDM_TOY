@@ -91,6 +91,15 @@ _ALLOWED_TRANSITIONS = {
 }
 
 
+_UNSET = object()
+_BOUND_PHASES = {
+    InspiralPhase.BOUND_BINARY,
+    InspiralPhase.HARD_BINARY,
+    InspiralPhase.ENVIRONMENT_FDM_DRIVEN,
+    InspiralPhase.GW_DRIVEN,
+}
+
+
 @dataclass(frozen=True)
 class TransitionRadii:
     influence_radius_pc: float
@@ -137,6 +146,12 @@ class InspiralState:
             np.isfinite(self.eccentricity) and self.eccentricity >= 0.0
         ):
             raise ValueError("osculating eccentricity must be finite and non-negative")
+        if self.phase in _BOUND_PHASES and (
+            self.semimajor_axis_pc is None
+            or self.eccentricity is None
+            or self.eccentricity >= 1.0
+        ):
+            raise ValueError("bound phase requires a finite semimajor axis and eccentricity below one")
 
     @property
     def terminal(self) -> bool:
@@ -290,11 +305,11 @@ def transition_state(
     *,
     elapsed_myr: float,
     reason: str,
-    separation_pc: float | None = None,
-    semimajor_axis_pc: float | None = None,
-    eccentricity: float | None = None,
+    separation_pc: float | None | object = _UNSET,
+    semimajor_axis_pc: float | None | object = _UNSET,
+    eccentricity: float | None | object = _UNSET,
 ) -> InspiralState:
-    """Apply one forward state transition and reject silent phase skipping."""
+    """Apply a forward transition; omitted coordinates persist, explicit None clears."""
 
     if state.terminal:
         raise ValueError(f"terminal phase {state.phase.value} cannot transition")
@@ -311,13 +326,13 @@ def transition_state(
         phase=target,
         elapsed_myr=float(elapsed_myr),
         separation_pc=(
-            state.separation_pc if separation_pc is None else separation_pc
+            state.separation_pc if separation_pc is _UNSET else separation_pc
         ),
         semimajor_axis_pc=(
             state.semimajor_axis_pc
-            if semimajor_axis_pc is None
+            if semimajor_axis_pc is _UNSET
             else semimajor_axis_pc
         ),
-        eccentricity=(state.eccentricity if eccentricity is None else eccentricity),
+        eccentricity=(state.eccentricity if eccentricity is _UNSET else eccentricity),
         reason=reason,
     )
