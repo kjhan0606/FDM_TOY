@@ -196,7 +196,7 @@ def _make_inputs(
     return bridge, decision, delay_record, fdm, gw
 
 
-def test_verified_pta_driver_composes_all_three_intervals(tmp_path, capsys) -> None:
+def test_pta_driver_censors_uncalibrated_toy_fdm_completion(tmp_path, capsys) -> None:
     bridge, decision, delay, fdm, gw = _make_inputs(tmp_path)
     assert main(
         [
@@ -207,10 +207,14 @@ def test_verified_pta_driver_composes_all_three_intervals(tmp_path, capsys) -> N
             "--fdm-summary", str(fdm),
             "--gw-record", str(gw),
         ]
-    ) == 0
+    ) == 2
     output = json.loads(capsys.readouterr().out)
-    assert output["estimate"]["status"] == "complete"
-    assert output["estimate"]["total_delay_myr"] == 46.5
+    assert output["estimate"]["status"] == "censored"
+    assert output["estimate"]["total_delay_myr"] is None
+    assert output["estimate"]["true_merge_time_myr"] is None
+    assert output["estimate"]["censored_segments"] == ["fdm_pc_to_0p01pc"]
+    assert "legacy FDM toy completion" in output["estimate"]["segments"][1]["reason"]
+    assert output["estimate"]["segments"][1]["source_sha256"] is None
 
 
 def test_pta_driver_rejects_kpc_record_that_stops_before_one_pc(tmp_path) -> None:

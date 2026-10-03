@@ -107,6 +107,12 @@ explicitly censored intervals, distinct from absent inputs. The JSON result
 lists both `missing_segments` and `censored_segments`; its additive `segments`
 records retain per-interval reasons and source provenance.
 
+The present analytic-orbit `summary.json` is a diagnostic toy result, not an
+accepted q/e/separation-table-backed FDM delay. Even if it reports
+`reached_0p01pc`, the PTA driver keeps that interval censored; a provenance-
+checked calibrated result interface is still required before a physical PTA
+coalescence time can be released.
+
 An accepted galaxy-merger zoom table can correct an analytic kpc-to-pc
 baseline only at the exact physical point represented by a table row:
 

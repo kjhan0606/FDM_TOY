@@ -12,6 +12,7 @@ from .backreaction import (
     read_verified_backreaction_decision,
 )
 from .delay_budget import (
+    DelaySegment,
     TrueMergeEstimate,
     compose_true_merge_time,
     read_verified_delay_segment_record,
@@ -67,6 +68,19 @@ def compose_verified_pta_delay(
     if not isinstance(summary, dict):
         raise ValueError("FDM summary must be a JSON object")
     fdm = _fdm_segment(summary)
+    if fdm.status == "complete":
+        # The legacy analytic-orbit summary has neither a rechecked source
+        # artifact nor an accepted q/e/separation table identity. Its
+        # diagnostic completion is not a calibrated physical PTA delay.
+        fdm = DelaySegment(
+            "fdm_pc_to_0p01pc",
+            "censored",
+            None,
+            reason=(
+                "legacy FDM toy completion lacks a verified calibration-backed "
+                "1 pc to 0.01 pc delay"
+            ),
+        )
     gw = read_verified_delay_segment_record(
         gravitational_wave_record_path, expected_name="gravitational_wave"
     )
