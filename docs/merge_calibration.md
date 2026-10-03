@@ -306,6 +306,38 @@ three require a changed resolution/initial-condition design before duration
 can matter.  The report is a design diagnostic, not a registered set of bin
 edges or authorization to launch or release a calibration row.
 
+For a **new** q/e campaign, record reviewed fixed physical edges, the
+resolution pair, the same-cell-size doubled-box control, and a necessary
+duration before running any seed or wave calculation:
+
+```bash
+python scripts/register_qe_followup_design.py \
+  --case-id qe_q100_e060_a020 \
+  --cases results/wave_calibration_qe_extension/physical_cases.csv \
+  --manifest results/wave_calibration_qe_extension/run_manifest.csv \
+  --coarse-resolution 512 --fine-resolution 768 \
+  --separation-bin-edges-pc '<reviewed-low>,<reviewed-high>' \
+  --duration-myr '<reviewed-duration>' \
+  --output '<new-design-path>.json'
+```
+
+The placeholders must be replaced by a reviewed design; this is not a
+ready-to-run command. The writer refuses overwrite and hashes the exact
+physical-case and run-manifest CSVs. Commit the design before launching new
+calculations. The PyUL seed runner accepts `--qe-design`,
+`--qe-design-manifest`, and `--qe-design-role` (`coarse`, `fine`, or
+`doubled_box_control`); it refuses mismatched geometry or a shorter-than-plan
+duration and stamps the verified design identity into the seed metadata.
+The Torch runner re-verifies that binding before evolving the wave, including
+on restart. For a new comparison, pass `--qe-design`, `--qe-design-cases`,
+and `--qe-design-manifest` to `summarize_pyul_convergence.py`; it obtains the
+bin edges and orbit minimum from the bound design instead of accepting
+post-hoc CLI values. A design file and its hashes alone cannot establish
+that it predates the calculations: retain the pre-run Git commit and the
+run's stamped metadata. This path still does not authorize a GPU run or a
+calibration release. The present 128–432 GiB doubled-box estimates require
+an independently reviewed resource/solver design.
+
 At the initial Kepler period, the **necessary** 64-orbit duration for complete
 coverage of eight bins is 0.1749 Myr at `a/r_c=0.20`, 0.0618 Myr at 0.10, and
 0.0219 Myr at 0.05. These are not sufficient durations: the smallest

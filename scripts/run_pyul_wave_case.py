@@ -14,6 +14,11 @@ import subprocess
 import sys
 
 from fdm_smbh_delay.pyul import allocated_cpu_count
+from fdm_smbh_delay.qe_followup_design import (
+    read_verified_qe_followup_design,
+    verify_qe_design_run_request,
+)
+from fdm_smbh_delay.subgrid_calibration import is_qe_extension_case
 
 
 def _load_case(path: Path, case_id: str) -> dict[str, str]:
@@ -70,6 +75,11 @@ def main() -> int:
     parser.add_argument("--time-step-factor", type=float, default=1.0)
     parser.add_argument("--output", type=Path, default=Path("results/pyul_wave"))
     parser.add_argument("--box-pc", type=float)
+    parser.add_argument("--qe-design", type=Path)
+    parser.add_argument("--qe-design-manifest", type=Path)
+    parser.add_argument(
+        "--qe-design-role", choices=("coarse", "fine", "doubled_box_control")
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--save-3d", action="store_true")
     parser.add_argument("--save-3d-number", type=int)
@@ -127,6 +137,36 @@ def main() -> int:
     box_size = 100.0 if args.box_pc is None else args.box_pc
     if box_size <= 4.0 * separation:
         raise ValueError("simulation box must exceed four initial binary separations")
+    design_binding = None
+    if any(value is not None for value in (
+        args.qe_design, args.qe_design_manifest, args.qe_design_role
+    )):
+        if not all(value is not None for value in (
+            args.qe_design, args.qe_design_manifest, args.qe_design_role
+        )):
+            raise ValueError("q/e design, manifest, and run role must be supplied together")
+        design_path = args.qe_design.expanduser().resolve()
+        design, design_file_sha256 = read_verified_qe_followup_design(
+            design_path,
+            physical_cases=cases_path,
+            run_manifest=args.qe_design_manifest.expanduser().resolve(),
+        )
+        verify_qe_design_run_request(
+            design, case_id=args.case_id, role=args.qe_design_role,
+            resolution=args.resolution, box_size_pc=box_size,
+            duration_myr=duration,
+        )
+        design_binding = {
+            "status": "qe_prospective_design_bound_not_a_calibration_release",
+            "path": str(design_path),
+            "physical_cases_path": str(cases_path),
+            "run_manifest_path": str(args.qe_design_manifest.expanduser().resolve()),
+            "file_sha256": design_file_sha256,
+            "design_sha256": design["design_sha256"],
+            "role": args.qe_design_role,
+        }
+    elif is_qe_extension_case(args.case_id):
+        design_binding = {"status": "unregistered_qe_exploratory_run"}
 
     total_mass = mass1 + mass2
     position1 = [separation * mass2 / total_mass, 0.0, 0.0]
@@ -217,6 +257,7 @@ def main() -> int:
             "initial_eccentricity": initial_eccentricity,
             "semi_major_axis_pc": semi_major_axis,
             "initial_separation_pc": separation,
+            "qe_design_binding": design_binding,
             "resolution": args.resolution,
             "box_size_pc": box_size,
             "cell_size_pc": cell_size,

@@ -14,6 +14,10 @@ import numpy as np
 import torch
 
 from fdm_smbh_delay.pyul import pyul_unit_system
+from fdm_smbh_delay.qe_followup_design import (
+    read_verified_qe_followup_design,
+    verify_qe_design_run_request,
+)
 from fdm_smbh_delay.torch_wave import (
     advance_binary_rk4_patched,
     periodic_poisson_torch,
@@ -236,6 +240,25 @@ def main() -> int:
     reference_metadata = json.loads(
         (reference / "fdm_adapter_metadata.json").read_text(encoding="utf-8")
     )
+    design_binding = reference_metadata.get("qe_design_binding")
+    if isinstance(design_binding, dict) and design_binding.get("status") == (
+        "qe_prospective_design_bound_not_a_calibration_release"
+    ):
+        design, file_sha256 = read_verified_qe_followup_design(
+            Path(design_binding["path"]),
+            physical_cases=Path(design_binding["physical_cases_path"]),
+            run_manifest=Path(design_binding["run_manifest_path"]),
+        )
+        if (file_sha256 != design_binding.get("file_sha256")
+                or design["design_sha256"] != design_binding.get("design_sha256")):
+            raise ValueError("Torch seed q/e design binding changed")
+        verify_qe_design_run_request(
+            design, case_id=reference_metadata["case_id"],
+            role=design_binding["role"],
+            resolution=reference_metadata["resolution"],
+            box_size_pc=reference_metadata["box_size_pc"],
+            duration_myr=args.duration_myr,
+        )
     config = json.loads((reference / "config.uldm").read_text(encoding="utf-8"))
     resolution = int(reference_metadata["resolution"])
     box_pc = float(reference_metadata["box_size_pc"])
@@ -321,6 +344,8 @@ def main() -> int:
         ):
             if saved_metadata[key] != metadata[key]:
                 raise ValueError(f"restart request changes {key}")
+        if saved_metadata.get("qe_design_binding") != metadata.get("qe_design_binding"):
+            raise ValueError("restart request changes q/e design binding")
     else:
         output.mkdir(parents=True)
         (output / "Outputs").mkdir()
