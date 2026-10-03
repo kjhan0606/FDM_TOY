@@ -93,6 +93,23 @@ class _OpenEvent:
         return str(self.begin.get("event_uid", ""))
 
 
+@dataclass
+class _OpenBatch:
+    begin: dict[str, Any]
+    events: list[CaptureEvent]
+
+    @property
+    def uid(self) -> str:
+        return str(self.begin.get("batch_uid", ""))
+
+
+@dataclass(frozen=True)
+class _Attempt:
+    resume_step: int
+    parent_index: int | None
+    parent_batch_cutoff: int | None
+
+
 def _finite_float(record: dict[str, Any], key: str, *, positive: bool = False) -> float:
     value = record.get(key)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -118,8 +135,19 @@ def _boolean(record: dict[str, Any], key: str) -> bool:
     return value
 
 
-def _close_code(actual: float, expected: float) -> bool:
-    return bool(np.isclose(actual, expected, rtol=2.0e-12, atol=1.0e-14))
+def _close_code(actual: float, expected: float, *, scale: float = 0.0) -> bool:
+    # No fixed absolute floor: code-unit masses and energies may be tiny.
+    # Cancellation-dominated quantities use their uncancelled term scale.
+    return abs(actual - expected) <= 2.0e-12 * max(
+        abs(actual), abs(expected), abs(scale)
+    )
+
+
+def _vector_close(actual: np.ndarray, expected: np.ndarray, scale: np.ndarray) -> bool:
+    return all(
+        _close_code(float(got), float(want), scale=float(term))
+        for got, want, term in zip(actual, expected, scale)
+    )
 
 
 def _periodic_box_code(begin: dict[str, Any]) -> np.ndarray:
@@ -186,14 +214,17 @@ def _validate_native_conservation(
     offsets = np.array([_minimum_image_code(pos - positions[0], box) for pos in positions])
     com_position = np.mod(positions[0] + np.sum(masses[:, None] * offsets, axis=0) / total_mass, box)
     com_velocity = np.sum(masses[:, None] * velocities, axis=0) / total_mass
-    if not np.allclose(_vector(begin, "com_position_code"), com_position, rtol=2.0e-12, atol=1.0e-14):
+    com_delta = _minimum_image_code(_vector(begin, "com_position_code") - com_position, box)
+    if not _vector_close(com_delta, np.zeros(3), box):
         raise CaptureLedgerError(f"{uid}: native centre-of-mass position conservation failed")
-    if not np.allclose(_vector(begin, "com_velocity_code"), com_velocity, rtol=2.0e-12, atol=1.0e-14):
+    velocity_scale = np.sum(np.abs(masses[:, None] * velocities), axis=0) / total_mass
+    if not _vector_close(_vector(begin, "com_velocity_code"), com_velocity, velocity_scale):
         raise CaptureLedgerError(f"{uid}: native centre-of-mass velocity conservation failed")
 
     by_id = {int(row["sink_id"]): (mass, pos, vel)
              for row, mass, pos, vel in zip(member_rows, masses, positions, velocities)}
     max_separation = 0.0
+    max_separation_scale = 0.0
     for pair in pair_rows:
         id1, id2 = int(pair["sink_id_1"]), int(pair["sink_id_2"])
         mass1, pos1, vel1 = by_id[id1]
@@ -206,23 +237,31 @@ def _validate_native_conservation(
         kinetic = 0.5 * reduced_mass * speed**2
         specific_h = np.cross(dr, dv)
         max_separation = max(max_separation, separation)
+        separation_scale = float(np.linalg.norm(np.maximum(np.abs(pos1), np.abs(pos2))))
+        speed_scale = float(np.linalg.norm(np.maximum(np.abs(vel1), np.abs(vel2))))
+        max_separation_scale = max(max_separation_scale, separation_scale)
+        h_scale = np.array([
+            abs(dr[1] * dv[2]) + abs(dr[2] * dv[1]),
+            abs(dr[2] * dv[0]) + abs(dr[0] * dv[2]),
+            abs(dr[0] * dv[1]) + abs(dr[1] * dv[0]),
+        ])
         vector_checks = (
-            ("delta_position_code", dr),
-            ("delta_velocity_code", dv),
-            ("specific_angular_momentum_code", specific_h),
-            ("relative_angular_momentum_code", reduced_mass * specific_h),
+            ("delta_position_code", dr, np.maximum(np.abs(pos1), np.abs(pos2))),
+            ("delta_velocity_code", dv, np.maximum(np.abs(vel1), np.abs(vel2))),
+            ("specific_angular_momentum_code", specific_h, h_scale),
+            ("relative_angular_momentum_code", reduced_mass * specific_h, reduced_mass * h_scale),
         )
         scalar_checks = (
-            ("separation_code", separation),
-            ("relative_speed_code", speed),
-            ("reduced_mass_code", reduced_mass),
-            ("relative_kinetic_code", kinetic),
+            ("separation_code", separation, separation_scale),
+            ("relative_speed_code", speed, speed_scale),
+            ("reduced_mass_code", reduced_mass, 0.0),
+            ("relative_kinetic_code", kinetic, reduced_mass * speed * speed_scale),
         )
-        for field, expected in vector_checks:
-            if not np.allclose(_vector(pair, field), expected, rtol=2.0e-12, atol=1.0e-14):
+        for field, expected, scale in vector_checks:
+            if not _vector_close(_vector(pair, field), expected, scale):
                 raise CaptureLedgerError(f"{uid}: native pair {id1}-{id2} {field} invariant failed")
-        for field, expected in scalar_checks:
-            if not _close_code(_finite_float(pair, field), expected):
+        for field, expected, scale in scalar_checks:
+            if not _close_code(_finite_float(pair, field), expected, scale=scale):
                 raise CaptureLedgerError(f"{uid}: native pair {id1}-{id2} {field} invariant failed")
         if separation <= np.finfo(float).tiny:
             if any(pair[field] is not None for field in (
@@ -236,18 +275,34 @@ def _validate_native_conservation(
         potential = -fact_g * mass1 * mass2 / separation
         energy = 0.5 * speed**2 - fact_g * (mass1 + mass2) / separation
         legacy_proxy = fact_g * mass1 * mass2 / separation**2
-        for field, expected in (
-            ("newtonian_potential_1overr_code", potential),
-            ("two_body_specific_energy_code", energy),
-            ("legacy_binding_proxy_1overr2_code", legacy_proxy),
+        radius_error_factor = separation_scale / separation
+        gravity = fact_g * (mass1 + mass2) / separation
+        energy_scale = (
+            0.5 * speed**2 + gravity
+            + speed * speed_scale + gravity * radius_error_factor
+        )
+        for field, expected, scale in (
+            ("newtonian_potential_1overr_code", potential,
+             abs(potential) * radius_error_factor),
+            ("two_body_specific_energy_code", energy, energy_scale),
+            ("legacy_binding_proxy_1overr2_code", legacy_proxy,
+             2.0 * abs(legacy_proxy) * radius_error_factor),
         ):
-            if not _close_code(_finite_float(pair, field), expected):
+            if not _close_code(_finite_float(pair, field), expected, scale=scale):
                 raise CaptureLedgerError(f"{uid}: native pair {id1}-{id2} {field} invariant failed")
-        if _boolean(pair, "two_body_bound") != (energy < 0.0):
+        recorded_energy = _finite_float(pair, "two_body_specific_energy_code")
+        if (not _close_code(recorded_energy, 0.0, scale=energy_scale)
+                and _boolean(pair, "two_body_bound") != (recorded_energy < 0.0)):
             raise CaptureLedgerError(f"{uid}: native pair {id1}-{id2} two-body bound invariant failed")
-        if _boolean(pair, "legacy_pair_bound") != (kinetic < legacy_proxy):
+        recorded_kinetic = _finite_float(pair, "relative_kinetic_code")
+        recorded_proxy = _finite_float(pair, "legacy_binding_proxy_1overr2_code")
+        if (not _close_code(recorded_kinetic, recorded_proxy,
+                            scale=reduced_mass * speed * speed_scale
+                            + 2.0 * abs(legacy_proxy) * radius_error_factor)
+                and _boolean(pair, "legacy_pair_bound") != (recorded_kinetic < recorded_proxy)):
             raise CaptureLedgerError(f"{uid}: native pair {id1}-{id2} legacy bound invariant failed")
-    if not _close_code(_finite_float(begin, "max_pair_separation_code"), max_separation):
+    if not _close_code(_finite_float(begin, "max_pair_separation_code"),
+                       max_separation, scale=max_separation_scale):
         raise CaptureLedgerError(f"{uid}: native maximum pair separation invariant failed")
     return True
 
@@ -370,7 +425,12 @@ def _build_event(
         )
         source_separation_code = float(np.linalg.norm(delta_code))
         within_merge = _boolean(row, "within_rmerge")
-        if within_merge != (source_separation_code <= merge_radius_code):
+        separation_scale = float(np.linalg.norm(np.maximum(
+            np.abs(position_code_by_id[id1]), np.abs(position_code_by_id[id2])
+        )))
+        if (within_merge != (source_separation_code <= merge_radius_code)
+                and not _close_code(source_separation_code, merge_radius_code,
+                                    scale=separation_scale)):
             raise CaptureLedgerError(f"{uid}: pair {key} within_rmerge contradicts source geometry")
         source_bound = _boolean(row, "two_body_bound")
         legacy_bound = _boolean(row, "legacy_pair_bound")
@@ -379,8 +439,14 @@ def _build_event(
             if specific_energy_code is None:
                 if source_bound:
                     raise CaptureLedgerError(f"{uid}: singular pair cannot be two-body bound")
-            elif source_bound != (_finite_float(row, "two_body_specific_energy_code") < 0.0):
-                raise CaptureLedgerError(f"{uid}: pair {key} two_body_bound contradicts source energy")
+            else:
+                recorded_energy = _finite_float(row, "two_body_specific_energy_code")
+                source_speed = _finite_float(row, "relative_speed_code") if "relative_speed_code" in row else 0.0
+                kinetic_scale = 0.5 * source_speed**2
+                if (source_bound != (recorded_energy < 0.0)
+                        and not _close_code(recorded_energy, 0.0,
+                                            scale=kinetic_scale + abs(kinetic_scale - recorded_energy))):
+                    raise CaptureLedgerError(f"{uid}: pair {key} two_body_bound contradicts source energy")
         try:
             state = pair_orbital_state(
                 member_ids=(id1, id2),
@@ -434,22 +500,65 @@ def _build_event(
     )
 
 
-def read_capture_ledger(
-    path: str | Path, *, allow_incomplete_tail: bool = False
-) -> CaptureLedger:
-    """Read complete transactions and deduplicate bitwise restart repeats.
+def _ledger_int(record: dict[str, Any], key: str, *, minimum: int = 0) -> int:
+    value = record.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        raise CaptureLedgerError(f"{key} must be an integer >= {minimum}")
+    return value
 
-    An event without ``event_end`` is never promoted to a physical input.  It
-    may be reported as a censored tail only when ``allow_incomplete_tail`` is
-    explicit.  A repeated deterministic UID with different contents is always
-    rejected as a provenance conflict.
+
+def _validate_batched_event_source(block: _OpenEvent) -> None:
+    begin = block.begin
+    if "periodic_box_size_code" not in begin:
+        raise CaptureLedgerError(f"{block.uid}: batched event lacks periodic box extents")
+    primary = _ledger_int(begin, "primary_sink_id", minimum=1)
+    ordered_members = sorted(block.members, key=lambda row: _ledger_int(row, "member_index", minimum=1))
+    masses = [_finite_float(row, "mass_code", positive=True) for row in ordered_members]
+    if not masses:
+        raise CaptureLedgerError(f"{block.uid}: batched event has no members")
+    expected = _ledger_int(ordered_members[masses.index(max(masses))], "sink_id", minimum=1)
+    if primary != expected:
+        raise CaptureLedgerError(f"{block.uid}: primary sink violates survivor rule")
+    for member in block.members:
+        if _ledger_int(member, "primary_sink_id", minimum=1) != primary:
+            raise CaptureLedgerError(f"{block.uid}: inconsistent member primary sink")
+        if _boolean(member, "is_primary") != (member["sink_id"] == primary):
+            raise CaptureLedgerError(f"{block.uid}: inconsistent member primary flag")
+
+
+def read_capture_ledger(
+    path: str | Path, *, allow_incomplete_tail: bool = False,
+    allow_incomplete_batches: bool = False,
+) -> CaptureLedger:
+    """Read only committed events on the final restart lineage.
+
+    Legacy bare events remain readable until the first batch/attempt marker.
+    A complete ``event_end`` in a new ledger is not enough: its batch must
+    commit after sink compaction, and superseded restart branches are excluded.
     """
 
     resolved = Path(path).expanduser().resolve()
     current: _OpenEvent | None = None
-    events: dict[str, CaptureEvent] = {}
-    duplicates = 0
+    batch: _OpenBatch | None = None
+    seen_protocol = False
+    legacy: list[CaptureEvent] = []
+    committed: list[tuple[_OpenBatch, str, int | None]] = []
+    attempts: list[_Attempt] = []
+    # The third value is the committed-batch count at the checkpoint marker.
+    # Ordering, not coarse-step equality, decides what the snapshot contains.
+    checkpoints: dict[int, tuple[int, int, int]] = {}
     incomplete: list[str] = []
+
+    def censor_open_batch(reason: str) -> None:
+        nonlocal current, batch
+        if batch is None:
+            return
+        if not allow_incomplete_batches:
+            raise CaptureLedgerError(f"{batch.uid}: {reason}")
+        if current is not None:
+            incomplete.append(current.uid)
+            current = None
+        batch = None
 
     with resolved.open("r", encoding="utf-8") as stream:
         for line_number, line in enumerate(stream, start=1):
@@ -461,12 +570,59 @@ def read_capture_ledger(
                 raise CaptureLedgerError(
                     f"{resolved}:{line_number}: invalid JSON"
                 ) from exc
+            if not isinstance(record, dict):
+                raise CaptureLedgerError(f"{resolved}:{line_number}: record is not an object")
             record_type = record.get("record_type")
-            if record_type == "event_begin":
+            if record_type == "attempt_begin":
+                if current is not None and batch is None:
+                    raise CaptureLedgerError(f"{current.uid}: missing event_end")
+                censor_open_batch("missing batch_commit before next attempt")
+                restart_output = _ledger_int(record, "restart_output")
+                resume_step = _ledger_int(record, "resume_step")
+                if record.get("schema_version") != CAPTURE_LEDGER_SCHEMA_VERSION:
+                    raise CaptureLedgerError("unsupported attempt schema")
+                if restart_output == 0:
+                    if attempts or committed or legacy:
+                        raise CaptureLedgerError("fresh attempt appended to existing ledger")
+                    parent = None
+                    parent_cutoff = None
+                else:
+                    if legacy:
+                        raise CaptureLedgerError("legacy bare events cannot prove restart lineage")
+                    checkpoint = checkpoints.get(restart_output)
+                    if checkpoint is None or checkpoint[1] != resume_step:
+                        raise CaptureLedgerError("restart has no matching ledger checkpoint")
+                    parent = checkpoint[0]
+                    parent_cutoff = checkpoint[2]
+                attempts.append(_Attempt(resume_step, parent, parent_cutoff))
+                seen_protocol = True
+            elif record_type == "checkpoint":
+                if current is not None or batch is not None or not attempts:
+                    raise CaptureLedgerError("checkpoint outside a completed batch/attempt")
+                if record.get("schema_version") != CAPTURE_LEDGER_SCHEMA_VERSION:
+                    raise CaptureLedgerError("unsupported checkpoint schema")
+                output = _ledger_int(record, "output_number", minimum=1)
+                step = _ledger_int(record, "nstep_coarse")
+                if step < attempts[-1].resume_step:
+                    raise CaptureLedgerError("checkpoint predates active attempt")
+                checkpoints[output] = (len(attempts) - 1, step, len(committed))
+            elif record_type == "batch_begin":
+                if current is not None and batch is None:
+                    raise CaptureLedgerError(f"{current.uid}: missing event_end")
+                censor_open_batch("missing batch_commit before next batch")
+                if not attempts:
+                    raise CaptureLedgerError("batch has no run attempt marker")
+                if record.get("schema_version") != CAPTURE_LEDGER_SCHEMA_VERSION:
+                    raise CaptureLedgerError("unsupported batch schema")
+                batch = _OpenBatch(record, [])
+                seen_protocol = True
+            elif record_type == "event_begin":
                 if current is not None:
                     raise CaptureLedgerError(
                         f"{current.uid}: missing event_end before line {line_number}"
                     )
+                if seen_protocol and batch is None:
+                    raise CaptureLedgerError("bare event after batch protocol began")
                 current = _OpenEvent(record, line_number, [record], [], [])
             elif record_type in {"member", "pair"}:
                 if current is None or record.get("event_uid") != current.uid:
@@ -480,22 +636,57 @@ def read_capture_ledger(
                     current.pairs.append(record)
             elif record_type == "event_end":
                 if current is None:
-                    raise CaptureLedgerError(
-                        f"{resolved}:{line_number}: orphaned event_end"
-                    )
+                    raise CaptureLedgerError(f"{resolved}:{line_number}: orphaned event_end")
+                if batch is not None:
+                    _validate_batched_event_source(current)
                 event = _build_event(
                     current, record, source_path=resolved, last_line=line_number
                 )
-                previous = events.get(event.event_uid)
-                if previous is None:
-                    events[event.event_uid] = event
-                elif previous.event_sha256 == event.event_sha256:
-                    duplicates += 1
+                if batch is None:
+                    legacy.append(event)
                 else:
-                    raise CaptureLedgerError(
-                        f"{event.event_uid}: conflicting deterministic event UID"
-                    )
+                    batch.events.append(event)
                 current = None
+            elif record_type == "batch_commit":
+                if batch is None or current is not None:
+                    raise CaptureLedgerError("batch_commit without complete open batch")
+                begin = batch.begin
+                uid = batch.uid
+                step = _ledger_int(begin, "nstep_coarse")
+                level = _ledger_int(begin, "ilevel", minimum=1)
+                before = _ledger_int(begin, "nsink_before", minimum=1)
+                after = _ledger_int(begin, "nsink_after", minimum=1)
+                expected = _ledger_int(begin, "expected_events", minimum=1)
+                if (
+                    record.get("schema_version") != CAPTURE_LEDGER_SCHEMA_VERSION
+                    or uid != f"{step}-{level}-{before}-{after}"
+                    or record.get("batch_uid") != uid
+                    or _ledger_int(record, "nsink_after", minimum=1) != after
+                    or step < attempts[-1].resume_step
+                    or before <= after
+                    or len(batch.events) != expected
+                ):
+                    raise CaptureLedgerError(f"{uid}: invalid batch commit or metadata")
+                reduction = sum(len(event.members) - 1 for event in batch.events)
+                if reduction != before - after:
+                    raise CaptureLedgerError(f"{uid}: sink-count conservation failed")
+                member_ids: set[int] = set()
+                event_uids: set[str] = set()
+                for event in batch.events:
+                    ids = {member.sink_id for member in event.members}
+                    expected_uid = f"{step}-{level}-{min(ids)}-{max(ids)}-{len(ids)}"
+                    if (
+                        event.event_uid != expected_uid
+                        or event.nstep_coarse != step or event.level != level
+                        or event.event_uid in event_uids or member_ids & ids
+                    ):
+                        raise CaptureLedgerError(f"{uid}: inconsistent batched event")
+                    event_uids.add(event.event_uid)
+                    member_ids.update(ids)
+                payload = [begin, [(event.event_uid, event.event_sha256) for event in batch.events], record]
+                digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+                committed.append((batch, digest, len(attempts) - 1))
+                batch = None
             else:
                 raise CaptureLedgerError(
                     f"{resolved}:{line_number}: unknown record_type={record_type!r}"
@@ -503,11 +694,50 @@ def read_capture_ledger(
 
     if current is not None:
         incomplete.append(current.uid)
-        if not allow_incomplete_tail:
+        if batch is None and not allow_incomplete_tail:
             raise CaptureLedgerError(f"{current.uid}: incomplete event at end of ledger")
+    if batch is not None and not (allow_incomplete_tail or allow_incomplete_batches):
+        raise CaptureLedgerError(f"{batch.uid}: incomplete batch at end of ledger")
+
+    active_cutoffs: dict[int, int | None] = {}
+    if attempts:
+        index: int | None = len(attempts) - 1
+        cutoff: int | None = None
+        while index is not None:
+            if index in active_cutoffs:
+                raise CaptureLedgerError("restart lineage cycle")
+            active_cutoffs[index] = cutoff
+            cutoff = attempts[index].parent_batch_cutoff
+            index = attempts[index].parent_index
+
+    events: dict[str, CaptureEvent] = {}
+    batch_digests: dict[str, str] = {}
+    duplicates = 0
+    def accept(event: CaptureEvent) -> None:
+        nonlocal duplicates
+        previous = events.get(event.event_uid)
+        if previous is None:
+            events[event.event_uid] = event
+        elif previous.event_sha256 == event.event_sha256:
+            duplicates += 1
+        else:
+            raise CaptureLedgerError(f"{event.event_uid}: conflicting deterministic event UID")
+
+    for event in legacy:
+        accept(event)
+    for batch_index, (committed_batch, digest, owner) in enumerate(committed):
+        if owner not in active_cutoffs:
+            continue
+        cutoff = active_cutoffs[owner]
+        if cutoff is not None and batch_index >= cutoff:
+            continue
+        previous = batch_digests.get(committed_batch.uid)
+        if previous is not None and previous != digest:
+            raise CaptureLedgerError(f"{committed_batch.uid}: conflicting deterministic batch UID")
+        batch_digests[committed_batch.uid] = digest
+        for event in committed_batch.events:
+            accept(event)
     return CaptureLedger(
-        source_path=resolved,
-        events=tuple(events.values()),
-        duplicate_events=duplicates,
-        incomplete_event_uids=tuple(incomplete),
+        source_path=resolved, events=tuple(events.values()),
+        duplicate_events=duplicates, incomplete_event_uids=tuple(incomplete),
     )

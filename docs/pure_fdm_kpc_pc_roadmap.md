@@ -33,6 +33,14 @@ python scripts/bind_capture_dm_run.py \
 
 This check requires the sidecar ledger path to resolve to the exact event
 ledger and a non-earlier output step.
+For current lagRamses ledgers, `event_end` alone does not establish capture:
+the reader accepts only a post-compaction `batch_commit` on the final
+`attempt_begin`/`checkpoint` restart lineage. A checkpoint keeps batches
+recorded before its marker, even when they share its coarse-step number;
+batches recorded later are absent from that snapshot. Incomplete batches
+remain censored and require an explicit reader allowance before a restarted
+file can be ingested. Legacy bare-event ledgers remain readable but cannot
+prove this restart lineage.
 It preserves the active model and SIDM/FDM controls, but does not assert that
 different model runs reach capture simultaneously or that any capture is a
 physical coalescence.  Only the FDM branch proceeds to the all-wave seed and

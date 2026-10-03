@@ -9,6 +9,7 @@ import pytest
 
 from fdm_smbh_delay.capture_ledger import (
     CaptureLedgerError,
+    _close_code,
     read_capture_ledger,
 )
 from fdm_smbh_delay.constants import G_INTERNAL
@@ -125,6 +126,203 @@ def _native_binary_rows() -> list[dict]:
         legacy_binding_proxy_1overr2_code=G_INTERNAL * mass1 * mass2 / radius**2,
     )
     return rows
+
+
+def _committed_batch_rows(
+    *, step: int = 10, sink_ids: tuple[int, int] = (7, 9),
+) -> list[dict]:
+    rows = _native_binary_rows()
+    uid = f"{step}-1-{sink_ids[0]}-{sink_ids[1]}-2"
+    for row in rows:
+        row["event_uid"] = uid
+    rows[0].update(
+        nstep_coarse=step, primary_sink_id=sink_ids[0],
+        periodic_box_size_code=[100.0, 100.0, 100.0],
+    )
+    for row, sink_id in zip(rows[1:3], sink_ids):
+        row.update(
+            sink_id=sink_id, primary_sink_id=sink_ids[0],
+            is_primary=sink_id == sink_ids[0],
+        )
+    rows[-2].update(sink_id_1=sink_ids[0], sink_id_2=sink_ids[1])
+    batch_uid = f"{step}-1-2-1"
+    return [
+        {"schema_version": 1, "record_type": "batch_begin", "batch_uid": batch_uid,
+         "nstep_coarse": step, "ilevel": 1, "nsink_before": 2,
+         "nsink_after": 1, "expected_events": 1},
+        *rows,
+        {"schema_version": 1, "record_type": "batch_commit", "batch_uid": batch_uid,
+         "nsink_after": 1},
+    ]
+
+
+def _attempt(restart_output: int = 0, resume_step: int = 0) -> dict:
+    return {"schema_version": 1, "record_type": "attempt_begin",
+            "restart_output": restart_output, "resume_step": resume_step}
+
+
+def test_batched_capture_requires_post_compaction_commit(tmp_path) -> None:
+    path = tmp_path / "ledger.jsonl"
+    rows = [_attempt(), *_committed_batch_rows()]
+    _write_rows(path, rows)
+    assert [event.event_uid for event in read_capture_ledger(path).events] == ["10-1-7-9-2"]
+    _write_rows(path, rows[:-1])
+    with pytest.raises(CaptureLedgerError, match="incomplete batch"):
+        read_capture_ledger(path)
+    assert read_capture_ledger(path, allow_incomplete_tail=True).events == ()
+
+
+def test_native_tolerance_does_not_mask_tiny_code_unit_errors() -> None:
+    assert not _close_code(1.0e-20, -1.0e-20)
+    assert not _close_code(1.0e-12, 1.001e-12)
+    assert _close_code(1.0e-20, 1.0e-20 * (1.0 + 1.0e-13))
+
+
+def test_close_pair_far_from_origin_uses_coordinate_roundoff_scale(tmp_path) -> None:
+    rows = _native_binary_rows()
+    begin, first, second, pair, _ = rows
+    first["position_code"] = [50.0, 0.0, 0.0]
+    second["position_code"] = [50.000001, 0.0, 0.0]
+    dr = second["position_code"][0] - first["position_code"][0]
+    speed = abs(second["velocity_code"][1] - first["velocity_code"][1])
+    begin["com_position_code"] = [50.0000005, 0.0, 0.0]
+    begin["max_pair_separation_code"] = dr + 1.0e-16
+    pair.update(
+        delta_position_code=[dr, 0.0, 0.0], separation_code=dr + 1.0e-16,
+        specific_angular_momentum_code=[0.0, 0.0, -dr * speed],
+        relative_angular_momentum_code=[0.0, 0.0, -5.0e7 * dr * speed],
+        newtonian_potential_1overr_code=-G_INTERNAL * 1.0e16 / dr,
+        two_body_specific_energy_code=0.5 * speed**2 - G_INTERNAL * 2.0e8 / dr,
+        legacy_binding_proxy_1overr2_code=G_INTERNAL * 1.0e16 / dr**2,
+    )
+    pair["two_body_bound"] = bool(pair["two_body_specific_energy_code"] < 0.0)
+    pair["legacy_pair_bound"] = bool(
+        pair["relative_kinetic_code"] < pair["legacy_binding_proxy_1overr2_code"]
+    )
+    path = tmp_path / "ledger.jsonl"
+    _write_rows(path, rows)
+    assert read_capture_ledger(path).events[0].native_conservation_verified
+
+
+def test_restarted_capture_censors_uncommitted_batch(tmp_path) -> None:
+    path = tmp_path / "ledger.jsonl"
+    first = _committed_batch_rows()
+    second = _committed_batch_rows(step=11)
+    rows = [_attempt(), *first[:-1],
+            {"schema_version": 1, "record_type": "checkpoint",
+             "output_number": 1, "nstep_coarse": 10}]
+    _write_rows(path, rows)
+    with pytest.raises(CaptureLedgerError, match="checkpoint outside"):
+        read_capture_ledger(path, allow_incomplete_batches=True)
+    rows = [_attempt(), *first[:-1], _attempt(1, 10), *second]
+    # A restart cannot name a checkpoint that was never written.
+    _write_rows(path, rows)
+    with pytest.raises(CaptureLedgerError, match="no matching ledger checkpoint"):
+        read_capture_ledger(path, allow_incomplete_batches=True)
+    rows = [_attempt(), {"schema_version": 1, "record_type": "checkpoint",
+                        "output_number": 1, "nstep_coarse": 10},
+            *first[:-1], _attempt(1, 10), *second]
+    _write_rows(path, rows)
+    with pytest.raises(CaptureLedgerError, match="missing batch_commit"):
+        read_capture_ledger(path)
+    ledger = read_capture_ledger(path, allow_incomplete_batches=True)
+    assert [event.event_uid for event in ledger.events] == ["11-1-7-9-2"]
+
+
+def test_restart_cutline_uses_checkpoint_record_order(tmp_path) -> None:
+    path = tmp_path / "ledger.jsonl"
+    rows = [_attempt(), *_committed_batch_rows(),
+            {"schema_version": 1, "record_type": "checkpoint",
+             "output_number": 1, "nstep_coarse": 10},
+            _attempt(1, 10), *_committed_batch_rows(step=11)]
+    _write_rows(path, rows)
+    ledger = read_capture_ledger(path)
+    assert [event.event_uid for event in ledger.events] == [
+        "10-1-7-9-2", "11-1-7-9-2"
+    ]
+    # The same-step capture after the snapshot marker was not in that output.
+    rows = [_attempt(),
+            {"schema_version": 1, "record_type": "checkpoint",
+             "output_number": 1, "nstep_coarse": 10},
+            *_committed_batch_rows(), _attempt(1, 10),
+            *_committed_batch_rows(step=11)]
+    _write_rows(path, rows)
+    assert [event.event_uid for event in read_capture_ledger(path).events] == [
+        "11-1-7-9-2"
+    ]
+
+
+def test_committed_multiple_preserves_all_three_members_and_pairs(tmp_path) -> None:
+    rows = _native_binary_rows()
+    begin, first, second, _, end = rows
+    uid = "10-1-7-11-3"
+    begin.update(
+        event_uid=uid, classification="MULTIPLE", nmember=3,
+        expected_pairs=3, primary_sink_id=7,
+        periodic_box_size_code=[100.0, 100.0, 100.0],
+        total_mass_code=3.0, com_position_code=[1.0, 0.0, 0.0],
+        com_velocity_code=[0.0, 0.0, 0.0], max_pair_separation_code=2.0,
+        merge_radius_code=2.5, factG_code=1.0,
+    )
+    third = copy.deepcopy(second)
+    members = [first, second, third]
+    for index, (member, sink_id) in enumerate(zip(members, (7, 9, 11))):
+        member.update(
+            event_uid=uid, member_index=index + 1, sink_id=sink_id,
+            primary_sink_id=7, is_primary=index == 0, mass_code=1.0,
+            position_code=[float(index), 0.0, 0.0], velocity_code=[0.0, 0.0, 0.0],
+        )
+    pairs = []
+    for pair_index, (id1, id2, separation) in enumerate(
+        ((7, 9, 1.0), (7, 11, 2.0), (9, 11, 1.0)), start=1
+    ):
+        pair = copy.deepcopy(rows[-2])
+        pair.update(
+            event_uid=uid, pair_index=pair_index, sink_id_1=id1, sink_id_2=id2,
+            delta_position_code=[separation, 0.0, 0.0], separation_code=separation,
+            delta_velocity_code=[0.0, 0.0, 0.0], relative_speed_code=0.0,
+            reduced_mass_code=0.5, relative_kinetic_code=0.0,
+            newtonian_potential_1overr_code=-1.0 / separation,
+            two_body_specific_energy_code=-2.0 / separation,
+            specific_angular_momentum_code=[0.0, 0.0, 0.0],
+            relative_angular_momentum_code=[0.0, 0.0, 0.0],
+            legacy_binding_proxy_1overr2_code=1.0 / separation**2,
+            within_rmerge=True, two_body_bound=True, legacy_pair_bound=True,
+        )
+        pairs.append(pair)
+    end.update(event_uid=uid, nmember=3, npair=3)
+    batch_uid = "10-1-3-1"
+    path = tmp_path / "ledger.jsonl"
+    _write_rows(path, [
+        _attempt(),
+        {"schema_version": 1, "record_type": "batch_begin", "batch_uid": batch_uid,
+         "nstep_coarse": 10, "ilevel": 1, "nsink_before": 3,
+         "nsink_after": 1, "expected_events": 1},
+        begin, *members, *pairs, end,
+        {"schema_version": 1, "record_type": "batch_commit", "batch_uid": batch_uid,
+         "nsink_after": 1},
+    ])
+    ledger = read_capture_ledger(path)
+    assert len(ledger.events) == 1
+    event = ledger.events[0]
+    assert event.classification == "MULTIPLE"
+    assert [member.sink_id for member in event.members] == [7, 9, 11]
+    assert len(event.pairs) == 3
+    assert event.binary_orbital_state is None
+    assert event.native_conservation_verified
+
+
+def test_bad_batch_conservation_and_bare_event_are_rejected(tmp_path) -> None:
+    path = tmp_path / "ledger.jsonl"
+    rows = [_attempt(), *_committed_batch_rows()]
+    bad = copy.deepcopy(rows)
+    bad[-1]["nsink_after"] = 2
+    _write_rows(path, bad)
+    with pytest.raises(CaptureLedgerError, match="invalid batch commit"):
+        read_capture_ledger(path)
+    _write_rows(path, rows + _binary_rows())
+    with pytest.raises(CaptureLedgerError, match="bare event"):
+        read_capture_ledger(path)
 
 
 def test_capture_ledger_converts_code_units_and_recovers_binary(tmp_path) -> None:
