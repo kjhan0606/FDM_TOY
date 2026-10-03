@@ -416,6 +416,26 @@ unchanged at 1,409,825,280 bytes. The source snapshot and summary are in
 The equal global peak implies that some other stage dominates this particular
 n=256 run; it does not show that the slab change clears larger grids.
 
+Optional stage-level CUDA profiling identified the actual n=256 peaks in
+revision `8b9b17a` (job `411465`): the initial and final saved-wave energy
+evaluations reached 1,409,825,280 allocated bytes; the old potential kicks
+were within 6,144 bytes of that peak. Forward FFT, inverse FFT, Poisson, and
+compact-potential stages were below that peak. Revision `6e2cb3c` (job
+`411477`) reduced each potential-kick
+peak to 1,141,383,680 bytes by forming the complex phase in a single buffer,
+but the saved-energy peak remained unchanged. Revision `ed252c2` (job
+`411481`) released the unused total-potential array before each saved-energy
+evaluation, reducing the measured whole-run peak to 1,275,607,552 bytes
+(1.188 GiB). The saved energy, mass, SMBH-state, and radial-density arrays
+match job `411477` exactly. Profiles and source snapshots are in the
+respective `memory_probe_n256_stage_v1_411465`,
+`memory_probe_n256_phase_v1_411477`, and
+`memory_probe_n256_lifetime_v1_411481` directories under the Torch q/e
+scratch root above. The present n=256 one-step result is 34.5% below the
+`391f6e9` baseline peak, but neither cubic projection nor the one-step profile
+is a capacity clearance for n=1024; FFT workspaces, CUDA reserved memory,
+long-run behavior, and the actual large-grid allocation remain unmeasured.
+
 The guarded q-e queue uses observed device-memory profiles rather than the
 uniform-grid estimate alone. An `n=512` stage requires at least 22 GiB total
 and 21 GiB free: this admits a 23,028 MiB A10 while retaining more than 2 GiB
