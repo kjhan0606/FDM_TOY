@@ -51,6 +51,7 @@ def test_remaining_time_uses_only_steps_completed_since_resume() -> None:
     "field", (
         "wave_density_layout", "compact_potential_layout", "potential_phase_layout",
         "total_potential_lifetime",
+        "saved_energy_density_lifetime",
     )
 )
 def test_restart_rejects_missing_or_changed_numerical_layout(field: str) -> None:
@@ -60,6 +61,9 @@ def test_restart_rejects_missing_or_changed_numerical_layout(field: str) -> None
     requested["potential_phase_layout"] = "complex_real_imag_inplace_trig_v1"
     requested["total_potential_lifetime"] = (
         "recompute_before_first_kick_release_before_save_v1"
+    )
+    requested["saved_energy_density_lifetime"] = (
+        "release_before_kinetic_fft_rebuild_for_output_v1"
     )
     run_torch_wave_case._require_resume_metadata(dict(requested), requested)
     saved = dict(requested)

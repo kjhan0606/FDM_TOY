@@ -28,7 +28,8 @@ from fdm_smbh_delay.torch_wave import (
     sample_potential_and_acceleration,
     spectral_grid,
     wave_density,
-    wave_energy_components,
+    wave_kinetic_energy,
+    wave_potential_energy_components,
 )
 
 
@@ -45,6 +46,7 @@ _RESTART_METADATA_KEYS = (
     "compact_potential_layout",
     "potential_phase_layout",
     "total_potential_lifetime",
+    "saved_energy_density_lifetime",
 )
 
 
@@ -370,6 +372,7 @@ def main() -> int:
             "compact_potential_layout": "x_slab32_inplace_rsqrt_v1",
             "potential_phase_layout": "complex_real_imag_inplace_trig_v1",
             "total_potential_lifetime": "recompute_before_first_kick_release_before_save_v1",
+            "saved_energy_density_lifetime": "release_before_kinetic_fft_rebuild_for_output_v1",
             "memory_stage_profile_enabled": args.profile_memory_stages,
             "checkpoint_every_saved_intervals": args.checkpoint_every_saves,
             "wave_acceleration_during_particle_rk4": (
@@ -461,14 +464,22 @@ def main() -> int:
         }
 
     def save(index: int) -> None:
-        kinetic, self_gravity, interaction, wave_mass = wave_energy_components(
-            wavefunction=wavefunction,
+        nonlocal density
+        self_gravity, interaction, wave_mass = wave_potential_energy_components(
             density=density,
             wave_potential=wave_potential,
             compact_potential=compact_potential,
+            cell_volume=grid.cell_volume,
+        )
+        profile_stage(f"save_{index:06d}_potential_energy")
+        density = None
+        kinetic = wave_kinetic_energy(
+            wavefunction=wavefunction,
             kinetic_axis_wavenumber_squared=grid.kinetic_axis_wavenumber_squared,
             cell_volume=grid.cell_volume,
         )
+        profile_stage(f"save_{index:06d}_kinetic_energy")
+        density = wave_density(wavefunction)
         profile_stage(f"save_{index:06d}_energy")
         point_potential, _ = sample_potential_and_acceleration(
             potential=wave_potential,

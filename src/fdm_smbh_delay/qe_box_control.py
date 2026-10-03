@@ -94,7 +94,7 @@ def _run_bin(bin_row: dict, label: str) -> dict:
 
 def _numerical_settings(
     run: Path, summary_row: dict, definition: dict,
-) -> tuple[float, int, str | None, str | None, str | None, str | None, str | None, str | None, str | None]:
+) -> tuple[float, int, str | None, str | None, str | None, str | None, str | None, str | None, str | None, str | None]:
     metadata = json.loads((run / "fdm_adapter_metadata.json").read_text())
     config = json.loads((run / "config.uldm").read_text())
     step = float(metadata.get("time_step_factor", config["Temporal Step Factor"]))
@@ -106,6 +106,7 @@ def _numerical_settings(
     compact_potential_layout = metadata.get("compact_potential_layout")
     potential_phase_layout = metadata.get("potential_phase_layout")
     total_potential_lifetime = metadata.get("total_potential_lifetime")
+    saved_energy_density_lifetime = metadata.get("saved_energy_density_lifetime")
     if (not np.isfinite(step) or step <= 0 or rk < 1
             or (backend is not None and backend not in ("pytorch_cpu", "pytorch_cuda"))
             or (kinetic_phase_layout is not None
@@ -120,6 +121,8 @@ def _numerical_settings(
                 and potential_phase_layout != "complex_real_imag_inplace_trig_v1")
             or (total_potential_lifetime is not None
                 and total_potential_lifetime != "recompute_before_first_kick_release_before_save_v1")
+            or (saved_energy_density_lifetime is not None
+                and saved_energy_density_lifetime != "release_before_kinetic_fft_rebuild_for_output_v1")
             or summary_row.get("time_step_factor") != step
             or summary_row.get("nbody_rk4_substeps_per_wave_step") != rk
             or summary_row.get("resolution") != definition["resolution"]
@@ -127,7 +130,7 @@ def _numerical_settings(
         raise ValueError("box-control numerical settings disagree with run inputs")
     return (step, rk, backend, kinetic_phase_layout, wave_buffer_lifetime,
             wave_density_layout, compact_potential_layout, potential_phase_layout,
-            total_potential_lifetime)
+            total_potential_lifetime, saved_energy_density_lifetime)
 
 
 def _initial_conditions(run: Path, definition: dict) -> tuple[str, str]:

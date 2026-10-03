@@ -463,16 +463,12 @@ def advance_binary_rk4_patched(
     ).reshape(-1)
 
 
-def wave_energy_components(
-    *,
-    wavefunction: torch.Tensor,
-    density: torch.Tensor,
-    wave_potential: torch.Tensor,
-    compact_potential: torch.Tensor,
+def wave_kinetic_energy(
+    *, wavefunction: torch.Tensor,
     kinetic_axis_wavenumber_squared: torch.Tensor,
     cell_volume: float,
-) -> tuple[float, float, float, float]:
-    """Return kinetic, self-gravity, compact-interaction energy, and mass."""
+) -> float:
+    """Return the spectral kinetic energy without retaining a density field."""
 
     if (
         wavefunction.ndim != 3
@@ -495,10 +491,42 @@ def wave_energy_components(
         / cells
         * torch.sum(kinetic_axis_wavenumber_squared * marginal_power)
     )
+    return float(kinetic.detach().cpu())
+
+
+def wave_potential_energy_components(
+    *, density: torch.Tensor, wave_potential: torch.Tensor,
+    compact_potential: torch.Tensor, cell_volume: float,
+) -> tuple[float, float, float]:
+    """Return self-gravity, compact interaction, and wave mass."""
+
+    if (
+        density.shape != wave_potential.shape
+        or density.shape != compact_potential.shape
+        or density.device != wave_potential.device
+        or density.device != compact_potential.device
+    ):
+        raise ValueError("wave density and potentials are incompatible")
     self_gravity = 0.5 * cell_volume * torch.sum(wave_potential * density)
     interaction = cell_volume * torch.sum(compact_potential * density)
     mass = cell_volume * torch.sum(density)
-    return tuple(
-        float(value.detach().cpu())
-        for value in (kinetic, self_gravity, interaction, mass)
+    return tuple(float(value.detach().cpu()) for value in (self_gravity, interaction, mass))
+
+
+def wave_energy_components(
+    *, wavefunction: torch.Tensor, density: torch.Tensor,
+    wave_potential: torch.Tensor, compact_potential: torch.Tensor,
+    kinetic_axis_wavenumber_squared: torch.Tensor, cell_volume: float,
+) -> tuple[float, float, float, float]:
+    """Return kinetic, self-gravity, compact-interaction energy, and mass."""
+
+    kinetic = wave_kinetic_energy(
+        wavefunction=wavefunction,
+        kinetic_axis_wavenumber_squared=kinetic_axis_wavenumber_squared,
+        cell_volume=cell_volume,
     )
+    self_gravity, interaction, mass = wave_potential_energy_components(
+        density=density, wave_potential=wave_potential,
+        compact_potential=compact_potential, cell_volume=cell_volume,
+    )
+    return kinetic, self_gravity, interaction, mass
