@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+from copy import deepcopy
 import hashlib
 import json
 from pathlib import Path
@@ -21,6 +22,7 @@ from fdm_smbh_delay.subgrid_table_builder import (
     build_source_rows,
     write_calibration_table,
 )
+from fdm_smbh_delay.qe_box_control import assess_qe_box_control
 
 
 def _write_run(
@@ -392,6 +394,153 @@ def test_qe_candidate_cannot_be_released_without_doubled_box_control(
         write_calibration_table([CalibrationSource("test", path)], output=output)
     assert not output.exists()
     assert not output.with_suffix(".summary.json").exists()
+
+
+def _write_qe_box_pair(tmp_path: Path) -> tuple[Path, Path]:
+    pair_path = _write_summary(tmp_path)
+    pair = json.loads(pair_path.read_text())
+    for name in ("n512", "n384"):
+        metadata_path = tmp_path / name / "fdm_adapter_metadata.json"
+        metadata = json.loads(metadata_path.read_text())
+        metadata["case_id"] = "qe_test"
+        metadata_path.write_text(json.dumps(metadata))
+        config_path = tmp_path / name / "config.uldm"
+        config = json.loads(config_path.read_text())
+        config["Temporal Step Factor"] = 1.0
+        config["RK Steps"] = 36
+        config["Matter Particles"]["Plummer Radius"] = 0.1
+        config_path.write_text(json.dumps(config))
+    edges = [0.4, 0.8, 1.2]
+    pair["requested_separation_bin_edges_pc"] = edges
+    pair["matched_separation"]["bin_edge_policy"] = "fixed_physical_edges"
+    pair["matched_separation"]["separation_bin_edges_pc"] = edges
+    pair["matched_separation"]["requested_bins"] = 2
+    pair["matched_separation"]["retained_bins"] = 2
+    for row in pair["runs"]:
+        row["time_step_factor"] = 1.0
+        row["nbody_rk4_substeps_per_wave_step"] = 9
+        metadata = json.loads((Path(row["run"]) / "fdm_adapter_metadata.json").read_text())
+        row["resolution"] = metadata["resolution"]
+        row["cell_size_pc"] = metadata["box_size_pc"] / metadata["resolution"]
+    pair_path.write_text(json.dumps(pair))
+    large = tmp_path / "n1024"
+    _write_run(large, resolution=1024, half_density_radius_pc=1.0)
+    metadata_path = large / "fdm_adapter_metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata["case_id"] = "qe_test"
+    metadata["box_size_pc"] = 80.0
+    metadata_path.write_text(json.dumps(metadata))
+    config_path = large / "config.uldm"
+    config = json.loads(config_path.read_text())
+    config["Temporal Step Factor"] = 1.0
+    config["RK Steps"] = 36
+    config["Matter Particles"]["Plummer Radius"] = 0.1
+    config_path.write_text(json.dumps(config))
+    box = deepcopy(pair)
+    box["reference_label"] = "n1024"
+    box["runs"] = [deepcopy(pair["runs"][0]), deepcopy(pair["runs"][0])]
+    box["runs"][0]["label"] = "n1024"
+    box["runs"][0]["run"] = str(large)
+    box["runs"][0]["resolution"] = 1024
+    box["runs"][0]["cell_size_pc"] = 80.0 / 1024
+    box["runs"][1]["label"] = "n512"
+    for bin_row in box["matched_separation"]["bins"]:
+        shared = deepcopy(bin_row["runs"][0])
+        bin_row["runs"] = [deepcopy(shared), deepcopy(shared)]
+        bin_row["runs"][0]["label"] = "n1024"
+        bin_row["runs"][1]["label"] = "n512"
+    box_path = tmp_path / "box_control.json"
+    box_path.write_text(json.dumps(box))
+    return pair_path, box_path
+
+
+def test_qe_box_control_compares_same_fixed_bin_without_releasing(
+    tmp_path: Path,
+) -> None:
+    pair, box = _write_qe_box_pair(tmp_path)
+    result = assess_qe_box_control(
+        CalibrationSource("test", pair), CalibrationSource("test", box)
+    )
+    assert result["status"] == "box_control_candidates_not_released"
+    assert result["candidate_bins"] == [0]
+    assert result["box_controlled_candidate_bins"] == [0]
+    assert result["production_calibration_row_admitted"] is False
+
+
+def test_qe_box_control_rejects_wrong_box_size(tmp_path: Path) -> None:
+    pair, box = _write_qe_box_pair(tmp_path)
+    metadata_path = tmp_path / "n1024" / "fdm_adapter_metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata["box_size_pc"] = 60.0
+    metadata_path.write_text(json.dumps(metadata))
+    with pytest.raises(ValueError, match="double box size"):
+        assess_qe_box_control(
+            CalibrationSource("test", pair), CalibrationSource("test", box)
+        )
+
+
+def test_qe_box_control_rejects_changed_initial_conditions(tmp_path: Path) -> None:
+    pair, box = _write_qe_box_pair(tmp_path)
+    config_path = tmp_path / "n1024" / "config.uldm"
+    config = json.loads(config_path.read_text())
+    config["Matter Particles"]["Condition"][0].append([0.1, 0.0, 0.0])
+    config_path.write_text(json.dumps(config))
+    with pytest.raises(ValueError, match="initial SMBH and soliton conditions differ"):
+        assess_qe_box_control(
+            CalibrationSource("test", pair), CalibrationSource("test", box)
+        )
+
+
+def test_qe_box_control_censors_missing_control_bin(tmp_path: Path) -> None:
+    pair, box_path = _write_qe_box_pair(tmp_path)
+    box = json.loads(box_path.read_text())
+    box["matched_separation"]["bins"] = []
+    box["matched_separation"]["retained_bins"] = 0
+    box_path.write_text(json.dumps(box))
+    result = assess_qe_box_control(
+        CalibrationSource("test", pair), CalibrationSource("test", box_path)
+    )
+    assert result["status"] == "no_box_controlled_candidate_bins_censored"
+    assert result["box_controlled_candidate_bins"] == []
+
+
+def test_qe_box_control_censors_failed_hamiltonian_gate(tmp_path: Path) -> None:
+    pair, box_path = _write_qe_box_pair(tmp_path)
+    box = json.loads(box_path.read_text())
+    box["runs"][0]["initial_resolved_energy_drift_over_transfer"] = 0.02
+    box_path.write_text(json.dumps(box))
+    result = assess_qe_box_control(
+        CalibrationSource("test", pair), CalibrationSource("test", box_path)
+    )
+    assert result["candidate_bins"] == [0]
+    assert result["box_controlled_candidate_bins"] == []
+    assert result["status"] == "no_box_controlled_candidate_bins_censored"
+
+
+def test_qe_box_control_rejects_mismatched_fixed_edges(tmp_path: Path) -> None:
+    pair, box_path = _write_qe_box_pair(tmp_path)
+    box = json.loads(box_path.read_text())
+    box["matched_separation"]["separation_bin_edges_pc"][1] = 0.9
+    box["requested_separation_bin_edges_pc"][1] = 0.9
+    box["matched_separation"]["bins"][0]["upper_separation_pc"] = 0.9
+    box["matched_separation"]["bins"][1]["lower_separation_pc"] = 0.9
+    box_path.write_text(json.dumps(box))
+    with pytest.raises(ValueError, match="different physical bins"):
+        assess_qe_box_control(
+            CalibrationSource("test", pair), CalibrationSource("test", box_path)
+        )
+
+
+def test_qe_box_control_rejects_inconsistent_shared_run(tmp_path: Path) -> None:
+    pair, box_path = _write_qe_box_pair(tmp_path)
+    box = json.loads(box_path.read_text())
+    box["matched_separation"]["bins"][0]["runs"][1]["rates"]["orbital_power"]["estimate"] *= 1.1
+    box["matched_separation"]["bins"][0]["runs"][1]["fractional_rate_difference_from_reference"]["orbital_power"] = 0.1
+    box_path.write_text(json.dumps(box))
+    with pytest.raises(ValueError, match="shared fine-run rate differs"):
+        assess_qe_box_control(
+            CalibrationSource("test", pair), CalibrationSource("test", box_path)
+        )
 
 
 def test_release_loader_rejects_qe_source_without_doubled_box_control(

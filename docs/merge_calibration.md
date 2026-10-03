@@ -267,6 +267,16 @@ unless the sampled mean separations in both calculations span its edges with
 the required complete orbits. This establishes common sampling support only;
 it does not by itself
 establish doubled-box agreement or authorize a production calibration release.
+Once both summaries exist, compare them read-only with
+`scripts/assess_qe_box_control.py --profile-id PROFILE --resolution-pair PAIR.json
+--doubled-box BOX.json`. The reference of the box comparison must be the
+twice-larger box at unchanged cell size and softening, and its other run must
+be the resolution pair's fine run. Both comparisons must use the same fixed
+edges, SMBH/soliton initial conditions, numerical settings, and measured
+fine-run rates. The result reports
+candidate or censored bins only; `production_calibration_row_admitted` stays
+false until release provenance and the full calibration gates are implemented
+and verified.
 
 The corresponding resource-design calculation (which launches no solver) is
 
