@@ -78,6 +78,7 @@ class CaptureLedger:
     events: tuple[CaptureEvent, ...]
     duplicate_events: int
     incomplete_event_uids: tuple[str, ...]
+    censored_batch_uids: tuple[str, ...] = ()
 
 
 @dataclass
@@ -528,13 +529,15 @@ def _validate_batched_event_source(block: _OpenEvent) -> None:
 
 def read_capture_ledger(
     path: str | Path, *, allow_incomplete_tail: bool = False,
-    allow_incomplete_batches: bool = False,
+    allow_incomplete_batches: bool = True,
 ) -> CaptureLedger:
     """Read only committed events on the final restart lineage.
 
     Legacy bare events remain readable until the first batch/attempt marker.
     A complete ``event_end`` in a new ledger is not enough: its batch must
     commit after sink compaction, and superseded restart branches are excluded.
+    A batch interrupted by a valid later restart attempt is censored by
+    default. An incomplete final batch still requires ``allow_incomplete_tail``.
     """
 
     resolved = Path(path).expanduser().resolve()
@@ -548,6 +551,7 @@ def read_capture_ledger(
     # Ordering, not coarse-step equality, decides what the snapshot contains.
     checkpoints: dict[int, tuple[int, int, int]] = {}
     incomplete: list[str] = []
+    censored_batches: list[str] = []
 
     def censor_open_batch(reason: str) -> None:
         nonlocal current, batch
@@ -558,6 +562,7 @@ def read_capture_ledger(
         if current is not None:
             incomplete.append(current.uid)
             current = None
+        censored_batches.append(batch.uid)
         batch = None
 
     with resolved.open("r", encoding="utf-8") as stream:
@@ -609,7 +614,10 @@ def read_capture_ledger(
             elif record_type == "batch_begin":
                 if current is not None and batch is None:
                     raise CaptureLedgerError(f"{current.uid}: missing event_end")
-                censor_open_batch("missing batch_commit before next batch")
+                if batch is not None:
+                    raise CaptureLedgerError(
+                        f"{batch.uid}: missing batch_commit before next batch in same attempt"
+                    )
                 if not attempts:
                     raise CaptureLedgerError("batch has no run attempt marker")
                 if record.get("schema_version") != CAPTURE_LEDGER_SCHEMA_VERSION:
@@ -696,8 +704,10 @@ def read_capture_ledger(
         incomplete.append(current.uid)
         if batch is None and not allow_incomplete_tail:
             raise CaptureLedgerError(f"{current.uid}: incomplete event at end of ledger")
-    if batch is not None and not (allow_incomplete_tail or allow_incomplete_batches):
-        raise CaptureLedgerError(f"{batch.uid}: incomplete batch at end of ledger")
+    if batch is not None:
+        if not allow_incomplete_tail:
+            raise CaptureLedgerError(f"{batch.uid}: incomplete batch at end of ledger")
+        censored_batches.append(batch.uid)
 
     active_cutoffs: dict[int, int | None] = {}
     if attempts:
@@ -740,4 +750,5 @@ def read_capture_ledger(
     return CaptureLedger(
         source_path=resolved, events=tuple(events.values()),
         duplicate_events=duplicates, incomplete_event_uids=tuple(incomplete),
+        censored_batch_uids=tuple(censored_batches),
     )

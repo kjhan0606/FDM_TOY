@@ -169,7 +169,9 @@ def test_batched_capture_requires_post_compaction_commit(tmp_path) -> None:
     _write_rows(path, rows[:-1])
     with pytest.raises(CaptureLedgerError, match="incomplete batch"):
         read_capture_ledger(path)
-    assert read_capture_ledger(path, allow_incomplete_tail=True).events == ()
+    censored = read_capture_ledger(path, allow_incomplete_tail=True)
+    assert censored.events == ()
+    assert censored.censored_batch_uids == ("10-1-2-1",)
 
 
 def test_native_tolerance_does_not_mask_tiny_code_unit_errors() -> None:
@@ -224,9 +226,21 @@ def test_restarted_capture_censors_uncommitted_batch(tmp_path) -> None:
             *first[:-1], _attempt(1, 10), *second]
     _write_rows(path, rows)
     with pytest.raises(CaptureLedgerError, match="missing batch_commit"):
-        read_capture_ledger(path)
-    ledger = read_capture_ledger(path, allow_incomplete_batches=True)
+        read_capture_ledger(path, allow_incomplete_batches=False)
+    ledger = read_capture_ledger(path)
     assert [event.event_uid for event in ledger.events] == ["11-1-7-9-2"]
+    assert ledger.censored_batch_uids == ("10-1-2-1",)
+
+
+def test_missing_batch_commit_without_restart_is_not_censored(tmp_path) -> None:
+    path = tmp_path / "ledger.jsonl"
+    batch = _committed_batch_rows()
+    _write_rows(path, [_attempt(), *batch[:-1], *batch])
+    with pytest.raises(CaptureLedgerError, match="same attempt"):
+        read_capture_ledger(path)
+    _write_rows(path, [_attempt(), *batch[:-1]])
+    with pytest.raises(CaptureLedgerError, match="incomplete batch"):
+        read_capture_ledger(path, allow_incomplete_batches=True)
 
 
 def test_restart_cutline_uses_checkpoint_record_order(tmp_path) -> None:
