@@ -404,6 +404,24 @@ approval rule for heavy wave-response work remains in force. A failed common
 bin, conservation, spatial-rate, or doubled-box gate leaves this plane
 uncalibrated/censored and cannot release a production row.
 
+A bounded read of the completed pilot
+`qe_q100_e060_a020_n768/torch_run_summary.json` (SHA-256
+`18f5b62137871479998720faede8bc65df2836797d9a4075b8e2b15ce1868a76`)
+records 170,880 wave steps in 55,069.24 s over 0.032799 Myr and
+56,174,844,416 peak allocated GPU bytes (52.32 GiB). Linear projection to
+the new 0.10 Myr plan is 46.64 h on the same effective solver/device setup,
+uncomfortably close to the cluster's 48 h job limit; a bounded checkpointed
+multi-job continuation is required, not one job assumed to finish. This is
+only a timing projection: the doubled box changes physical boundary
+conditions and the new solver revision's long-run cost is unmeasured.
+The existing `n=768` complex-wave snapshot is 6.75 GiB by file size; 17 such
+snapshots would occupy about 114.75 GiB before checkpoints, logs, or other
+outputs. The planned save count and scratch availability must be checked
+against the effective command before submission. Scaling the observed
+`n=512` wave-response RSS of about 37 GB by cell count gives roughly 125 GB
+for `n=768`, not a measured memory bound; require a single-threaded,
+snapshot-at-a-time response preflight with an explicit Slurm memory request.
+
 At the initial Kepler period, the **necessary** 64-orbit duration for complete
 coverage of eight bins is 0.1749 Myr at `a/r_c=0.20`, 0.0618 Myr at 0.10, and
 0.0219 Myr at 0.05. These are not sufficient durations: the smallest
