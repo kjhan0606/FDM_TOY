@@ -544,6 +544,17 @@ def test_registered_postprocess_refuses_login_node_and_unbounded_wait(
     with pytest.raises(SystemExit) as error:
         tripwire.main()
     assert error.value.code == 2
+    monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+    monkeypatch.setattr(tripwire.socket, "gethostname", lambda: "lageunha")
+    monkeypatch.setattr(
+        sys, "argv", base + ["--wait-timeout-seconds", "120"]
+    )
+    def planner(*_args, **_kwargs):
+        raise RuntimeError("planner reached")
+
+    monkeypatch.setattr(tripwire, "build_plan", planner)
+    with pytest.raises(RuntimeError, match="planner reached"):
+        tripwire.main()
     monkeypatch.setenv("SLURM_JOB_ID", "12345")
     monkeypatch.setattr(sys, "argv", base)
     with pytest.raises(SystemExit) as error:

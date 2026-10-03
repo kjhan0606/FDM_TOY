@@ -657,7 +657,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-id", action="append", dest="run_ids")
     parser.add_argument(
         "--qe-design", type=Path,
-        help="process one registered q/e follow-up run in a Slurm allocation",
+        help="process one registered q/e follow-up run on lageunha or in Slurm",
     )
     parser.add_argument("--guard-status", type=Path, action="append", default=[])
     parser.add_argument("--wait-cadence-seconds", type=float, default=300.0)
@@ -676,8 +676,14 @@ def main() -> int:
     if arguments.qe_design is not None:
         if arguments.run_ids is None or len(arguments.run_ids) != 1:
             parser.error("registered q/e post-processing requires exactly one --run-id")
-        if not arguments.dry_run and "SLURM_JOB_ID" not in os.environ:
-            parser.error("registered q/e post-processing requires a Slurm allocation")
+        if (
+            not arguments.dry_run
+            and "SLURM_JOB_ID" not in os.environ
+            and socket.gethostname().split(".", maxsplit=1)[0] != "lageunha"
+        ):
+            parser.error(
+                "registered q/e post-processing requires lageunha or a Slurm allocation"
+            )
         if not arguments.dry_run and arguments.wait_timeout_seconds is None:
             parser.error("registered q/e post-processing requires a bounded wait timeout")
     elif not arguments.dry_run and socket.gethostname().split(".", maxsplit=1)[0] != "syntax":
