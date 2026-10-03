@@ -341,6 +341,20 @@ class NuclearBridgeInput:
             raise ValueError("target_semimajor_axis_pc must be positive")
         if self.environment.event_uid != self.event_uid:
             raise ValueError("environment and capture event_uid values must agree")
+        if not math.isclose(
+            self.environment.time_myr,
+            self.capture_time_myr,
+            rel_tol=1.0e-8,
+            abs_tol=1.0e-6,
+        ):
+            raise ValueError("environment and capture times must agree")
+        if not math.isclose(
+            self.environment.redshift,
+            self.redshift,
+            rel_tol=1.0e-8,
+            abs_tol=1.0e-8,
+        ):
+            raise ValueError("environment and capture redshifts must agree")
         if not isinstance(self.source_path, str) or not self.source_path.strip():
             raise ValueError("source_path is required")
         _source_hash(self.source_sha256, "source_sha256")

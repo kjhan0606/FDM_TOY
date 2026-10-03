@@ -170,6 +170,34 @@ def test_exporter_rejects_environment_uid_mismatch(tmp_path: Path) -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    [
+        ("time_myr", 1001.0, "times must agree"),
+        ("redshift", 1.01, "redshifts must agree"),
+    ],
+)
+def test_exporter_rejects_environment_from_different_epoch(
+    tmp_path: Path, field: str, value: float, error: str
+) -> None:
+    ledger = tmp_path / "capture.jsonl"
+    environment = tmp_path / "environment.json"
+    _write_ledger(ledger, _ledger_rows())
+    _write_environment(environment)
+    record = json.loads(environment.read_text(encoding="utf-8"))
+    record[field] = value
+    environment.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(ValueError, match=error):
+        export_bridge_input(
+            ledger_path=ledger,
+            environment_path=environment,
+            event_uid="event-1",
+            run_id="run-1",
+            capture_time_myr=1000.0,
+            output_path=tmp_path / "bridge.json",
+        )
+
+
 def test_exporter_never_promotes_incomplete_ledger_tail(tmp_path: Path) -> None:
     ledger = tmp_path / "capture.jsonl"
     environment = tmp_path / "environment.json"

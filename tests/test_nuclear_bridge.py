@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -117,6 +118,13 @@ def test_missing_environment_is_not_interpreted_as_zero() -> None:
     assert bridge.status == BridgeStatus.MISSING_ENVIRONMENT.value
     assert not bridge.ready_for_integration
     assert "stellar data unavailable" in bridge.reasons
+
+
+def test_bridge_rejects_environment_from_different_capture_epoch() -> None:
+    with pytest.raises(ValueError, match="times must agree"):
+        _bridge(environment=replace(_environment(), time_myr=1201.0))
+    with pytest.raises(ValueError, match="redshifts must agree"):
+        _bridge(environment=replace(_environment(), redshift=0.41))
 
 
 def test_censored_environment_propagates_status() -> None:

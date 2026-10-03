@@ -28,6 +28,10 @@ The aggregate bridge status is `ready`, `missing_environment`, `censored`, or
 must then model dual-nucleus rebinding rather than silently treating the event
 as a hard binary.
 
+The environment snapshot must describe the same capture epoch as the ledger
+pair: its event UID, physical time, and redshift are checked against the bridge
+capture state. A snapshot from another epoch cannot initialize the inspiral.
+
 ## FDM double-counting guard
 
 An available FDM channel declares either `analytic_unresolved` or
