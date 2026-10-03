@@ -8,6 +8,7 @@ import pytest
 
 from fdm_smbh_delay.convergence import (
     _bootstrap_orbit_rates,
+    _bootstrap_orbit_coordinate_ratio,
     load_convergence_run,
     summarize_convergence,
 )
@@ -273,6 +274,30 @@ def test_eight_orbit_bootstrap_keeps_two_independent_blocks() -> None:
         assert interval["bootstrap_block_length_orbits"] == 4
         assert interval["minimum_independent_blocks"] == 2
         assert interval["lower_95"] < interval["upper_95"]
+
+
+def test_coordinate_ratio_bootstrap_resamples_joint_orbit_states() -> None:
+    orbit = np.zeros(
+        8,
+        dtype=[
+            ("orbital_period_myr", float),
+            ("mean_separation_pc", float),
+            ("mean_semimajor_axis_osculating_pc", float),
+            ("mean_eccentricity_osculating", float),
+        ],
+    )
+    axis = np.linspace(0.4, 0.6, 8)
+    orbit["orbital_period_myr"] = np.linspace(0.8, 1.2, 8)
+    orbit["mean_semimajor_axis_osculating_pc"] = axis
+    orbit["mean_separation_pc"] = 0.9 * axis
+    orbit["mean_eccentricity_osculating"] = 0.2
+    result = _bootstrap_orbit_coordinate_ratio(orbit, np.arange(8))
+    expected = 0.9 / (1.0 + 0.5 * 0.2**2)
+    assert result["estimate"] == pytest.approx(expected)
+    assert result["lower_95"] == pytest.approx(expected)
+    assert result["upper_95"] == pytest.approx(expected)
+    assert result["bootstrap_block_length_orbits"] == 4
+    assert result["minimum_independent_blocks"] == 2
 
 
 def test_matched_separation_requires_positive_bin_count(tmp_path: Path) -> None:

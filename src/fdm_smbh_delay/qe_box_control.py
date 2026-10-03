@@ -12,7 +12,12 @@ from pathlib import Path
 
 import numpy as np
 
-from .convergence import load_convergence_run, summarize_convergence
+from .convergence import (
+    _COORDINATE_RATIO_BOOTSTRAP_SAMPLES,
+    _TARGET_ORBIT_RATE_BOOTSTRAP_BLOCK_LENGTH,
+    load_convergence_run,
+    summarize_convergence,
+)
 from .qe_followup_design import (
     read_verified_qe_followup_design,
     verify_qe_design_comparison_runs,
@@ -126,6 +131,39 @@ def _fixed_bins(summary: dict) -> dict[int, dict]:
                 raise ValueError(
                     "box-control bin has invalid osculating coordinates"
                 )
+            interval = run_row.get("coordinate_ratio_bootstrap")
+            if not isinstance(interval, dict):
+                raise ValueError("box-control bin lacks coordinate-ratio bootstrap")
+            try:
+                estimate = float(interval["estimate"])
+                lower_95 = float(interval["lower_95"])
+                upper_95 = float(interval["upper_95"])
+                block_length = interval["bootstrap_block_length_orbits"]
+                samples = interval["bootstrap_samples"]
+                independent = interval["minimum_independent_blocks"]
+                orbits = run_row["complete_orbits"]
+            except (KeyError, TypeError, ValueError) as error:
+                raise ValueError(
+                    "box-control coordinate-ratio bootstrap is incomplete"
+                ) from error
+            expected_ratio = mean_r / (mean * (1.0 + 0.5 * mean_e**2))
+            if (
+                not all(np.isfinite(value) for value in (estimate, lower_95, upper_95))
+                or lower_95 <= 0.0
+                or upper_95 < lower_95
+                or not np.isclose(estimate, expected_ratio, rtol=1e-10, atol=1e-12)
+                or type(orbits) is not int
+                or type(block_length) is not int
+                or type(samples) is not int
+                or type(independent) is not int
+                or orbits < 2
+                or block_length != min(
+                    _TARGET_ORBIT_RATE_BOOTSTRAP_BLOCK_LENGTH, orbits // 2
+                )
+                or samples != _COORDINATE_RATIO_BOOTSTRAP_SAMPLES
+                or independent != orbits // block_length
+            ):
+                raise ValueError("box-control coordinate-ratio bootstrap is invalid")
         by_index[index] = row
     return by_index
 
@@ -151,6 +189,7 @@ def _mapping_observation(run_bin: dict) -> dict:
         "measured_over_kepler_mean_ratio": mean_r / (
             mean_a * (1.0 + 0.5 * mean_e**2)
         ),
+        "coordinate_ratio_bootstrap": dict(run_bin["coordinate_ratio_bootstrap"]),
     }
 
 
@@ -474,6 +513,11 @@ def assess_qe_box_control(
                 if not np.isclose(pair_shared["rates"][field]["estimate"],
                                   box_shared["rates"][field]["estimate"], rtol=1e-12, atol=1e-12):
                     raise ValueError(f"shared fine-run rate differs across comparisons: {index}/{field}")
+            if (
+                pair_shared["coordinate_ratio_bootstrap"]
+                != box_shared["coordinate_ratio_bootstrap"]
+            ):
+                raise ValueError(f"shared fine-run coordinate bootstrap differs: {index}")
         decisions.append({
             "separation_bin_index": index,
             "status": ("candidate_passes_box_control" if index in controlled_indices

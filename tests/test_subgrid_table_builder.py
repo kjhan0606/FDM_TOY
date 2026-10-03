@@ -92,6 +92,21 @@ def _matched_bin(
     scales,
 ) -> dict:
     axis_mean = 0.52 * (lower + upper)
+    coordinate_ratio = 0.5 * (lower + upper) / (
+        axis_mean * (1.0 + 0.5 * 0.23**2)
+    )
+
+    def coordinate_interval(orbits: int) -> dict:
+        block_length = min(8, orbits // 2)
+        return {
+            "estimate": coordinate_ratio,
+            "lower_95": coordinate_ratio * 0.99,
+            "upper_95": coordinate_ratio * 1.01,
+            "bootstrap_block_length_orbits": block_length,
+            "bootstrap_samples": 2000,
+            "minimum_independent_blocks": orbits // block_length,
+        }
+
     reference_rates = {
         "orbital_power": {"estimate": -scales.orbital_power_msun_pc2_myr3},
         "orbital_torque": {
@@ -120,6 +135,7 @@ def _matched_bin(
                 "mean_semimajor_axis_osculating_pc": axis_mean,
                 "minimum_orbit_mean_semimajor_axis_pc": axis_mean * 0.98,
                 "maximum_orbit_mean_semimajor_axis_pc": axis_mean * 1.02,
+                "coordinate_ratio_bootstrap": coordinate_interval(20),
                 "minimum_time_myr": 0.0,
                 "maximum_time_myr": 0.5,
                 "rates": reference_rates,
@@ -137,6 +153,7 @@ def _matched_bin(
                 "mean_semimajor_axis_osculating_pc": axis_mean,
                 "minimum_orbit_mean_semimajor_axis_pc": axis_mean * 0.98,
                 "maximum_orbit_mean_semimajor_axis_pc": axis_mean * 1.02,
+                "coordinate_ratio_bootstrap": coordinate_interval(18),
                 "minimum_time_myr": 0.0,
                 "maximum_time_myr": 0.5,
                 "rates": comparison_rates,
@@ -708,6 +725,11 @@ def test_qe_box_control_rejects_inconsistent_shared_osculating_axis(
     box["matched_separation"]["bins"][0]["runs"][1][
         "mean_semimajor_axis_osculating_pc"
     ] *= 1.01
+    interval = box["matched_separation"]["bins"][0]["runs"][1][
+        "coordinate_ratio_bootstrap"
+    ]
+    for field in ("estimate", "lower_95", "upper_95"):
+        interval[field] /= 1.01
     box_path.write_text(json.dumps(box))
     with pytest.raises(ValueError, match="shared fine-run bin differs"):
         assess_qe_box_control(
@@ -749,6 +771,21 @@ def test_qe_box_control_rejects_mean_separation_outside_fixed_bin(
     pair["matched_separation"]["bins"][0]["runs"][0]["mean_separation_pc"] = 1.3
     pair_path.write_text(json.dumps(pair))
     with pytest.raises(ValueError, match="invalid osculating coordinates"):
+        assess_qe_box_control(
+            CalibrationSource("test", pair_path), CalibrationSource("test", box)
+        )
+
+
+def test_qe_box_control_rejects_inconsistent_coordinate_bootstrap(
+    tmp_path: Path,
+) -> None:
+    pair_path, box = _write_qe_box_pair(tmp_path)
+    pair = json.loads(pair_path.read_text())
+    pair["matched_separation"]["bins"][0]["runs"][0][
+        "coordinate_ratio_bootstrap"
+    ]["estimate"] *= 1.1
+    pair_path.write_text(json.dumps(pair))
+    with pytest.raises(ValueError, match="coordinate-ratio bootstrap is invalid"):
         assess_qe_box_control(
             CalibrationSource("test", pair_path), CalibrationSource("test", box)
         )
@@ -808,6 +845,9 @@ def test_qe_candidate_package_retains_only_box_controlled_rows(
     assert observations[0]["fine"]["measured_over_kepler_mean_ratio"] == (
         pytest.approx(0.6 / (0.624 * (1.0 + 0.5 * 0.23**2)))
     )
+    assert observations[0]["fine"]["coordinate_ratio_bootstrap"][
+        "minimum_independent_blocks"
+    ] == 2
     ratio_diagnostic = observations[0]["unmatched_ratio_diagnostic"]
     assert ratio_diagnostic["coarse_minus_fine_fraction_of_fine_ratio"] == (
         pytest.approx(0.0)

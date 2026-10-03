@@ -48,6 +48,7 @@ _ORBIT_TABLE_RATE_FIELDS = tuple(
 # guarantees at least two non-overlapping block lengths for every accepted
 # sample without weakening the eight-orbit acceptance requirement.
 _TARGET_ORBIT_RATE_BOOTSTRAP_BLOCK_LENGTH = 8
+_COORDINATE_RATIO_BOOTSTRAP_SAMPLES = 2000
 
 
 def _read_json(path: Path) -> dict:
@@ -125,6 +126,68 @@ def _bootstrap_orbit_rates(
             // interval.block_length,
         }
     return rates
+
+
+def _bootstrap_orbit_coordinate_ratio(
+    orbit: np.ndarray, selection: np.ndarray,
+) -> dict[str, float | int]:
+    """Bootstrap the ratio of joint time-weighted coordinate means.
+
+    Each moving-block draw reuses the same orbit indices for separation,
+    osculating semimajor axis, eccentricity, and duration. This preserves
+    their within-orbit covariance. The interval excludes numerical and
+    box-size systematics and is not a runtime mapping calibration.
+    """
+
+    duration = np.asarray(orbit["orbital_period_myr"][selection], dtype=float)
+    separation = np.asarray(orbit["mean_separation_pc"][selection], dtype=float)
+    axis = np.asarray(
+        orbit["mean_semimajor_axis_osculating_pc"][selection], dtype=float
+    )
+    eccentricity = np.asarray(
+        orbit["mean_eccentricity_osculating"][selection], dtype=float
+    )
+    if (
+        selection.size < 2
+        or np.any(~np.isfinite(duration))
+        or np.any(~np.isfinite(separation))
+        or np.any(~np.isfinite(axis))
+        or np.any(~np.isfinite(eccentricity))
+        or np.any(duration <= 0.0)
+        or np.any(separation <= 0.0)
+        or np.any(axis <= 0.0)
+        or np.any((eccentricity < 0.0) | (eccentricity >= 1.0))
+    ):
+        raise ValueError("orbit-coordinate bootstrap inputs are invalid")
+
+    def ratio(indices: np.ndarray) -> float:
+        weights = duration[indices]
+        total = np.sum(weights)
+        mean_r = np.sum(separation[indices] * weights) / total
+        mean_a = np.sum(axis[indices] * weights) / total
+        mean_e = np.sum(eccentricity[indices] * weights) / total
+        return float(mean_r / (mean_a * (1.0 + 0.5 * mean_e**2)))
+
+    block_length = min(
+        _TARGET_ORBIT_RATE_BOOTSTRAP_BLOCK_LENGTH, selection.size // 2
+    )
+    block_count = int(np.ceil(selection.size / block_length))
+    offsets = np.arange(block_length)
+    generator = np.random.default_rng(1729)
+    draws = np.empty(_COORDINATE_RATIO_BOOTSTRAP_SAMPLES)
+    for draw in range(draws.size):
+        starts = generator.integers(0, selection.size, size=block_count)
+        indices = ((starts[:, None] + offsets[None, :]) % selection.size).ravel()
+        draws[draw] = ratio(indices[:selection.size])
+    lower, upper = np.percentile(draws, [2.5, 97.5])
+    return {
+        "estimate": ratio(np.arange(selection.size)),
+        "lower_95": float(lower),
+        "upper_95": float(upper),
+        "bootstrap_block_length_orbits": block_length,
+        "bootstrap_samples": draws.size,
+        "minimum_independent_blocks": selection.size // block_length,
+    }
 
 
 def load_convergence_run(label: str, run: Path) -> dict:
@@ -465,6 +528,9 @@ def _matched_separation_bins(
                 )
                 run_row["minimum_orbit_mean_semimajor_axis_pc"] = float(np.min(axis))
                 run_row["maximum_orbit_mean_semimajor_axis_pc"] = float(np.max(axis))
+                run_row["coordinate_ratio_bootstrap"] = (
+                    _bootstrap_orbit_coordinate_ratio(orbit, selection)
+                )
             run_rows.append(run_row)
 
         reference_rates = run_rows[0]["rates"]

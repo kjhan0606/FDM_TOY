@@ -350,6 +350,14 @@ doubled-box/fine differences, together with the differences in mean `a` and
 ratio differences are descriptive diagnostics, **not** a mapping-convergence
 test or a new acceptance threshold. A future test must match joint `(a,e)`
 support and quantify uncertainty before producing a runtime map.
+For each retained bin, 2,000 reproducible moving-block resamples also give
+an orbit-sampling interval for the *ratio of the jointly resampled,
+duration-weighted means*. The same orbit indices resample `r`, `a`, `e`, and
+period together; the block is `min(8, floor(N/2))` complete orbits, leaving
+at least two non-overlapping blocks at the eight-orbit gate. This interval
+does not include spatial resolution or box-size systematics, nor does it
+describe prediction error at a fixed `(a,e)` coordinate. It cannot by itself
+be passed to the runtime as a validated mean-separation uncertainty interval.
 
 The corresponding resource-design calculation (which launches no solver) is
 
