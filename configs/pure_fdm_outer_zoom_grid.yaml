@@ -1,0 +1,41 @@
+schema_version: 1
+replicates: 2
+
+# This is an outer pure-FDM merger manifest.  It is not a 1 pc production
+# manifest: the 1--0.01 pc wave calculation requires a separate nested zoom.
+# A zero stellar mass and zero gas fraction are explicit, not missing values.
+baseline:
+  host_stellar_mass_msun: 0.0
+  host_scale_radius_pc: 1000.0
+  host_inner_slope: 1.0
+  binary_total_mass_msun: 2.0e8
+  mass_ratio_q: 1.0
+  gas_fraction: 0.0
+  gas_rotation_fraction: 0.0
+  initial_orbit_eccentricity: 0.5
+  initial_separation_pc: 5000.0
+  nuclear_envelope_to_secondary_bh_mass: 0.0
+  dark_matter_model: fdm
+  fdm_particle_mass_ev: 1.0e-21
+  fdm_core_radius_pc: 200.0
+  fdm_soliton_mass_msun: 1.0e10
+
+variations:
+  - mass_ratio_q: 0.3
+  - initial_orbit_eccentricity: 0.1
+  - initial_orbit_eccentricity: 0.9
+  - fdm_particle_mass_ev: 3.0e-22
+
+# These resolutions are for the outer/common-core stage only.  A nested
+# inner manifest must be paired with an exact checkpoint before claiming a
+# 1 pc handoff.  The collisionless-particle field is retained for the shared
+# manifest schema and is ignored by a baryon-free wave-only run.
+numerics:
+  - levelmax: 16
+    finest_cell_size_pc: 4.0
+    collisionless_particle_mass_msun: 1.0e4
+    minimum_softening_pc: 4.0
+  - levelmax: 17
+    finest_cell_size_pc: 2.0
+    collisionless_particle_mass_msun: 1.0e4
+    minimum_softening_pc: 2.0

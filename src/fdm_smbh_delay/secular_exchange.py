@@ -87,9 +87,17 @@ def moving_block_bootstrap_rate(
 
 
 def unwrapped_orbital_phase(
-    displacement: np.ndarray, relative_velocity: np.ndarray
+    displacement: np.ndarray,
+    relative_velocity: np.ndarray,
+    time: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Measure orbital phase in the plane normal to the initial angular momentum."""
+    """Measure orbital phase in the initial orbital plane.
+
+    When code-unit sample times are supplied, the instantaneous angular
+    velocity selects the correct branch between saved states.  This resolves
+    forward phase advances slightly larger than pi without interpreting them
+    as retrograde motion.
+    """
 
     position = np.asarray(displacement, dtype=float)
     velocity = np.asarray(relative_velocity, dtype=float)
@@ -110,18 +118,57 @@ def unwrapped_orbital_phase(
     normal = angular_momentum / angular_momentum_norm
     radial_basis = position[0] / position_norm
     transverse_basis = np.cross(normal, radial_basis)
-    phase = np.unwrap(
-        np.arctan2(position @ transverse_basis, position @ radial_basis)
-    )
+    projected_x = position @ radial_basis
+    projected_y = position @ transverse_basis
+    raw_phase = np.arctan2(projected_y, projected_x)
+    if time is None:
+        phase = np.unwrap(raw_phase)
+    else:
+        time_array = np.asarray(time, dtype=float)
+        if time_array.shape != (position.shape[0],):
+            raise ValueError("time must match the orbital state samples")
+        if np.any(~np.isfinite(time_array)) or np.any(np.diff(time_array) <= 0.0):
+            raise ValueError("time must be finite and increase strictly")
+        projected_vx = velocity @ radial_basis
+        projected_vy = velocity @ transverse_basis
+        projected_radius_squared = projected_x**2 + projected_y**2
+        if np.any(projected_radius_squared <= np.finfo(float).tiny):
+            raise ValueError("the projected orbital radius must be positive")
+        angular_velocity = (
+            projected_x * projected_vy - projected_y * projected_vx
+        ) / projected_radius_squared
+        if np.any(angular_velocity <= 0.0):
+            raise ValueError("orbital phase velocity must remain positive")
+        wrapped_increment = np.angle(np.exp(1.0j * np.diff(raw_phase)))
+        predicted_increment = 0.5 * (
+            angular_velocity[:-1] + angular_velocity[1:]
+        ) * np.diff(time_array)
+        branch = np.rint(
+            (predicted_increment - wrapped_increment) / (2.0 * np.pi)
+        )
+        phase_increment = wrapped_increment + 2.0 * np.pi * branch
+        phase = np.concatenate(
+            ([raw_phase[0]], raw_phase[0] + np.cumsum(phase_increment))
+        )
     if np.any(np.diff(phase) <= 0.0):
         raise ValueError("orbital phase must increase between saved states")
     return phase
 
 
 def phase_cycle_average(
-    *, time: np.ndarray, phase: np.ndarray, value: np.ndarray
+    *,
+    time: np.ndarray,
+    phase: np.ndarray,
+    value: np.ndarray,
+    allow_nonfinite_value: bool = False,
 ) -> CycleAveragedSeries:
-    """Average one quantity between successive equal-phase orbital boundaries."""
+    """Average one quantity between successive equal-phase orbital boundaries.
+
+    ``allow_nonfinite_value`` preserves the common cycle grid while marking
+    every cycle touched by an undefined diagnostic as NaN.  It is intended for
+    optional quantities such as point-mass osculating elements, not conserved
+    exchange ledgers.
+    """
 
     time_array = np.asarray(time, dtype=float)
     phase_array = np.asarray(phase, dtype=float)
@@ -133,11 +180,9 @@ def phase_cycle_average(
         raise ValueError("time, phase, and value must be equal-length vectors")
     if time_array.size < 2:
         raise ValueError("at least two samples are required")
-    if np.any(
-        ~np.isfinite(time_array)
-        | ~np.isfinite(phase_array)
-        | ~np.isfinite(value_array)
-    ):
+    if np.any(~np.isfinite(time_array) | ~np.isfinite(phase_array)):
+        raise ValueError("cycle inputs must be finite")
+    if np.any(~np.isfinite(value_array)) and not allow_nonfinite_value:
         raise ValueError("cycle inputs must be finite")
     if np.any(np.diff(time_array) <= 0.0) or np.any(np.diff(phase_array) <= 0.0):
         raise ValueError("time and phase must increase strictly")
@@ -151,7 +196,8 @@ def phase_cycle_average(
     boundary_time = np.interp(boundary_phase, phase_array, time_array)
     boundary_value = np.interp(boundary_phase, phase_array, value_array)
 
-    mean_value = np.empty(cycle_count)
+    mean_value = np.full(cycle_count, np.nan)
+    valid_cycle = np.ones(cycle_count, dtype=bool)
     for index in range(cycle_count):
         inside = (phase_array > boundary_phase[index]) & (
             phase_array < boundary_phase[index + 1]
@@ -162,6 +208,9 @@ def phase_cycle_average(
         segment_value = np.concatenate(
             ([boundary_value[index]], value_array[inside], [boundary_value[index + 1]])
         )
+        valid_cycle[index] = bool(np.all(np.isfinite(segment_value)))
+        if not valid_cycle[index]:
+            continue
         duration = boundary_time[index + 1] - boundary_time[index]
         mean_value[index] = _trapezoid(segment_value, segment_time) / duration
 
@@ -170,6 +219,8 @@ def phase_cycle_average(
     duration = end_time - start_time
     start_value = boundary_value[:-1]
     end_value = boundary_value[1:]
+    rate = (end_value - start_value) / duration
+    rate[~valid_cycle] = np.nan
     return CycleAveragedSeries(
         cycle_index=np.arange(cycle_count, dtype=int),
         start_time=start_time,
@@ -179,5 +230,5 @@ def phase_cycle_average(
         start_value=start_value,
         end_value=end_value,
         mean_value=mean_value,
-        rate=(end_value - start_value) / duration,
+        rate=rate,
     )

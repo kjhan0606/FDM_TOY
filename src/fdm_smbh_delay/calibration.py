@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from itertools import product
-from typing import Iterable
+from typing import Iterable, Mapping
 
 import numpy as np
 
@@ -56,12 +56,58 @@ class WaveRunSpecification:
     finest_cell_size_pc: float
     core_cells: float
     plummer_radius_pc: float
+    kepler_mean_separation_over_cell_size: float
+    pericentre_separation_over_cell_size: float
+    pericentre_separation_over_plummer_radius: float
+    spatial_acceptance_passed: bool
     estimated_uniform_grid_memory_gib: float
     analytic_fdm_drag: bool = False
     required_solver: str = "coupled_schrodinger_poisson_with_moving_smbhs"
 
     def as_dict(self) -> dict[str, float | int | str | bool]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class ExchangeCalibrationEligibility:
+    secular: bool
+    phase_dependent: bool
+
+
+def exchange_calibration_eligibility(
+    *,
+    before_first_underresolved_orbit: bool,
+    initial_resolved_energy_conservation_passed: bool,
+    half_density_radius_spatially_resolved: bool,
+    wave_mode_time_offset_over_orbital_period: float,
+    maximum_wave_mode_time_offset_over_orbital_period: float = 0.5,
+) -> ExchangeCalibrationEligibility:
+    """Classify secular and phase-dependent live-wave calibration rows.
+
+    Secular power and torque require a resolved binary, a resolved measured
+    core, and an accepted Hamiltonian ledger.  A complex wave-mode coefficient
+    additionally requires a nearby three-dimensional state because its phase
+    cannot be assigned from a temporally distant snapshot.
+    """
+
+    maximum_offset = float(
+        maximum_wave_mode_time_offset_over_orbital_period
+    )
+    if not np.isfinite(maximum_offset) or maximum_offset < 0.0:
+        raise ValueError("the maximum wave-mode time offset must be non-negative")
+    secular = bool(
+        before_first_underresolved_orbit
+        and initial_resolved_energy_conservation_passed
+        and half_density_radius_spatially_resolved
+    )
+    offset = float(wave_mode_time_offset_over_orbital_period)
+    phase_dependent = bool(
+        secular and np.isfinite(offset) and abs(offset) <= maximum_offset
+    )
+    return ExchangeCalibrationEligibility(
+        secular=secular,
+        phase_dependent=phase_dependent,
+    )
 
 
 def component_masses(
@@ -226,6 +272,50 @@ def structured_parameter_cases(
     return cases
 
 
+def designed_parameter_cases(
+    definitions: Iterable[Mapping[str, float | int | str]],
+) -> list[WaveCalibrationCase]:
+    """Build an explicit sparse design for costly q-e-separation extensions."""
+
+    soliton = boey2025_schive_soliton()
+    cases = []
+    case_ids: set[str] = set()
+    for definition in definitions:
+        case_id = str(definition["case_id"])
+        if not case_id or case_id in case_ids:
+            raise ValueError("designed calibration case IDs must be unique")
+        case_ids.add(case_id)
+        cases.append(
+            build_wave_case(
+                case_id=case_id,
+                tier=int(definition.get("tier", 1)),
+                origin=str(definition.get("origin", "designed_qe_extension")),
+                particle_mass_ev=float(
+                    definition.get("particle_mass_ev", 1.0e-21)
+                ),
+                soliton=soliton,
+                mass_ratio_q=float(definition["mass_ratio_q"]),
+                eccentricity=float(definition["eccentricity"]),
+                binary_to_soliton_mass=float(
+                    definition["binary_to_soliton_mass"]
+                ),
+                semi_major_axis_over_core_radius=float(
+                    definition["semi_major_axis_over_core_radius"]
+                ),
+                target_orbits=float(definition.get("target_orbits", 12.0)),
+                minimum_duration_myr=float(
+                    definition.get("minimum_duration_myr", 0.01)
+                ),
+                maximum_duration_myr=float(
+                    definition.get("maximum_duration_myr", 0.2)
+                ),
+            )
+        )
+    if not cases:
+        raise ValueError("designed calibration grid cannot be empty")
+    return cases
+
+
 def estimated_uniform_grid_memory_gib(
     effective_grid_cells: int, live_arrays: int = 16
 ) -> float:
@@ -241,14 +331,47 @@ def run_specifications(
     *,
     box_over_core_radius: float,
     resolutions_by_tier: dict[int, Iterable[int]],
+    minimum_kepler_mean_separation_cells: float = 0.0,
+    minimum_pericentre_separation_plummer_radii: float = 0.0,
 ) -> list[WaveRunSpecification]:
     if box_over_core_radius <= 0.0:
         raise ValueError("box_over_core_radius must be positive")
+    if minimum_kepler_mean_separation_cells < 0.0:
+        raise ValueError(
+            "minimum_kepler_mean_separation_cells must be non-negative"
+        )
+    if minimum_pericentre_separation_plummer_radii < 0.0:
+        raise ValueError(
+            "minimum_pericentre_separation_plummer_radii must be non-negative"
+        )
     specifications: list[WaveRunSpecification] = []
+    rejected: list[str] = []
     for case in cases:
         box_size = box_over_core_radius * case.core_radius_pc
         for resolution in resolutions_by_tier[case.tier]:
             cell_size = box_size / resolution
+            plummer_radius = max(0.001, 0.5 * cell_size)
+            kepler_mean_separation = case.semi_major_axis_pc * (
+                1.0 + 0.5 * case.eccentricity**2
+            )
+            pericentre_separation = case.semi_major_axis_pc * (
+                1.0 - case.eccentricity
+            )
+            mean_separation_cells = kepler_mean_separation / cell_size
+            pericentre_cells = pericentre_separation / cell_size
+            pericentre_plummer = pericentre_separation / plummer_radius
+            spatial_acceptance_passed = bool(
+                mean_separation_cells
+                >= minimum_kepler_mean_separation_cells
+                and pericentre_plummer
+                >= minimum_pericentre_separation_plummer_radii
+            )
+            if not spatial_acceptance_passed:
+                rejected.append(
+                    f"{case.case_id}_n{resolution} "
+                    f"(mean={mean_separation_cells:.6g} cells, "
+                    f"pericentre={pericentre_plummer:.6g} Plummer radii)"
+                )
             specifications.append(
                 WaveRunSpecification(
                     run_id=f"{case.case_id}_n{resolution}",
@@ -258,10 +381,23 @@ def run_specifications(
                     box_size_pc=box_size,
                     finest_cell_size_pc=cell_size,
                     core_cells=case.core_radius_pc / cell_size,
-                    plummer_radius_pc=max(0.001, 0.5 * cell_size),
+                    plummer_radius_pc=plummer_radius,
+                    kepler_mean_separation_over_cell_size=(
+                        mean_separation_cells
+                    ),
+                    pericentre_separation_over_cell_size=pericentre_cells,
+                    pericentre_separation_over_plummer_radius=(
+                        pericentre_plummer
+                    ),
+                    spatial_acceptance_passed=spatial_acceptance_passed,
                     estimated_uniform_grid_memory_gib=estimated_uniform_grid_memory_gib(
                         int(resolution)
                     ),
                 )
             )
+    if rejected:
+        raise ValueError(
+            "calibration runs fail the configured spatial gates: "
+            + "; ".join(rejected)
+        )
     return specifications

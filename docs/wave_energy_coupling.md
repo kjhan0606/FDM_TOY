@@ -190,6 +190,14 @@ remain negative because coherent wave modes may return energy or angular
 momentum over part of their oscillation. Long-time decay follows only after
 averaging over the relevant orbital and soliton-mode periods.
 
+The exchange tables distinguish two row selections. A secular row requires
+the binary separation and the measured half-density radius to remain above two
+cell widths, and the initial resolved interval must pass the Hamiltonian limit.
+A phase-dependent row must also have a saved three-dimensional wave state
+within one half of the local orbital period. Sparse wave states that fail this
+time-offset limit remain available for secular power and torque but do not
+supply a complex mode phase.
+
 The fitted power and torque determine the orbital update. The resolved
 multipole potential supplies part of the opposite wave exchange. A separate
 mode source supplies only the residual defined above. This sequence preserves

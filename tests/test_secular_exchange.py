@@ -20,6 +20,41 @@ def test_unwrapped_phase_counts_multiple_circular_orbits() -> None:
     np.testing.assert_allclose(measured, phase, atol=1.0e-14)
 
 
+def test_velocity_guided_phase_resolves_advances_larger_than_pi() -> None:
+    phase = np.array([0.0, 0.8 * np.pi, 1.9 * np.pi, 2.95 * np.pi])
+    displacement = np.column_stack(
+        (np.cos(phase), np.sin(phase), np.zeros_like(phase))
+    )
+    velocity = np.column_stack(
+        (-np.sin(phase), np.cos(phase), np.zeros_like(phase))
+    )
+
+    measured = unwrapped_orbital_phase(
+        displacement,
+        velocity,
+        time=phase,
+    )
+
+    np.testing.assert_allclose(measured, phase, atol=1.0e-14)
+
+
+def test_velocity_guided_phase_rejects_retrograde_sample() -> None:
+    phase = np.array([0.0, 0.2, 0.1])
+    displacement = np.column_stack(
+        (np.cos(phase), np.sin(phase), np.zeros_like(phase))
+    )
+    velocity = np.column_stack(
+        (
+            [-np.sin(phase[0]), -np.sin(phase[1]), np.sin(phase[2])],
+            [np.cos(phase[0]), np.cos(phase[1]), -np.cos(phase[2])],
+            np.zeros_like(phase),
+        )
+    )
+
+    with pytest.raises(ValueError, match="phase velocity must remain positive"):
+        unwrapped_orbital_phase(displacement, velocity, time=np.arange(3.0))
+
+
 def test_phase_cycle_average_recovers_linear_rate() -> None:
     time = np.linspace(0.0, 2.4, 49)
     phase = 2.0 * np.pi * time
@@ -37,6 +72,28 @@ def test_cycle_average_requires_a_complete_orbit() -> None:
         phase_cycle_average(
             time=time, phase=2.0 * np.pi * time, value=np.ones_like(time)
         )
+
+
+def test_cycle_average_can_mark_optional_nonfinite_diagnostic_cycles() -> None:
+    time = np.linspace(0.0, 3.0, 13)
+    phase = 2.0 * np.pi * time
+    value = 2.0 + 3.0 * time
+    value[1] = np.nan
+
+    with pytest.raises(ValueError, match="cycle inputs must be finite"):
+        phase_cycle_average(time=time, phase=phase, value=value)
+
+    result = phase_cycle_average(
+        time=time,
+        phase=phase,
+        value=value,
+        allow_nonfinite_value=True,
+    )
+    assert result.cycle_index.size == 3
+    assert np.isnan(result.mean_value[0])
+    assert np.isnan(result.rate[0])
+    np.testing.assert_allclose(result.mean_value[1:], [6.5, 9.5])
+    np.testing.assert_allclose(result.rate[1:], 3.0)
 
 
 def test_block_bootstrap_preserves_constant_rate() -> None:

@@ -1,0 +1,58 @@
+schema_version: 1
+replicates: 1
+
+# Baseline plus controlled one-/few-axis variations. Every physical point is
+# generated at both numerical resolutions below; this file defines a manifest,
+# not permission to submit all cases simultaneously.
+baseline:
+  host_stellar_mass_msun: 1.0e11
+  host_scale_radius_pc: 1000.0
+  host_inner_slope: 1.0
+  binary_total_mass_msun: 2.0e8
+  mass_ratio_q: 1.0
+  gas_fraction: 0.2
+  gas_rotation_fraction: 0.5
+  initial_orbit_eccentricity: 0.5
+  initial_separation_pc: 5000.0
+  nuclear_envelope_to_secondary_bh_mass: 10.0
+  dark_matter_model: fdm
+  fdm_particle_mass_ev: 1.0e-21
+  fdm_core_radius_pc: 200.0
+  fdm_soliton_mass_msun: 1.0e10
+
+variations:
+  - mass_ratio_q: 0.3
+  - mass_ratio_q: 0.1
+  - initial_orbit_eccentricity: 0.1
+  - initial_orbit_eccentricity: 0.9
+  - host_inner_slope: 0.0
+  - host_inner_slope: 1.5
+  - gas_fraction: 0.0
+    gas_rotation_fraction: 0.0
+  - gas_fraction: 0.5
+    gas_rotation_fraction: 0.8
+  - nuclear_envelope_to_secondary_bh_mass: 0.0
+  - nuclear_envelope_to_secondary_bh_mass: 30.0
+  - fdm_particle_mass_ev: 3.0e-22
+  - fdm_particle_mass_ev: 3.0e-21
+  - dark_matter_model: cdm
+    fdm_particle_mass_ev: null
+    fdm_core_radius_pc: null
+    fdm_soliton_mass_msun: null
+  - host_stellar_mass_msun: 1.0e10
+    host_scale_radius_pc: 500.0
+    binary_total_mass_msun: 2.0e7
+  - mass_ratio_q: 0.1
+    gas_fraction: 0.5
+    gas_rotation_fraction: 0.8
+    initial_orbit_eccentricity: 0.9
+
+numerics:
+  - levelmax: 17
+    finest_cell_size_pc: 2.0
+    collisionless_particle_mass_msun: 1.0e4
+    minimum_softening_pc: 2.0
+  - levelmax: 18
+    finest_cell_size_pc: 1.0
+    collisionless_particle_mass_msun: 1.25e3
+    minimum_softening_pc: 1.0

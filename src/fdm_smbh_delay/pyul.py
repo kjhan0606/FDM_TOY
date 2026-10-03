@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 import re
 
@@ -14,6 +15,30 @@ PYUL_SOLAR_MASS_KG = 1.989e30
 PYUL_YEAR_S = 60.0 * 60.0 * 24.0 * 365.0
 PYUL_MYR_S = 1.0e6 * PYUL_YEAR_S
 _OUTPUT_INDEX = re.compile(r"#([0-9]+)")
+
+
+def allocated_cpu_count(
+    *,
+    scheduler_value: str | None = None,
+    affinity_count: int | None = None,
+    system_count: int | None = None,
+) -> int:
+    """Return a thread count that does not exceed the batch allocation."""
+
+    if scheduler_value is None:
+        scheduler_value = os.environ.get("SLURM_CPUS_PER_TASK")
+    if affinity_count is None and hasattr(os, "sched_getaffinity"):
+        affinity_count = len(os.sched_getaffinity(0))
+    if system_count is None:
+        system_count = os.cpu_count()
+    candidates = [
+        int(value)
+        for value in (scheduler_value, affinity_count, system_count)
+        if value is not None and int(value) > 0
+    ]
+    if not candidates:
+        return 1
+    return min(candidates)
 
 
 @dataclass(frozen=True)

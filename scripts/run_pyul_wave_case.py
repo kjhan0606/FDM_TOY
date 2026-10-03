@@ -7,10 +7,18 @@ import argparse
 import builtins
 import csv
 import json
+import multiprocessing
 import os
 from pathlib import Path
 import subprocess
 import sys
+
+from fdm_smbh_delay.pyul import allocated_cpu_count
+from fdm_smbh_delay.qe_followup_design import (
+    read_verified_qe_followup_design,
+    verify_qe_design_run_request,
+)
+from fdm_smbh_delay.subgrid_calibration import is_qe_extension_case
 
 
 def _load_case(path: Path, case_id: str) -> dict[str, str]:
@@ -67,9 +75,22 @@ def main() -> int:
     parser.add_argument("--time-step-factor", type=float, default=1.0)
     parser.add_argument("--output", type=Path, default=Path("results/pyul_wave"))
     parser.add_argument("--box-pc", type=float)
+    parser.add_argument("--qe-design", type=Path)
+    parser.add_argument("--qe-design-manifest", type=Path)
+    parser.add_argument(
+        "--qe-design-role", choices=("coarse", "fine", "doubled_box_control")
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--save-3d", action="store_true")
     parser.add_argument("--save-3d-number", type=int)
+    parser.add_argument(
+        "--save-movie-plane",
+        action="store_true",
+        help=(
+            "save the central FDM density plane at every diagnostic output; "
+            "this is sufficient for a movie without retaining every 3D state"
+        ),
+    )
     args = parser.parse_args()
 
     project_root = Path(__file__).resolve().parents[1]
@@ -102,6 +123,9 @@ def main() -> int:
     core_radius = float(case["core_radius_pc"])
     mass1 = float(case["mass1_msun"])
     mass2 = float(case["mass2_msun"])
+    mass_ratio_q = float(case["mass_ratio_q"])
+    initial_eccentricity = float(case["eccentricity"])
+    semi_major_axis = float(case["semi_major_axis_pc"])
     separation = float(case["initial_separation_pc"])
     speed1 = float(case["initial_speed1_km_s"])
     speed2 = float(case["initial_speed2_km_s"])
@@ -113,6 +137,37 @@ def main() -> int:
     box_size = 100.0 if args.box_pc is None else args.box_pc
     if box_size <= 4.0 * separation:
         raise ValueError("simulation box must exceed four initial binary separations")
+    design_binding = None
+    if any(value is not None for value in (
+        args.qe_design, args.qe_design_manifest, args.qe_design_role
+    )):
+        if not all(value is not None for value in (
+            args.qe_design, args.qe_design_manifest, args.qe_design_role
+        )):
+            raise ValueError("q/e design, manifest, and run role must be supplied together")
+        design_path = args.qe_design.expanduser().resolve()
+        design, design_file_sha256 = read_verified_qe_followup_design(
+            design_path,
+            physical_cases=cases_path,
+            run_manifest=args.qe_design_manifest.expanduser().resolve(),
+        )
+        verify_qe_design_run_request(
+            design, case_id=args.case_id, role=args.qe_design_role,
+            resolution=args.resolution, box_size_pc=box_size,
+            duration_myr=duration,
+            initial_state_only=True,
+        )
+        design_binding = {
+            "status": "qe_prospective_design_bound_not_a_calibration_release",
+            "path": str(design_path),
+            "physical_cases_path": str(cases_path),
+            "run_manifest_path": str(args.qe_design_manifest.expanduser().resolve()),
+            "file_sha256": design_file_sha256,
+            "design_sha256": design["design_sha256"],
+            "role": args.qe_design_role,
+        }
+    elif is_qe_extension_case(args.case_id):
+        design_binding = {"status": "unregistered_qe_exploratory_run"}
 
     total_mass = mass1 + mass2
     position1 = [separation * mass2 / total_mass, 0.0, 0.0]
@@ -130,12 +185,15 @@ def main() -> int:
 
     original_cwd = Path.cwd()
     original_input = builtins.input
+    original_cpu_count = multiprocessing.cpu_count
     evolve_globals = None
     original_save_grid = None
     try:
         os.chdir(pyul_path)
-        os.environ.setdefault("NUMEXPR_MAX_THREADS", "128")
-        os.environ.setdefault("NUMEXPR_NUM_THREADS", "64")
+        allocated_threads = allocated_cpu_count()
+        os.environ["NUMEXPR_MAX_THREADS"] = str(allocated_threads)
+        os.environ["NUMEXPR_NUM_THREADS"] = str(allocated_threads)
+        multiprocessing.cpu_count = lambda: allocated_threads
         sys.path.insert(0, str(pyul_path))
         builtins.input = lambda _prompt="": f"{particle_mass_ev:.16g}"
         # SciPy 1.15 removed the deprecated sph_harm name used by PyUL_NBody.
@@ -165,6 +223,8 @@ def main() -> int:
         plummer_radius = max(0.001, 0.5 * cell_size)
         plummer_parameter = pyul.GenPlummer(plummer_radius, "pc")
         save_options = "Energy NBody DF 1Density Entropy Quadrupole"
+        if args.save_movie_plane:
+            save_options += " 2Density"
         if args.save_3d or args.save_3d_number is not None:
             save_options += " 3Density 3Wfn"
         estimated_steps = int(
@@ -194,6 +254,11 @@ def main() -> int:
             "pyul_repository": "https://github.com/Sifyrena/PyUL_NBody",
             "pyul_revision": _git_revision(pyul_path),
             "particle_mass_ev": particle_mass_ev,
+            "mass_ratio_q": mass_ratio_q,
+            "initial_eccentricity": initial_eccentricity,
+            "semi_major_axis_pc": semi_major_axis,
+            "initial_separation_pc": separation,
+            "qe_design_binding": design_binding,
             "resolution": args.resolution,
             "box_size_pc": box_size,
             "cell_size_pc": cell_size,
@@ -206,7 +271,9 @@ def main() -> int:
             ),
             "save_number": args.save_number,
             "saved_3d_states": saved_3d_states,
+            "saved_movie_plane": args.save_movie_plane,
             "estimated_wave_steps": estimated_steps,
+            "fft_threads": allocated_threads,
             "analytic_fdm_drag": False,
             "live_wave_force_on_smbhs": True,
             "smbh_force_on_live_wave": True,
@@ -317,6 +384,7 @@ def main() -> int:
         if evolve_globals is not None and original_save_grid is not None:
             evolve_globals["save_grid"] = original_save_grid
         builtins.input = original_input
+        multiprocessing.cpu_count = original_cpu_count
         os.chdir(original_cwd)
     return 0
 

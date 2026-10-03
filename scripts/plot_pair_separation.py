@@ -21,6 +21,12 @@ def main() -> int:
     parser.add_argument("--wave-density-panel", action="store_true")
     parser.add_argument("--mark-resolution-limit", action="store_true")
     parser.add_argument("--koo-reference", action="store_true")
+    parser.add_argument(
+        "--time-zoom-myr",
+        type=float,
+        nargs=2,
+        metavar=("START", "END"),
+    )
     args = parser.parse_args()
     run = args.run.expanduser().resolve()
     table = np.genfromtxt(
@@ -30,6 +36,16 @@ def main() -> int:
     )
     time_myr = table["time_myr"]
     separation_pc = table["separation_pc"]
+    zoom_selection = None
+    if args.time_zoom_myr is not None:
+        if not args.wave_density_panel:
+            parser.error("--time-zoom-myr requires --wave-density-panel")
+        zoom_start_myr, zoom_end_myr = args.time_zoom_myr
+        if not 0.0 <= zoom_start_myr < zoom_end_myr <= float(time_myr[-1]):
+            parser.error("the time zoom must lie within the calculated interval")
+        zoom_selection = (time_myr >= zoom_start_myr) & (time_myr <= zoom_end_myr)
+        if np.count_nonzero(zoom_selection) < 2:
+            parser.error("the time zoom must contain at least two saved states")
     if float(time_myr[-1]) >= 0.1:
         plot_time = time_myr
         time_label = r"Time [Myr]"
@@ -51,7 +67,17 @@ def main() -> int:
             "ytick.direction": "in",
         }
     )
-    if args.wave_density_panel:
+    if args.wave_density_panel and zoom_selection is not None:
+        figure, axes = plt.subplots(
+            2,
+            2,
+            figsize=(7.15, 4.35),
+            sharex="col",
+            constrained_layout=True,
+            gridspec_kw={"height_ratios": [1.0, 1.15]},
+        )
+        axis = axes[0, 0]
+    elif args.wave_density_panel:
         figure, axes = plt.subplots(
             2,
             1,
@@ -67,6 +93,7 @@ def main() -> int:
         "color": "#254F73",
         "linewidth": 0.85 if separation_pc.size > 200 else 1.35,
     }
+    reference_separation = None
     if args.koo_reference:
         line_options["label"] = "FDM calculation"
     if separation_pc.size <= 200:
@@ -119,6 +146,7 @@ def main() -> int:
     axis.tick_params(top=True, right=True)
     metadata = None
     first_unresolved_time = None
+    first_unresolved_time_myr = None
     if args.mark_resolution_limit or args.wave_density_panel:
         metadata = json.loads(
             (run / "fdm_adapter_metadata.json").read_text(encoding="utf-8")
@@ -130,6 +158,7 @@ def main() -> int:
         )
         unresolved_indices = np.flatnonzero(separation_pc < two_cells_pc)
         if unresolved_indices.size:
+            first_unresolved_time_myr = float(time_myr[unresolved_indices[0]])
             first_unresolved_time = float(plot_time[unresolved_indices[0]])
             axis.axvspan(
                 first_unresolved_time,
@@ -156,6 +185,60 @@ def main() -> int:
                 va="bottom",
                 transform=axis.get_yaxis_transform(),
             )
+    if zoom_selection is not None:
+        zoom_axis = axes[0, 1]
+        zoom_time_kyr = time_myr[zoom_selection] * 1.0e3
+        zoom_axis.plot(
+            zoom_time_kyr,
+            separation_pc[zoom_selection],
+            color="#254F73",
+            linewidth=1.0,
+        )
+        zoom_separation_for_limits = separation_pc[zoom_selection]
+        if reference_separation is not None:
+            zoom_axis.plot(
+                zoom_time_kyr,
+                reference_separation[zoom_selection],
+                color="#B65E2E",
+                linewidth=1.0,
+                linestyle=(0, (4, 2)),
+            )
+            zoom_separation_for_limits = np.concatenate(
+                (
+                    zoom_separation_for_limits,
+                    np.asarray(reference_separation)[zoom_selection],
+                )
+            )
+        zoom_span = max(float(np.ptp(zoom_separation_for_limits)), 1.0e-12)
+        zoom_axis.set_xlim(zoom_start_myr * 1.0e3, zoom_end_myr * 1.0e3)
+        zoom_axis.set_ylim(
+            float(np.min(zoom_separation_for_limits) - 0.08 * zoom_span),
+            float(np.max(zoom_separation_for_limits) + 0.08 * zoom_span),
+        )
+        zoom_axis.set_ylabel(r"SMBH separation [pc]")
+        zoom_axis.tick_params(top=True, right=True)
+        if args.mark_resolution_limit:
+            if first_unresolved_time_myr is not None:
+                first_unresolved_time_kyr = first_unresolved_time_myr * 1.0e3
+                if float(zoom_time_kyr[0]) <= first_unresolved_time_kyr <= float(
+                    zoom_time_kyr[-1]
+                ):
+                    zoom_axis.axvspan(
+                        first_unresolved_time_kyr,
+                        float(zoom_time_kyr[-1]),
+                        color="0.92",
+                        linewidth=0.0,
+                        zorder=-10,
+                    )
+            lower_limit, upper_limit = zoom_axis.get_ylim()
+            if lower_limit < two_cells_pc < upper_limit:
+                zoom_axis.axhline(
+                    two_cells_pc,
+                    color="0.35",
+                    linewidth=0.7,
+                    linestyle=(0, (3, 2)),
+                )
+        zoom_axis.text(0.03, 0.94, "(b)", transform=zoom_axis.transAxes, va="top")
     if args.wave_density_panel:
         axis.set_xlabel("")
         axis.text(0.03, 0.94, "(a)", transform=axis.transAxes, va="top")
@@ -182,7 +265,7 @@ def main() -> int:
         density_floor = np.finfo(float).tiny
         log_density = np.log10(np.maximum(line_density[:, selection], density_floor))
         lower, upper = np.percentile(log_density, [1.0, 99.0])
-        density_axis = axes[1]
+        density_axis = axes[1, 0] if zoom_selection is not None else axes[1]
         image = density_axis.pcolormesh(
             plot_time,
             coordinate_pc[selection],
@@ -206,12 +289,48 @@ def main() -> int:
         density_axis.text(
             0.03,
             0.94,
-            "(b)",
+            "(c)" if zoom_selection is not None else "(b)",
             color="white",
             transform=density_axis.transAxes,
             va="top",
         )
-        colour_bar = figure.colorbar(image, ax=density_axis, pad=0.02)
+        colour_bar_axes = density_axis
+        if zoom_selection is not None:
+            zoom_density_axis = axes[1, 1]
+            zoom_density_axis.pcolormesh(
+                zoom_time_kyr,
+                coordinate_pc[selection],
+                log_density[zoom_selection].T,
+                shading="auto",
+                cmap="magma",
+                vmin=float(lower),
+                vmax=float(upper),
+                rasterized=True,
+            )
+            zoom_density_axis.set_xlabel(r"Time [kyr]")
+            zoom_density_axis.set_ylabel(r"$y$ [pc]")
+            zoom_density_axis.tick_params(top=True, right=True)
+            if first_unresolved_time_myr is not None:
+                first_unresolved_time_kyr = first_unresolved_time_myr * 1.0e3
+                if float(zoom_time_kyr[0]) <= first_unresolved_time_kyr <= float(
+                    zoom_time_kyr[-1]
+                ):
+                    zoom_density_axis.axvline(
+                        first_unresolved_time_kyr,
+                        color="white",
+                        linewidth=0.65,
+                        linestyle=(0, (3, 2)),
+                    )
+            zoom_density_axis.text(
+                0.03,
+                0.94,
+                "(d)",
+                color="white",
+                transform=zoom_density_axis.transAxes,
+                va="top",
+            )
+            colour_bar_axes = (density_axis, zoom_density_axis)
+        colour_bar = figure.colorbar(image, ax=colour_bar_axes, pad=0.02)
         colour_bar.set_label(
             r"$\log_{10}[\rho_\psi/(M_\odot\,{\rm pc}^{-3})]$",
             fontsize=7.0,

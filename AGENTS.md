@@ -25,3 +25,20 @@
 - `/home/kjhan/BACKUP/lagRamses` is a separate working tree with existing user
   changes. Do not modify that checkout unless the user explicitly requests a
   lagRamses change.
+
+# Operational safety
+
+- Do not run long-lived CPU post-processing through a Codex exec/wait polling
+  loop. Repeated process polling previously triggered a `pgrep` process storm
+  and overloaded the shared node.
+- Do not use `pgrep`, `pkill`, or repeated shell process scans to monitor FDM
+  work. Use a single bounded status check only when the user requests one.
+- Treat 512-cubed wave-response analysis as a heavy job: it used about 37 GB of
+  resident memory per process. Do not launch it, parallelize it, or resume it
+  without explicit user approval.
+- Before any approved heavy CPU/FFT run, cap all numerical-library thread counts
+  at one, use a single process, and prefer a resumable snapshot-at-a-time
+  workflow with a verified memory bound.
+- If a Codex-launched task causes unexpected process creation, CPU load, or
+  memory pressure, stop Codex-owned work immediately and do not retry until the
+  user explicitly approves a safer execution method.
