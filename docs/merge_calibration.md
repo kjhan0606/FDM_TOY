@@ -151,9 +151,16 @@ bounds, and mapping identity. It checks every piece of the uncertainty interval
 against the accepted table support; a missing mapping, unstructured point
 estimate, or interval crossing an unmeasured bin returns uncalibrated/censored.
 The mapping identity records provenance but is not itself validation. The next
-release must establish and
-verify that mapping from accepted orbit diagnostics, not silently substitute
+release must establish and verify that mapping from accepted orbit diagnostics,
+not silently substitute
 either `a` or its Kepler estimate.
+For new q/e comparisons, the source orbit CSV must contain a finite, positive
+per-orbit mean osculating semimajor axis. Each retained fixed-separation bin
+now records its duration-weighted mean and the range of those orbit means,
+alongside the existing mean separation and eccentricity. These are measured
+coordinates for a future mapping assessment, not a mapping release; the
+resolution pair and doubled-box control still have to establish common
+support and uncertainty before the bound-binary runtime may use them.
 The manifest's input eccentricity remains separate provenance because the
 extended soliton potential shifts the point-mass osculating diagnostic.
 Runtime lookup interpolates in `q` or `e` only when

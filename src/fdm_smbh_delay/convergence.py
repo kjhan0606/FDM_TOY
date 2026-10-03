@@ -174,6 +174,8 @@ def load_convergence_run(label: str, run: Path) -> dict:
             "mean_eccentricity_osculating",
             *_ORBIT_TABLE_RATE_FIELDS,
         }
+        if str(metadata.get("case_id", "")).startswith("qe_"):
+            orbit_required.add("mean_semimajor_axis_osculating_pc")
         orbit_missing = sorted(
             orbit_required - set(orbit_series.dtype.names or ())
         )
@@ -191,6 +193,12 @@ def load_convergence_run(label: str, run: Path) -> dict:
                 raise ValueError(
                     f"{label}: orbit-averaged field {field} contains "
                     "non-finite values"
+                )
+        if "mean_semimajor_axis_osculating_pc" in (orbit_series.dtype.names or ()):
+            axis = orbit_series["mean_semimajor_axis_osculating_pc"]
+            if np.any(~np.isfinite(axis)) or np.any(axis <= 0.0):
+                raise ValueError(
+                    f"{label}: orbit-averaged osculating semimajor axis is invalid"
                 )
         cycle_duration = (
             orbit_series["end_time_myr"] - orbit_series["start_time_myr"]
@@ -415,30 +423,36 @@ def _matched_separation_bins(
             duration = np.asarray(
                 orbit["orbital_period_myr"][selection], dtype=float
             )
-            run_rows.append(
-                {
-                    "label": item["label"],
-                    "complete_orbits": int(selection.size),
-                    "mean_separation_pc": float(
-                        np.sum(orbit["mean_separation_pc"][selection] * duration)
-                        / np.sum(duration)
-                    ),
-                    "mean_eccentricity_osculating": float(
-                        np.sum(
-                            orbit["mean_eccentricity_osculating"][selection]
-                            * duration
-                        )
-                        / np.sum(duration)
-                    ),
-                    "minimum_time_myr": float(
-                        orbit["start_time_myr"][selection[0]]
-                    ),
-                    "maximum_time_myr": float(
-                        orbit["end_time_myr"][selection[-1]]
-                    ),
-                    "rates": _bootstrap_orbit_rates(orbit, selection),
-                }
-            )
+            run_row = {
+                "label": item["label"],
+                "complete_orbits": int(selection.size),
+                "mean_separation_pc": float(
+                    np.sum(orbit["mean_separation_pc"][selection] * duration)
+                    / np.sum(duration)
+                ),
+                "mean_eccentricity_osculating": float(
+                    np.sum(
+                        orbit["mean_eccentricity_osculating"][selection]
+                        * duration
+                    )
+                    / np.sum(duration)
+                ),
+                "minimum_time_myr": float(
+                    orbit["start_time_myr"][selection[0]]
+                ),
+                "maximum_time_myr": float(
+                    orbit["end_time_myr"][selection[-1]]
+                ),
+                "rates": _bootstrap_orbit_rates(orbit, selection),
+            }
+            if "mean_semimajor_axis_osculating_pc" in (orbit.dtype.names or ()):
+                axis = orbit["mean_semimajor_axis_osculating_pc"][selection]
+                run_row["mean_semimajor_axis_osculating_pc"] = float(
+                    np.sum(axis * duration) / np.sum(duration)
+                )
+                run_row["minimum_orbit_mean_semimajor_axis_pc"] = float(np.min(axis))
+                run_row["maximum_orbit_mean_semimajor_axis_pc"] = float(np.max(axis))
+            run_rows.append(run_row)
 
         reference_rates = run_rows[0]["rates"]
         for row in run_rows:

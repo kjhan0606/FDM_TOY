@@ -16,7 +16,10 @@ from fdm_smbh_delay.qe_box_control import verify_fixed_comparison_summary
 from fdm_smbh_delay.qe_followup_design import build_qe_followup_design
 
 
-def _write_run(path: Path, *, scale: float, time_step_factor: float) -> None:
+def _write_run(
+    path: Path, *, scale: float, time_step_factor: float,
+    include_osculating_axis: bool = True,
+) -> None:
     path.mkdir()
     (path / "fdm_adapter_metadata.json").write_text(
         json.dumps(
@@ -85,6 +88,10 @@ def _write_run(path: Path, *, scale: float, time_step_factor: float) -> None:
         "bh_com_kinetic_energy_rate": np.zeros(4),
         "combined_energy_residual_rate": np.full(4, 0.01 * scale),
     }
+    if include_osculating_axis:
+        orbit_columns["mean_semimajor_axis_osculating_pc"] = np.array(
+            [1.0, 0.95, 0.90, 0.85]
+        )
     np.savetxt(
         path / "orbit_averaged_exchange.csv",
         np.column_stack(tuple(orbit_columns.values())),
@@ -157,6 +164,20 @@ def test_common_interval_comparison_uses_resolved_duration(tmp_path: Path) -> No
         assert second_at_matched_separation[
             "mean_eccentricity_osculating"
         ] == pytest.approx(0.2)
+        assert second_at_matched_separation[
+            "minimum_orbit_mean_semimajor_axis_pc"
+        ] <= second_at_matched_separation[
+            "mean_semimajor_axis_osculating_pc"
+        ] <= second_at_matched_separation[
+            "maximum_orbit_mean_semimajor_axis_pc"
+        ]
+        selected = (
+            (np.array([0.98, 0.93, 0.88]) >= separation_bin["lower_separation_pc"])
+            & (np.array([0.98, 0.93, 0.88]) <= separation_bin["upper_separation_pc"])
+        )
+        assert second_at_matched_separation[
+            "mean_semimajor_axis_osculating_pc"
+        ] == pytest.approx(np.mean(np.array([1.0, 0.95, 0.90])[selected]))
     aggregate = matched[
         "aggregate_fractional_rate_differences_from_reference"
     ][1]["rate_differences"]["orbital_power"]
@@ -202,6 +223,20 @@ def test_matched_separation_excludes_orbits_ending_after_instantaneous_cutoff(
         "complete_orbits": 0,
         "initial_instantaneous_resolved_duration_myr": 0.25,
     }
+
+
+def test_qe_comparison_requires_measured_osculating_axis(tmp_path: Path) -> None:
+    run = tmp_path / "qe_run"
+    _write_run(
+        run, scale=1.0, time_step_factor=1.0,
+        include_osculating_axis=False,
+    )
+    metadata_path = run / "fdm_adapter_metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata["case_id"] = "qe_synthetic"
+    metadata_path.write_text(json.dumps(metadata))
+    with pytest.raises(ValueError, match="mean_semimajor_axis_osculating_pc"):
+        load_convergence_run("qe", run)
 
 
 def test_eight_orbit_bootstrap_keeps_two_independent_blocks() -> None:
