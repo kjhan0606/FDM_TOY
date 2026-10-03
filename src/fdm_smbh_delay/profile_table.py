@@ -13,6 +13,10 @@ from .constants import G_INTERNAL
 from .fdm_outer_halo import FDMOuterHaloClosure
 
 
+class ProfileSupportError(ValueError):
+    """A requested radius lies outside a measured radial profile."""
+
+
 def _array(value: Any, name: str) -> np.ndarray:
     result = np.asarray(value, dtype=float)
     if result.ndim != 1 or result.size < 2 or np.any(~np.isfinite(result)):
@@ -84,8 +88,10 @@ class TabulatedSphericalProfile:
 
     def _evaluate(self, name: str, radius_pc: float | np.ndarray) -> float | np.ndarray:
         radius = np.asarray(radius_pc, dtype=float)
-        if np.any(~np.isfinite(radius)) or np.any(radius < self.radii_pc[0]) or np.any(radius > self.radii_pc[-1]):
-            raise ValueError(
+        if np.any(~np.isfinite(radius)):
+            raise ValueError(f"{name} radius must be finite")
+        if np.any(radius < self.radii_pc[0]) or np.any(radius > self.radii_pc[-1]):
+            raise ProfileSupportError(
                 f"{name} requested outside tabulated support "
                 f"[{self.radii_pc[0]}, {self.radii_pc[-1]}] pc"
             )

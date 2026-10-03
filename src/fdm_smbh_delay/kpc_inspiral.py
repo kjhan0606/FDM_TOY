@@ -31,6 +31,7 @@ from .kpc_to_pc import (
     transition_state,
 )
 from .orbital_exchange import KeplerianElements, keplerian_elements_from_relative_state
+from .profile_table import ProfileSupportError
 
 
 @dataclass(frozen=True)
@@ -182,7 +183,7 @@ class KpcInspiralResult:
     def delay_segment(self) -> DelaySegment:
         if self.status == "reached_common_nucleus":
             return DelaySegment("kpc_to_pc", "complete", self.final_state.elapsed_myr)
-        if self.status in {"timeout", "stalled"}:
+        if self.status in {"timeout", "stalled", "outside"}:
             return DelaySegment(
                 "kpc_to_pc",
                 "timeout",
@@ -874,7 +875,12 @@ def integrate_dual_nucleus(
     if initial_state.elapsed_myr > config.maximum_time_myr:
         raise ValueError("initial state lies beyond maximum_time_myr")
     state = initial_state
-    samples = [_sample(state, model)]
+    try:
+        samples = [_sample(state, model)]
+    except ProfileSupportError as error:
+        return KpcInspiralResult(
+            "outside", state, (), f"initial state outside measured profile support: {error}"
+        )
     steps_this_call = 0
     while state.completed_steps < config.maximum_steps:
         if state.radius_pc <= config.target_radius_pc:
@@ -898,7 +904,13 @@ def integrate_dual_nucleus(
                 _samples_with_final(samples, state, model),
                 "bounded step budget reached; resume from final_state",
             )
-        budget = force_budget(state, model)
+        try:
+            budget = force_budget(state, model)
+        except ProfileSupportError as error:
+            return KpcInspiralResult(
+                "outside", state, tuple(samples),
+                f"state outside measured profile support: {error}",
+            )
         if (
             budget.stellar is not None
             and budget.stellar.stalled
@@ -914,7 +926,13 @@ def integrate_dual_nucleus(
                 _samples_with_final(samples, state, model),
                 budget.stellar.reason,
             )
-        time_step = _adaptive_step(state, model, config)
+        try:
+            time_step = _adaptive_step(state, model, config)
+        except ProfileSupportError as error:
+            return KpcInspiralResult(
+                "outside", state, tuple(samples),
+                f"state outside measured profile support: {error}",
+            )
         if not np.isfinite(time_step) or time_step <= 0.0:
             return KpcInspiralResult(
                 "invalid",
@@ -922,10 +940,18 @@ def integrate_dual_nucleus(
                 _samples_with_final(samples, state, model),
                 "adaptive time step became non-positive or non-finite",
             )
-        state = advance_dual_nucleus_rk4(state, model, time_step)
+        try:
+            advanced = advance_dual_nucleus_rk4(state, model, time_step)
+            accepted_sample = _sample(advanced, model)
+        except ProfileSupportError as error:
+            return KpcInspiralResult(
+                "outside", state, tuple(samples),
+                f"RK stage left measured profile support: {error}",
+            )
+        state = advanced
         steps_this_call += 1
         if state.completed_steps % config.sample_interval_steps == 0:
-            samples.append(_sample(state, model))
+            samples.append(accepted_sample)
     return KpcInspiralResult(
         "invalid",
         state,
@@ -1000,7 +1026,12 @@ def integrate_dual_nucleus_to_hard(
         raise ValueError("initial state lies beyond maximum_time_myr")
 
     state = initial_state
-    samples = [_phase_aware_sample(state.dynamical_state, model)]
+    try:
+        samples = [_phase_aware_sample(state.dynamical_state, model)]
+    except ProfileSupportError as error:
+        reason = f"initial state outside measured profile support: {error}"
+        state = _terminal_phase_state(state, InspiralPhase.CENSORED, reason)
+        return KpcToHardResult("outside", state, (), reason, None)
     scope_error = _static_host_scope_error(model, config)
     try:
         _selected_hard_binary_radius_pc(model, config)
@@ -1067,7 +1098,12 @@ def integrate_dual_nucleus_to_hard(
                 None,
             )
 
-        budget = force_budget(state.dynamical_state, model)
+        try:
+            budget = force_budget(state.dynamical_state, model)
+        except ProfileSupportError as error:
+            reason = f"state outside measured profile support: {error}"
+            state = _terminal_phase_state(state, InspiralPhase.CENSORED, reason)
+            return KpcToHardResult("outside", state, tuple(samples), reason, None)
         if (
             budget.stellar is not None
             and budget.stellar.stalled
@@ -1088,9 +1124,14 @@ def integrate_dual_nucleus_to_hard(
                 None,
             )
 
-        time_step = _phase_aware_adaptive_step(
-            state.dynamical_state, model, config
-        )
+        try:
+            time_step = _phase_aware_adaptive_step(
+                state.dynamical_state, model, config
+            )
+        except ProfileSupportError as error:
+            reason = f"state outside measured profile support: {error}"
+            state = _terminal_phase_state(state, InspiralPhase.CENSORED, reason)
+            return KpcToHardResult("outside", state, tuple(samples), reason, None)
         if not np.isfinite(time_step) or time_step <= 0.0:
             reason = "adaptive phase-aware time step became invalid"
             state = _terminal_phase_state(state, InspiralPhase.INVALID, reason)
@@ -1105,8 +1146,15 @@ def integrate_dual_nucleus_to_hard(
             dynamics = _advance_phase_aware_rk4(
                 state.dynamical_state, model, time_step
             )
-            state = _replace_dynamics(state, dynamics)
-            state, terminal_status = _advance_physical_phase(state, model, config)
+            accepted_sample = _phase_aware_sample(dynamics, model)
+            advanced_state = _replace_dynamics(state, dynamics)
+            advanced_state, terminal_status = _advance_physical_phase(
+                advanced_state, model, config
+            )
+        except ProfileSupportError as error:
+            reason = f"RK stage left measured profile support: {error}"
+            state = _terminal_phase_state(state, InspiralPhase.CENSORED, reason)
+            return KpcToHardResult("outside", state, tuple(samples), reason, None)
         except ValueError as error:
             reason = f"phase-aware state left its valid domain: {error}"
             state = _terminal_phase_state(state, InspiralPhase.INVALID, reason)
@@ -1117,9 +1165,10 @@ def integrate_dual_nucleus_to_hard(
                 reason,
                 None,
             )
+        state = advanced_state
         steps_this_call += 1
         if state.dynamical_state.completed_steps % config.sample_interval_steps == 0:
-            samples.append(_phase_aware_sample(state.dynamical_state, model))
+            samples.append(accepted_sample)
         if terminal_status == "outside":
             return KpcToHardResult(
                 "outside",

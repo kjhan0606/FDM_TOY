@@ -67,6 +67,13 @@ Writes replace only the explicitly named checkpoint atomically; this is a
 restart of the static-host calculation, not a lagRamses solver checkpoint or
 a physical calibration release.
 
+When a tabulated stellar, gas, or FDM/host profile is queried outside its
+measured radial support, both kpc integration paths return an `outside`
+censored result. The phase-aware path records `CENSORED` in its transition
+history and retains the last fully supported dynamical state; an unsupported
+trial RK step is not promoted or extrapolated. A genuine invalid numerical
+state remains distinct from this missing-calibration outcome.
+
 This baseline does not model a moving primary in an asymmetric potential,
 triaxial or time-dependent galaxy-merger torques, evolving density profiles,
 or non-spherical nuclear stripping. Those effects belong to the controlled

@@ -15,6 +15,7 @@ from fdm_smbh_delay.galaxy_environment import (
     StellarBackground,
 )
 from fdm_smbh_delay.soliton import SchiveSoliton
+from fdm_smbh_delay.profile_table import TabulatedSphericalProfile
 from fdm_smbh_delay.kpc_inspiral import (
     KpcInspiralModel,
     KpcIntegrationConfig,
@@ -38,6 +39,87 @@ def _point_mass_model(*, envelope=None) -> KpcInspiralModel:
         secondary_bh_mass_msun=1.0e8,
         nuclear_envelope=envelope,
     )
+
+
+def _bounded_profile_model() -> KpcInspiralModel:
+    profile = TabulatedSphericalProfile(
+        radii_pc=np.array([10.0, 20.0, 30.0]),
+        density_msun_pc3=np.array([100.0, 50.0, 20.0]),
+        enclosed_mass_msun=np.array([1.0e6, 2.0e6, 3.0e6]),
+        potential_pc2_myr2=np.array([-100.0, -80.0, -60.0]),
+    )
+    return KpcInspiralModel(
+        host_potential=CompositePotential((profile,), central_point_mass_msun=1.0e10),
+        secondary_bh_mass_msun=1.0e8,
+    )
+
+
+def test_phase_aware_initial_state_outside_profile_is_censored() -> None:
+    model = _bounded_profile_model()
+    config = KpcToHardConfig(
+        primary_bh_mass_msun=1.0e10,
+        common_nucleus_radius_pc=15.0,
+        sigma_pc_myr=100.0,
+        maximum_time_myr=1.0,
+        maximum_step_myr=0.1,
+        hard_binary_radius_pc=1.0,
+    )
+    dynamics = DualNucleusState(0.0, np.array([35.0, 0.0, 0.0]), np.zeros(3), None)
+    initial = initial_kpc_to_hard_state(
+        event_uid="profile-outside", dynamical_state=dynamics,
+        model=model, config=config,
+    )
+    result = integrate_dual_nucleus_to_hard(initial_state=initial, model=model, config=config)
+    assert result.status == "outside"
+    assert result.final_state.inspiral_state.phase is InspiralPhase.CENSORED
+    assert result.final_state.dynamical_state.completed_steps == 0
+    assert result.samples == ()
+    assert result.delay_segment.status == "timeout"
+
+
+def test_phase_aware_trial_outside_profile_preserves_last_valid_state(monkeypatch) -> None:
+    model = _bounded_profile_model()
+    config = KpcToHardConfig(
+        primary_bh_mass_msun=1.0e10,
+        common_nucleus_radius_pc=15.0,
+        sigma_pc_myr=100.0,
+        maximum_time_myr=1.0,
+        maximum_step_myr=0.1,
+        hard_binary_radius_pc=1.0,
+    )
+    dynamics = DualNucleusState(0.0, np.array([25.0, 0.0, 0.0]), np.zeros(3), None)
+    initial = initial_kpc_to_hard_state(
+        event_uid="profile-trial", dynamical_state=dynamics,
+        model=model, config=config,
+    )
+
+    def unsupported_trial(state, _model, time_step):
+        return DualNucleusState(
+            state.elapsed_myr + time_step,
+            np.array([31.0, 0.0, 0.0]), state.velocity_pc_myr,
+            state.envelope_truncation_radius_pc, state.completed_steps + 1,
+        )
+
+    monkeypatch.setattr(kpc_inspiral, "_advance_phase_aware_rk4", unsupported_trial)
+    result = integrate_dual_nucleus_to_hard(initial_state=initial, model=model, config=config)
+    assert result.status == "outside"
+    assert result.final_state.inspiral_state.phase is InspiralPhase.CENSORED
+    assert result.final_state.dynamical_state.completed_steps == 0
+    assert result.final_state.dynamical_state.radius_pc == pytest.approx(25.0)
+    assert len(result.samples) == 1
+    assert result.delay_segment.status == "timeout"
+
+
+def test_geometric_kpc_path_censors_profile_extrapolation() -> None:
+    model = _bounded_profile_model()
+    initial = DualNucleusState(0.0, np.array([35.0, 0.0, 0.0]), np.zeros(3), None)
+    result = integrate_dual_nucleus(
+        initial_state=initial, model=model,
+        config=KpcIntegrationConfig(1.0, 1.0, 0.1),
+    )
+    assert result.status == "outside"
+    assert result.delay_segment.status == "timeout"
+    assert result.samples == ()
 
 
 def test_static_kpc_model_refuses_unprovided_live_fdm_wake_force() -> None:

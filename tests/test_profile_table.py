@@ -7,6 +7,7 @@ from fdm_smbh_delay.constants import G_INTERNAL
 from fdm_smbh_delay.fdm_outer_halo import FDMOuterHaloClosure
 from fdm_smbh_delay.profile_table import (
     EnvironmentProfileBundle,
+    ProfileSupportError,
     TabulatedSphericalProfile,
 )
 
@@ -36,12 +37,15 @@ def test_profile_interpolates_and_acceleration_has_internal_units() -> None:
 
 def test_profile_rejects_outside_support_instead_of_extrapolating() -> None:
     profile = _profile()
-    with pytest.raises(ValueError, match="outside tabulated support"):
+    with pytest.raises(ProfileSupportError, match="outside tabulated support"):
         profile.density(0.5)
     with pytest.raises(ValueError, match="outside tabulated support"):
         profile.enclosed_mass(8.1)
     with pytest.raises(ValueError, match="outside tabulated support"):
         profile.acceleration(np.array([0.5, 0.0, 0.0]))
+    with pytest.raises(ValueError, match="radius must be finite") as error:
+        profile.density(float("nan"))
+    assert not isinstance(error.value, ProfileSupportError)
 
 
 def test_profile_bundle_round_trip_preserves_provenance() -> None:
