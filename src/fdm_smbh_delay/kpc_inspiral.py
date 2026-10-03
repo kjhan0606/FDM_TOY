@@ -263,6 +263,25 @@ class KpcToHardState:
         elapsed = [state.elapsed_myr for state in self.transition_history]
         if any(later < earlier for earlier, later in zip(elapsed, elapsed[1:])):
             raise ValueError("transition history elapsed times must be non-decreasing")
+        if self.transition_history[0].phase is not InspiralPhase.NUMERICAL_CAPTURE:
+            raise ValueError("transition history must start at numerical capture")
+        for previous, current in zip(
+            self.transition_history, self.transition_history[1:]
+        ):
+            try:
+                replayed = transition_state(
+                    previous,
+                    current.phase,
+                    elapsed_myr=current.elapsed_myr,
+                    reason=current.reason,
+                    separation_pc=current.separation_pc,
+                    semimajor_axis_pc=current.semimajor_axis_pc,
+                    eccentricity=current.eccentricity,
+                )
+            except ValueError as error:
+                raise ValueError("transition history contains an invalid phase edge") from error
+            if replayed != current:
+                raise ValueError("transition history contains an inconsistent phase state")
         if self.inspiral_state.elapsed_myr > self.dynamical_state.elapsed_myr:
             raise ValueError("phase transition cannot postdate the dynamical state")
 

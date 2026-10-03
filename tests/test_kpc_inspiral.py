@@ -488,6 +488,21 @@ def test_resume_payload_rejects_malformed_transition_history() -> None:
             (time_reversed,) + valid.transition_history[1:],
         )
 
+    skipped = replace(valid.inspiral_state, phase=InspiralPhase.HARD_BINARY)
+    with pytest.raises(ValueError, match="invalid phase edge"):
+        KpcToHardState(
+            valid.dynamical_state,
+            skipped,
+            valid.transition_history + (skipped,),
+        )
+
+    with pytest.raises(ValueError, match="start at numerical capture"):
+        KpcToHardState(
+            valid.dynamical_state,
+            valid.inspiral_state,
+            (valid.inspiral_state,),
+        )
+
 
 def test_unbound_exit_is_censored_outside_static_host_domain(monkeypatch) -> None:
     model = _phase_aware_model()
