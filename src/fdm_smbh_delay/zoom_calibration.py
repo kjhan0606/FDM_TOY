@@ -535,6 +535,14 @@ def compare_zoom_resolution_pair(
     ):
         raise ValueError("zoom reference must have a finer cell size than comparison")
     reasons = []
+    reference_baseline = reference.analytic_kpc_to_hard_delay_myr
+    comparison_baseline = comparison.analytic_kpc_to_hard_delay_myr
+    if reference_baseline is None or comparison_baseline is None:
+        reasons.append("the analytic kpc-to-hard baseline is missing from a zoom run")
+    elif not np.isclose(
+        reference_baseline, comparison_baseline, rtol=1.0e-12, atol=0.0
+    ):
+        reasons.append("analytic kpc-to-hard baselines differ across resolutions")
     for run, label in ((reference, "reference"), (comparison, "comparison")):
         if run.maximum_relative_energy_error > maximum_conservation_error:
             reasons.append(f"{label} energy error exceeds the gate")

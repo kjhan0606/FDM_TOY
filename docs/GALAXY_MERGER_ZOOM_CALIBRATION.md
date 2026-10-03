@@ -34,7 +34,9 @@ The result diagnostics must include:
 `compare_zoom_resolution_pair` accepts a pair only when both runs reach a hard
 binary, both conservation errors are at most `1e-3`, every transition radius
 has at least four cells, and the maximum stage-delay resolution difference is
-at most 20 percent. An accepted fine run supplies the multiplicative correction
+at most 20 percent. Both runs must also record the same analytic kpc-to-hard
+baseline; an absent or resolution-dependent baseline rejects the pair. An
+accepted fine run supplies the multiplicative correction
 to the analytic delay. The initial table performs exact physical-point lookup;
 interpolation and extrapolation remain prohibited until the populated grid
 demonstrates support between points.

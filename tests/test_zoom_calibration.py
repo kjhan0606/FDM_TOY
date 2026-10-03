@@ -175,6 +175,28 @@ def test_resolution_pair_rejects_different_capture_events(tmp_path) -> None:
         )
 
 
+@pytest.mark.parametrize("coarse_baseline", [None, 30.0])
+def test_resolution_pair_rejects_missing_or_changed_analytic_baseline(
+    tmp_path, coarse_baseline
+) -> None:
+    coarse_case, fine_case = build_zoom_grid(_specification()).cases[:2]
+    coarse_path = tmp_path / "coarse.json"
+    fine_path = tmp_path / "fine.json"
+    _write_result(coarse_path, coarse_case)
+    _write_result(fine_path, fine_case)
+    record = json.loads(coarse_path.read_text())
+    record["analytic_kpc_to_hard_delay_myr"] = coarse_baseline
+    coarse_path.write_text(json.dumps(record), encoding="utf-8")
+    comparison = compare_zoom_resolution_pair(
+        read_zoom_result(fine_path, fine_case),
+        read_zoom_result(coarse_path, coarse_case),
+    )
+    assert comparison.status == "rejected"
+    assert any("baseline" in reason for reason in comparison.reasons)
+    with pytest.raises(ValueError, match="only accepted zoom convergence"):
+        accepted_kpc_delay_row(comparison)
+
+
 @pytest.mark.parametrize("uid", [7, "", "   "])
 def test_zoom_result_rejects_nontext_or_blank_capture_uid(tmp_path, uid) -> None:
     case = build_zoom_grid(_specification()).cases[0]
