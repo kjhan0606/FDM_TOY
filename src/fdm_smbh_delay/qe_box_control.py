@@ -6,7 +6,7 @@ the registered physical-bin design and release provenance remain independent.
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 from pathlib import Path
 
@@ -26,6 +26,7 @@ from .qe_followup_design import (
 )
 from .subgrid_table_builder import (
     CalibrationSource,
+    SourceBuildResult,
     _physical_definition,
     _sha256,
     _same_physical_case,
@@ -777,3 +778,61 @@ def prepare_qe_calibration_candidate(
         "box_assessment": assessment,
         "production_calibration_row_admitted": False,
     }
+
+
+def build_box_controlled_qe_source(
+    resolution_pair: CalibrationSource,
+    doubled_box: CalibrationSource,
+) -> tuple[SourceBuildResult, dict]:
+    """Select only raw-verified, doubled-box-supported q/e bins for a future release.
+
+    This does not publish a table or validate the separate (a,e)-to-mean-r
+    mapping required by the bound-binary runtime.
+    """
+
+    package = prepare_qe_calibration_candidate(resolution_pair, doubled_box)
+    if (
+        package["status"] != "qe_box_controlled_candidate_not_released"
+        or package["production_calibration_row_admitted"] is not False
+        or package["candidate_row_count"] < 1
+        or package["box_assessment"]["raw_diagnostics_verified"] is not True
+    ):
+        raise ValueError("q/e source has no raw-verified doubled-box-supported bin")
+    source = build_source_rows(resolution_pair)
+    if (
+        source.profile_id != package["profile_id"]
+        or source.source_case_id != package["case_id"]
+        or source.source_sha256
+        != package["box_assessment"]["resolution_pair_sha256"]
+        or _sha256(doubled_box.convergence_summary.expanduser().resolve())
+        != package["box_assessment"]["doubled_box_sha256"]
+    ):
+        raise ValueError("q/e source changed after doubled-box verification")
+    candidates = package["candidate_rows"]
+    indices = [row["separation_bin_index"] for row in candidates]
+    if (
+        len(indices) != len(set(indices))
+        or len(indices) != package["candidate_row_count"]
+    ):
+        raise ValueError("q/e box-controlled candidate bins are duplicated")
+    accepted = {row.separation_bin_index: row for row in source.accepted_rows}
+    if len(accepted) != len(source.accepted_rows) or any(
+        type(index) is not int
+        or index not in accepted
+        or asdict(accepted[index]) != row
+        for index, row in zip(indices, candidates, strict=True)
+    ):
+        raise ValueError("q/e box-controlled rows disagree with resolution acceptance")
+    selected = tuple(accepted[index] for index in sorted(indices))
+    box_rejected = tuple(
+        {
+            "separation_bin_index": index,
+            "reasons": ["doubled-box control is missing or rejected"],
+        }
+        for index in sorted(accepted.keys() - set(indices))
+    )
+    return replace(
+        source,
+        accepted_rows=selected,
+        rejected_bins=source.rejected_bins + box_rejected,
+    ), package

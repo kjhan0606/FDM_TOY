@@ -898,6 +898,41 @@ def test_qe_candidate_package_retains_only_box_controlled_rows(
     assert package["production_calibration_row_admitted"] is False
 
 
+def test_qe_source_selection_retains_only_verified_box_bins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pair, box = _mock_strict_box_assessment(tmp_path, monkeypatch)
+    source, package = qe_box_module.build_box_controlled_qe_source(
+        CalibrationSource("test", pair), CalibrationSource("test", box)
+    )
+    assert [row.separation_bin_index for row in source.accepted_rows] == [0]
+    assert any(
+        row.get("separation_bin_index") == 1
+        for row in source.rejected_bins
+    )
+    assert package["box_assessment"]["raw_diagnostics_verified"] is True
+    assert package["production_calibration_row_admitted"] is False
+
+
+def test_qe_source_selection_rejects_candidate_row_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pair, box = _mock_strict_box_assessment(tmp_path, monkeypatch)
+    genuine = qe_box_module.prepare_qe_calibration_candidate(
+        CalibrationSource("test", pair), CalibrationSource("test", box)
+    )
+    altered = deepcopy(genuine)
+    altered["candidate_rows"][0]["dimensionless_orbital_power"] *= 1.1
+    monkeypatch.setattr(
+        qe_box_module, "prepare_qe_calibration_candidate",
+        lambda *args, **kwargs: altered,
+    )
+    with pytest.raises(ValueError, match="disagree with resolution acceptance"):
+        qe_box_module.build_box_controlled_qe_source(
+            CalibrationSource("test", pair), CalibrationSource("test", box)
+        )
+
+
 def test_qe_candidate_package_rejects_changed_raw_input(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

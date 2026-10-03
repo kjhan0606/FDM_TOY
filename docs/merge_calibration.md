@@ -333,6 +333,12 @@ Adding `--candidate-output PATH.json` creates a non-production candidate
 package with only box-supported rows, both comparison checksums, and the
 verified raw-input checksums. It refuses to overwrite an existing path and
 still does not produce a runtime-loadable calibration table.
+`build_box_controlled_qe_source` additionally intersects that package with
+freshly rebuilt resolution-pair rows. It retains only bins accepted by both
+controls, records resolution-accepted bins rejected by the box control as
+rejected, and rechecks both comparison checksums. This is a release-input
+selection step, not a release; the production writer and loader still refuse
+q/e rows until their separate box-control provenance contract is complete.
 The candidate package also retains fine, coarse, and doubled-box measurements
 of mean separation, osculating semimajor axis and eccentricity for each
 box-supported bin. The osculating-axis mean and per-orbit range must be
