@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 import numpy as np
-from scipy.spatial import cKDTree
+from scipy.spatial import Delaunay, QhullError, cKDTree
 
 from .convergence import (
     _COORDINATE_RATIO_BOOTSTRAP_SAMPLES,
@@ -288,6 +288,139 @@ def _joint_orbit_coordinate_proximity(
         "coarse_log_axis_or_e_mismatch": float(coarse_distance[closest_fine]),
         "doubled_box_log_axis_or_e_mismatch": float(box_distance[closest_fine]),
         "closest_triplet": triplet,
+        "joint_a_e_support_verified": False,
+        "runtime_mapping_admitted": False,
+    }
+
+
+def _joint_orbit_hull_diagnostic(observations: dict[str, np.ndarray]) -> dict:
+    """Measure three-run 2D orbit overlap without certifying a runtime map.
+
+    Convex hulls can bridge unsampled holes. Their intersection and the
+    barycentric separation differences are diagnostics, not release gates.
+    """
+
+    roles = ("fine", "coarse", "doubled_box")
+    coordinates = {}
+    separations = {}
+    hulls = {}
+    for role in roles:
+        orbit = observations[role]
+        required = {
+            "mean_separation_pc", "mean_semimajor_axis_osculating_pc",
+            "mean_eccentricity_osculating",
+        }
+        if not required <= set(orbit.dtype.names or ()):
+            raise ValueError("joint-hull diagnostic lacks orbit columns")
+        separation = np.asarray(orbit["mean_separation_pc"], dtype=float)
+        axis = np.asarray(orbit["mean_semimajor_axis_osculating_pc"], dtype=float)
+        eccentricity = np.asarray(orbit["mean_eccentricity_osculating"], dtype=float)
+        if (
+            np.any(~np.isfinite(separation)) or np.any(separation <= 0.0)
+            or np.any(~np.isfinite(axis)) or np.any(axis <= 0.0)
+            or np.any(~np.isfinite(eccentricity))
+            or np.any((eccentricity < 0.0) | (eccentricity >= 1.0))
+        ):
+            raise ValueError("joint-hull diagnostic has invalid orbit coordinates")
+        coordinates[role] = np.column_stack((np.log(axis), eccentricity))
+        separations[role] = separation
+        unique, inverse = np.unique(
+            coordinates[role], axis=0, return_inverse=True,
+        )
+        for group in range(len(unique)):
+            repeated = separation[inverse == group]
+            if repeated.size > 1 and not np.allclose(
+                repeated, repeated[0], rtol=1.0e-12, atol=0.0,
+            ):
+                return {
+                    "status": "non_single_valued_orbit_coordinates_censored",
+                    "conflicting_role": role,
+                    "conflicting_revisit_relative_spread": float(
+                        (np.max(repeated) - np.min(repeated)) / np.min(repeated)
+                    ),
+                    "joint_a_e_support_verified": False,
+                    "runtime_mapping_admitted": False,
+                }
+        if len(unique) < 3:
+            return {
+                "status": "insufficient_2d_coordinate_support_censored",
+                "complete_orbits_by_role": {
+                    item: int(observations[item].size) for item in roles
+                },
+                "joint_a_e_support_verified": False,
+                "runtime_mapping_admitted": False,
+            }
+        try:
+            hulls[role] = Delaunay(coordinates[role])
+        except QhullError:
+            return {
+                "status": "degenerate_2d_coordinate_support_censored",
+                "complete_orbits_by_role": {
+                    item: int(observations[item].size) for item in roles
+                },
+                "joint_a_e_support_verified": False,
+                "runtime_mapping_admitted": False,
+            }
+
+    fine_points = coordinates["fine"]
+    simplex = {
+        role: hulls[role].find_simplex(fine_points)
+        for role in roles
+    }
+    common = np.flatnonzero(
+        (simplex["coarse"] >= 0) & (simplex["doubled_box"] >= 0)
+    )
+    if common.size == 0:
+        return {
+            "status": "no_common_2d_hull_sample_censored",
+            "fine_orbits_tested": int(fine_points.shape[0]),
+            "joint_a_e_support_verified": False,
+            "runtime_mapping_admitted": False,
+        }
+
+    def interpolate(role: str) -> tuple[np.ndarray, float]:
+        triangulation = hulls[role]
+        cells = simplex[role][common]
+        transform = triangulation.transform[cells]
+        delta = fine_points[common] - transform[:, 2]
+        first = np.einsum("nij,nj->ni", transform[:, :2], delta)
+        weights = np.column_stack((first, 1.0 - first.sum(axis=1)))
+        vertices = triangulation.simplices[cells]
+        predicted = np.sum(weights * separations[role][vertices], axis=1)
+        triangle_points = coordinates[role][vertices]
+        edges = (
+            np.linalg.norm(triangle_points[:, 0] - triangle_points[:, 1], axis=1),
+            np.linalg.norm(triangle_points[:, 1] - triangle_points[:, 2], axis=1),
+            np.linalg.norm(triangle_points[:, 2] - triangle_points[:, 0], axis=1),
+        )
+        return predicted, float(max(np.max(edge) for edge in edges))
+
+    fine_separation = separations["fine"][common]
+    coarse_prediction, coarse_edge = interpolate("coarse")
+    box_prediction, box_edge = interpolate("doubled_box")
+    coarse_difference = coarse_prediction / fine_separation - 1.0
+    box_difference = box_prediction / fine_separation - 1.0
+    return {
+        "status": "joint_2d_hull_overlap_diagnostic_only",
+        "fine_orbits_tested": int(fine_points.shape[0]),
+        "fine_orbits_inside_both_other_hulls": int(common.size),
+        "sampled_log_axis_range": [
+            float(np.min(fine_points[common, 0])),
+            float(np.max(fine_points[common, 0])),
+        ],
+        "sampled_eccentricity_range": [
+            float(np.min(fine_points[common, 1])),
+            float(np.max(fine_points[common, 1])),
+        ],
+        "maximum_absolute_coarse_minus_fine_fraction": float(
+            np.max(np.abs(coarse_difference))
+        ),
+        "maximum_absolute_doubled_box_minus_fine_fraction": float(
+            np.max(np.abs(box_difference))
+        ),
+        "maximum_coarse_simplex_edge_log_axis_or_e": coarse_edge,
+        "maximum_doubled_box_simplex_edge_log_axis_or_e": box_edge,
+        "convex_hull_may_bridge_unsampled_holes": True,
         "joint_a_e_support_verified": False,
         "runtime_mapping_admitted": False,
     }
@@ -742,6 +875,9 @@ def prepare_qe_calibration_candidate(
         }
         observation["closest_joint_orbit_triplet_not_released"] = (
             _joint_orbit_coordinate_proximity(orbit_samples)
+        )
+        observation["joint_orbit_hull_diagnostic_not_released"] = (
+            _joint_orbit_hull_diagnostic(orbit_samples)
         )
         observation["necessary_coordinate_overlap"] = (
             _necessary_mapping_coordinate_overlap(observation)

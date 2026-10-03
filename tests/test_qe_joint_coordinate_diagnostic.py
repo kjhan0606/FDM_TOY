@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from fdm_smbh_delay.qe_box_control import (
+    _joint_orbit_hull_diagnostic,
     _joint_orbit_coordinate_proximity,
     _resolved_orbits_in_fixed_bin,
 )
@@ -83,3 +84,53 @@ def test_empty_or_invalid_joint_orbits_do_not_create_mapping() -> None:
             {"fine": invalid, "coarse": _orbits([(1.0, 0.2)]),
              "doubled_box": _orbits([(1.0, 0.2)])}
         )
+
+
+def test_joint_hull_reports_measured_2d_overlap_without_releasing_mapping() -> None:
+    points = [(1.0, 0.0), (2.0, 0.0), (1.0, 0.5), (1.4, 0.2)]
+    fine = _orbits(points + [(3.0, 0.8)])
+    coarse = _orbits(points)
+    doubled = _orbits(points)
+    fine["mean_separation_pc"] = 1.0
+    coarse["mean_separation_pc"] = 1.1
+    doubled["mean_separation_pc"] = 0.9
+    result = _joint_orbit_hull_diagnostic(
+        {"fine": fine, "coarse": coarse, "doubled_box": doubled}
+    )
+    assert result["status"] == "joint_2d_hull_overlap_diagnostic_only"
+    assert result["fine_orbits_tested"] == 5
+    assert result["fine_orbits_inside_both_other_hulls"] == 4
+    assert result["maximum_absolute_coarse_minus_fine_fraction"] == pytest.approx(0.1)
+    assert result["maximum_absolute_doubled_box_minus_fine_fraction"] == pytest.approx(0.1)
+    assert result["convex_hull_may_bridge_unsampled_holes"] is True
+    assert result["joint_a_e_support_verified"] is False
+    assert result["runtime_mapping_admitted"] is False
+
+
+def test_joint_hull_censors_degenerate_or_disjoint_samples() -> None:
+    diagonal = _orbits([(1.0, 0.2), (1.5, 0.2), (2.0, 0.2)])
+    result = _joint_orbit_hull_diagnostic(
+        {"fine": diagonal, "coarse": diagonal, "doubled_box": diagonal}
+    )
+    assert result["status"] == "degenerate_2d_coordinate_support_censored"
+    fine = _orbits([(1.0, 0.0), (2.0, 0.0), (1.0, 0.2)])
+    coarse = _orbits([(1.0, 0.3), (2.0, 0.3), (2.0, 0.5)])
+    result = _joint_orbit_hull_diagnostic(
+        {"fine": fine, "coarse": coarse, "doubled_box": fine}
+    )
+    assert result["status"] == "no_common_2d_hull_sample_censored"
+    assert result["runtime_mapping_admitted"] is False
+
+
+def test_joint_hull_rejects_non_single_valued_revisited_state() -> None:
+    points = [(1.0, 0.0), (2.0, 0.0), (1.0, 0.5), (1.4, 0.2)]
+    fine = _orbits(points + [(1.4, 0.2)])
+    fine["mean_separation_pc"][-1] = 1.2
+    control = _orbits(points)
+    result = _joint_orbit_hull_diagnostic(
+        {"fine": fine, "coarse": control, "doubled_box": control}
+    )
+    assert result["status"] == "non_single_valued_orbit_coordinates_censored"
+    assert result["conflicting_role"] == "fine"
+    assert result["conflicting_revisit_relative_spread"] == pytest.approx(0.2)
+    assert result["runtime_mapping_admitted"] is False

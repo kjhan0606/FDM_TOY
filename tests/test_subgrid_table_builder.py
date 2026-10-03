@@ -893,6 +893,9 @@ def test_qe_candidate_package_retains_only_box_controlled_rows(
     assert closest["status"] == "closest_joint_orbit_triplet_diagnostic_only"
     assert closest["minimum_max_log_axis_or_e_mismatch"] == pytest.approx(0.0)
     assert closest["runtime_mapping_admitted"] is False
+    hull = observations[0]["joint_orbit_hull_diagnostic_not_released"]
+    assert hull["status"] == "insufficient_2d_coordinate_support_censored"
+    assert hull["runtime_mapping_admitted"] is False
     disjoint = deepcopy(observations[0])
     disjoint["doubled_box"]["minimum_orbit_mean_eccentricity"] = 0.4
     disjoint["doubled_box"]["mean_eccentricity_osculating"] = 0.45

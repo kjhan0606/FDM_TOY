@@ -387,6 +387,16 @@ overlapping `a` and `e` ranges. A single closest triplet is still only a
 design diagnostic: it does not establish common two-dimensional support,
 interpolation uncertainty, or a runtime mapping, and cannot release a table
 row.
+The candidate package now also triangulates each run's actual complete-orbit
+samples in `(log a,e)` and counts fine-run samples inside both the coarse and
+doubled-box convex hulls. At those sampled coordinates it reports the largest
+barycentrically interpolated separation difference and the largest local
+triangle edge. Empty or degenerate two-dimensional support is censored. A
+revisited exact `(a,e)` coordinate with inconsistent mean separation is also
+flagged as non-single-valued, rather than reduced to an arbitrary triangle.
+A convex hull can span unsampled holes, and no physical tolerance for triangle
+size or mapping discrepancy has been accepted; this remains a diagnostic,
+not a verified mapping or an interpolation license.
 For each retained bin, 2,000 reproducible moving-block resamples also give
 an orbit-sampling interval for the *ratio of the jointly resampled,
 duration-weighted means*. The same orbit indices resample `r`, `a`, `e`, and
