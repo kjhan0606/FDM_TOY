@@ -63,6 +63,7 @@ class CaptureEvent:
     multiple_members_preserved: bool | None = None
     native_conservation_verified: bool = False
     post_compaction_verified: bool = False
+    lineage_verified: bool = False
 
     @property
     def binary_orbital_state(self) -> PairOrbitalState | None:
@@ -335,13 +336,14 @@ def _build_event(
     *,
     source_path: Path,
     last_line: int,
+    schema_version: int = CAPTURE_LEDGER_SCHEMA_VERSION,
 ) -> CaptureEvent:
     begin = block.begin
     uid = block.uid
     if not uid or end.get("event_uid") != uid:
         raise CaptureLedgerError("capture transaction has a missing or mismatched UID")
     if any(
-        row.get("schema_version") != CAPTURE_LEDGER_SCHEMA_VERSION
+        row.get("schema_version") != schema_version
         for row in (*block.rows, end)
     ):
         raise CaptureLedgerError(f"{uid}: unsupported ledger schema")
@@ -528,9 +530,187 @@ def _validate_batched_event_source(block: _OpenEvent) -> None:
             raise CaptureLedgerError(f"{block.uid}: inconsistent member primary flag")
 
 
+def _read_native_v2_capture_ledger(
+    resolved: Path, *, allow_incomplete_tail: bool,
+    allow_lineage_unverified_v2: bool,
+) -> CaptureLedger:
+    """Read the native lagRamses v2 prepare/commit transaction format."""
+
+    current: _OpenEvent | None = None
+    batch: _OpenBatch | None = None
+    prepared = False
+    committed: list[tuple[_OpenBatch, str]] = []
+    incomplete: list[str] = []
+    censored: list[str] = []
+
+    with resolved.open("r", encoding="utf-8") as stream:
+        for line_number, line in enumerate(stream, start=1):
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise CaptureLedgerError(
+                    f"{resolved}:{line_number}: invalid JSON"
+                ) from exc
+            if not isinstance(record, dict):
+                raise CaptureLedgerError(f"{resolved}:{line_number}: record is not an object")
+            record_type = record.get("record_type")
+
+            if record_type == "batch_begin":
+                if batch is not None:
+                    raise CaptureLedgerError(
+                        f"{batch.uid}: missing batch_commit before next batch; "
+                        "native v2 has no restart marker that can supersede it"
+                    )
+                uid = record.get("batch_uid")
+                if (
+                    record.get("schema_version") != 2
+                    or not isinstance(uid, str) or not uid
+                    or record.get("committed") is not False
+                ):
+                    raise CaptureLedgerError("invalid v2 batch_begin")
+                _ledger_int(record, "nstep_coarse")
+                _ledger_int(record, "ilevel", minimum=1)
+                _ledger_int(record, "expected_events", minimum=1)
+                batch = _OpenBatch(record, [])
+                prepared = False
+            elif record_type == "event_begin":
+                if batch is None or prepared:
+                    raise CaptureLedgerError("v2 event appears outside an open unprepared batch")
+                if current is not None:
+                    raise CaptureLedgerError(
+                        f"{current.uid}: missing event_end before line {line_number}"
+                    )
+                if record.get("schema_version") != 2 or record.get("batch_uid") != batch.uid:
+                    raise CaptureLedgerError("v2 event_begin has mismatched schema or batch UID")
+                current = _OpenEvent(record, line_number, [record], [], [])
+            elif record_type in {"member", "pair"}:
+                if (
+                    current is None or batch is None
+                    or record.get("schema_version") != 2
+                    or record.get("batch_uid") != batch.uid
+                    or record.get("event_uid") != current.uid
+                ):
+                    raise CaptureLedgerError(
+                        f"{resolved}:{line_number}: orphaned or mismatched v2 {record_type}"
+                    )
+                current.rows.append(record)
+                (current.members if record_type == "member" else current.pairs).append(record)
+            elif record_type == "event_end":
+                if current is None or batch is None:
+                    raise CaptureLedgerError(f"{resolved}:{line_number}: orphaned v2 event_end")
+                if record.get("schema_version") != 2 or record.get("batch_uid") != batch.uid:
+                    raise CaptureLedgerError("v2 event_end has mismatched schema or batch UID")
+                _validate_batched_event_source(current)
+                batch.events.append(_build_event(
+                    current, record, source_path=resolved, last_line=line_number,
+                    schema_version=2,
+                ))
+                current = None
+            elif record_type == "batch_prepared":
+                if batch is None or current is not None or prepared:
+                    raise CaptureLedgerError("batch_prepared outside one complete open v2 batch")
+                expected = _ledger_int(batch.begin, "expected_events", minimum=1)
+                if (
+                    record.get("schema_version") != 2
+                    or record.get("batch_uid") != batch.uid
+                    or record.get("prepared") is not True
+                    or record.get("committed") is not False
+                    or _ledger_int(record, "event_count", minimum=1) != expected
+                    or len(batch.events) != expected
+                ):
+                    raise CaptureLedgerError(f"{batch.uid}: invalid batch_prepared")
+                prepared = True
+            elif record_type == "batch_commit":
+                if batch is None or current is not None or not prepared:
+                    raise CaptureLedgerError("batch_commit without a prepared complete v2 batch")
+                expected = _ledger_int(batch.begin, "expected_events", minimum=1)
+                if (
+                    record.get("schema_version") != 2
+                    or record.get("batch_uid") != batch.uid
+                    or record.get("committed") is not True
+                    or _ledger_int(record, "event_count", minimum=1) != expected
+                ):
+                    raise CaptureLedgerError(f"{batch.uid}: invalid batch_commit")
+                event_uids: set[str] = set()
+                member_ids: set[int] = set()
+                for event in batch.events:
+                    ids = {member.sink_id for member in event.members}
+                    expected_uid = f"{event.nstep_coarse}-{event.level}-{min(ids)}-{max(ids)}-{len(ids)}"
+                    if (
+                        event.nstep_coarse != batch.begin["nstep_coarse"]
+                        or event.level != batch.begin["ilevel"]
+                        or event.event_uid != expected_uid
+                        or event.event_uid in event_uids
+                        or member_ids & ids
+                    ):
+                        raise CaptureLedgerError(f"{batch.uid}: inconsistent batched event")
+                    event_uids.add(event.event_uid)
+                    member_ids.update(ids)
+                digest_payload = [
+                    batch.begin,
+                    [(event.event_uid, event.event_sha256) for event in batch.events],
+                    record,
+                ]
+                digest = hashlib.sha256(
+                    json.dumps(digest_payload, sort_keys=True).encode()
+                ).hexdigest()
+                committed.append((batch, digest))
+                batch = None
+                prepared = False
+            else:
+                raise CaptureLedgerError(
+                    f"{resolved}:{line_number}: unknown v2 record_type={record_type!r}"
+                )
+
+    if batch is not None:
+        if current is not None:
+            incomplete.append(current.uid)
+        if not allow_incomplete_tail:
+            raise CaptureLedgerError(f"{batch.uid}: incomplete v2 batch at end of ledger")
+        censored.append(batch.uid)
+
+    if committed and not allow_lineage_unverified_v2:
+        raise CaptureLedgerError(
+            "native v2 committed batches lack attempt/checkpoint lineage provenance; "
+            "use allow_lineage_unverified_v2=True only for diagnostic inspection"
+        )
+
+    events: dict[str, CaptureEvent] = {}
+    batch_digests: dict[str, str] = {}
+    duplicates = 0
+    for committed_batch, digest in committed:
+        previous_batch = batch_digests.get(committed_batch.uid)
+        if previous_batch is not None and previous_batch != digest:
+            raise CaptureLedgerError(
+                f"{committed_batch.uid}: conflicting deterministic batch UID"
+            )
+        batch_digests[committed_batch.uid] = digest
+        for event in committed_batch.events:
+            verified = replace(
+                event, post_compaction_verified=True, lineage_verified=False,
+            )
+            previous_event = events.get(event.event_uid)
+            if previous_event is None:
+                events[event.event_uid] = verified
+            elif previous_event.event_sha256 == event.event_sha256:
+                duplicates += 1
+            else:
+                raise CaptureLedgerError(
+                    f"{event.event_uid}: conflicting deterministic event UID"
+                )
+    return CaptureLedger(
+        source_path=resolved, events=tuple(events.values()),
+        duplicate_events=duplicates, incomplete_event_uids=tuple(incomplete),
+        censored_batch_uids=tuple(censored),
+    )
+
+
 def read_capture_ledger(
     path: str | Path, *, allow_incomplete_tail: bool = False,
     allow_incomplete_batches: bool = True, allow_legacy_events: bool = False,
+    allow_lineage_unverified_v2: bool = False,
 ) -> CaptureLedger:
     """Read only committed events on the final restart lineage.
 
@@ -540,9 +720,27 @@ def read_capture_ledger(
     commit after sink compaction, and superseded restart branches are excluded.
     A batch interrupted by a valid later restart attempt is censored by
     default. An incomplete final batch still requires ``allow_incomplete_tail``.
+    ``allow_incomplete_batches`` applies only to the v1 protocol, whose restart
+    markers can prove that a later attempt supersedes an open batch. Native v2
+    has no such marker, so a following batch never silently supersedes an open
+    one. Native v2 committed events are diagnostic-only unless callers pass
+    ``allow_lineage_unverified_v2=True``; those events remain explicitly marked
+    ``lineage_verified=False`` and are rejected by physical entry points.
     """
 
     resolved = Path(path).expanduser().resolve()
+    with resolved.open("r", encoding="utf-8") as stream:
+        first_record = next((line for line in stream if line.strip()), None)
+    if first_record is not None:
+        try:
+            first_object = json.loads(first_record)
+        except json.JSONDecodeError:
+            first_object = None
+        if isinstance(first_object, dict) and first_object.get("schema_version") == 2:
+            return _read_native_v2_capture_ledger(
+                resolved, allow_incomplete_tail=allow_incomplete_tail,
+                allow_lineage_unverified_v2=allow_lineage_unverified_v2,
+            )
     current: _OpenEvent | None = None
     batch: _OpenBatch | None = None
     seen_protocol = False
@@ -767,7 +965,9 @@ def read_capture_ledger(
             raise CaptureLedgerError(f"{committed_batch.uid}: conflicting deterministic batch UID")
         batch_digests[committed_batch.uid] = digest
         for event in committed_batch.events:
-            accept(replace(event, post_compaction_verified=True))
+            accept(replace(
+                event, post_compaction_verified=True, lineage_verified=True,
+            ))
     return CaptureLedger(
         source_path=resolved, events=tuple(events.values()),
         duplicate_events=duplicates, incomplete_event_uids=tuple(incomplete),

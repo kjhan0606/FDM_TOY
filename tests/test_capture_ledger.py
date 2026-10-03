@@ -162,6 +162,135 @@ def _committed_batch_rows(
     ]
 
 
+def _native_v2_batch(event_rows: list[dict], batch_uid: str = "10-1-7-9-2-16-123") -> list[dict]:
+    # Reuse the production-shaped event enrichment (periodic extents, survivor
+    # identity, and native conservation diagnostics), but replace its v1
+    # wrapper with the native lagRamses v2 transaction.
+    rows = committed_capture_rows(event_rows)[2:-1]
+    for row in rows:
+        row["schema_version"] = 2
+        row["batch_uid"] = batch_uid
+    return [
+        {"schema_version": 2, "record_type": "batch_begin", "batch_uid": batch_uid,
+         "nstep_coarse": rows[0]["nstep_coarse"], "ilevel": rows[0]["ilevel"],
+         "expected_events": 1, "sink_id_sum": 16,
+         "population_identity_xor": 123, "committed": False},
+        *rows,
+        {"schema_version": 2, "record_type": "batch_prepared", "batch_uid": batch_uid,
+         "event_count": 1, "prepared": True, "committed": False},
+        {"schema_version": 2, "record_type": "batch_commit", "batch_uid": batch_uid,
+         "event_count": 1, "committed": True},
+    ]
+
+
+def _read_native_v2(path, **kwargs):
+    return _read_capture_ledger(
+        path, allow_lineage_unverified_v2=True, **kwargs,
+    )
+
+
+def test_native_v2_batch_requires_prepare_and_post_compaction_commit(tmp_path) -> None:
+    path = tmp_path / "ledger-v2.jsonl"
+    rows = _native_v2_batch(_native_binary_rows())
+    _write_rows(path, rows)
+    with pytest.raises(CaptureLedgerError, match="lack attempt/checkpoint lineage"):
+        _read_capture_ledger(path)
+    event = _read_native_v2(path).events[0]
+    assert event.classification == "BINARY"
+    assert event.post_compaction_verified
+    assert not event.lineage_verified
+
+    _write_rows(path, rows[:-1])
+    with pytest.raises(CaptureLedgerError, match="incomplete v2 batch"):
+        _read_native_v2(path)
+    censored = _read_native_v2(path, allow_incomplete_tail=True)
+    assert censored.events == ()
+    assert censored.censored_batch_uids == (rows[0]["batch_uid"],)
+
+    _write_rows(path, rows[:-2] + rows[-1:])
+    with pytest.raises(CaptureLedgerError, match="without a prepared"):
+        _read_native_v2(path)
+
+
+def test_native_v2_abandoned_batch_cannot_be_silently_superseded(tmp_path) -> None:
+    path = tmp_path / "ledger-v2.jsonl"
+    rows = _native_v2_batch(_native_binary_rows())
+    _write_rows(path, rows[:-1] + rows)
+    with pytest.raises(CaptureLedgerError, match="no restart marker"):
+        _read_native_v2(path)
+
+
+def test_native_v2_exact_replay_deduplicates_and_conflict_rejects(tmp_path) -> None:
+    path = tmp_path / "ledger-v2.jsonl"
+    rows = _native_v2_batch(_native_binary_rows())
+    _write_rows(path, rows + rows)
+    ledger = _read_native_v2(path)
+    assert len(ledger.events) == 1
+    assert ledger.duplicate_events == 1
+
+    conflict = copy.deepcopy(rows)
+    member = next(row for row in conflict if row["record_type"] == "member")
+    member["spin_magnitude"] = 0.25
+    _write_rows(path, rows + conflict)
+    with pytest.raises(CaptureLedgerError, match="conflicting deterministic batch UID"):
+        _read_native_v2(path)
+
+
+def test_native_v2_old_restart_branch_is_not_release_eligible(tmp_path) -> None:
+    path = tmp_path / "ledger-v2.jsonl"
+    old = _native_v2_batch(_native_binary_rows(), "10-1-7-9-2-16-123")
+    new_event = _native_binary_rows()
+    new_event[0]["nstep_coarse"] = 11
+    for row in new_event[1:3]:
+        row["sink_id"] += 10
+    new_event[-2].update(sink_id_1=17, sink_id_2=19)
+    new = _native_v2_batch(new_event, "11-1-17-19-2-36-456")
+    _write_rows(path, old + new)
+
+    with pytest.raises(CaptureLedgerError, match="lack attempt/checkpoint lineage"):
+        _read_capture_ledger(path)
+    diagnostic = _read_native_v2(path)
+    assert [event.event_uid for event in diagnostic.events] == [
+        "10-1-7-9-2", "11-1-17-19-2",
+    ]
+    assert all(not event.lineage_verified for event in diagnostic.events)
+
+
+def test_native_v2_truncated_tail_cannot_be_superseded_by_replay(tmp_path) -> None:
+    path = tmp_path / "ledger-v2.jsonl"
+    rows = _native_v2_batch(_native_binary_rows())
+    with path.open("w", encoding="utf-8") as stream:
+        for row in rows[:-1]:
+            stream.write(json.dumps(row) + "\n")
+        stream.write('{"schema_version":2,"record_type":"batch_commit"\n')
+        for row in rows:
+            stream.write(json.dumps(row) + "\n")
+    with pytest.raises(CaptureLedgerError, match="invalid JSON"):
+        _read_native_v2(path)
+
+
+@pytest.mark.parametrize(
+    ("record_type", "field", "value", "match"),
+    [
+        ("member", "schema_version", 1, "mismatched v2 member"),
+        ("pair", "batch_uid", "wrong", "mismatched v2 pair"),
+        ("batch_prepared", "event_count", 2, "invalid batch_prepared"),
+        ("batch_prepared", "prepared", False, "invalid batch_prepared"),
+        ("batch_commit", "event_count", 2, "invalid batch_commit"),
+        ("batch_commit", "committed", False, "invalid batch_commit"),
+    ],
+)
+def test_native_v2_metadata_mismatch_fails_closed(
+    tmp_path, record_type: str, field: str, value, match: str,
+) -> None:
+    path = tmp_path / "ledger-v2.jsonl"
+    rows = _native_v2_batch(_native_binary_rows())
+    next(row for row in rows if row["record_type"] == record_type)[field] = value
+    _write_rows(path, rows)
+    with pytest.raises(CaptureLedgerError, match=match):
+        _read_native_v2(path)
+
+
 def _attempt(restart_output: int = 0, resume_step: int = 0) -> dict:
     return {"schema_version": 1, "record_type": "attempt_begin",
             "restart_output": restart_output, "resume_step": resume_step}
@@ -351,6 +480,18 @@ def test_committed_multiple_preserves_all_three_members_and_pairs(tmp_path) -> N
     assert event.binary_orbital_state is None
     assert event.native_conservation_verified
 
+    v2_path = tmp_path / "ledger-v2.jsonl"
+    _write_rows(v2_path, _native_v2_batch(
+        [begin, *members, *pairs, end], batch_uid="10-1-7-11-3-27-456",
+    ))
+    v2_event = _read_native_v2(v2_path).events[0]
+    assert v2_event.classification == "MULTIPLE"
+    assert [member.sink_id for member in v2_event.members] == [7, 9, 11]
+    assert len(v2_event.pairs) == 3
+    assert v2_event.binary_orbital_state is None
+    assert v2_event.post_compaction_verified
+    assert not v2_event.lineage_verified
+
 
 def test_bad_batch_conservation_and_bare_event_are_rejected(tmp_path) -> None:
     path = tmp_path / "ledger.jsonl"
@@ -386,12 +527,15 @@ def test_legacy_event_is_not_admitted_by_default(tmp_path) -> None:
     historical = read_capture_ledger(path).events[0]
     assert historical.native_conservation_verified
     assert not historical.post_compaction_verified
+    assert not historical.lineage_verified
 
 
 def test_committed_batch_marks_post_compaction_capture(tmp_path) -> None:
     path = tmp_path / "ledger.jsonl"
     _write_rows(path, [_attempt(), *_committed_batch_rows()])
-    assert _read_capture_ledger(path).events[0].post_compaction_verified
+    event = _read_capture_ledger(path).events[0]
+    assert event.post_compaction_verified
+    assert event.lineage_verified
 
 
 def test_exact_restart_event_is_deduplicated(tmp_path) -> None:

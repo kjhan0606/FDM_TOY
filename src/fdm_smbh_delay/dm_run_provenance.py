@@ -341,8 +341,11 @@ def bind_capture_event_to_dark_matter_run(
     """Bind one ledger event only to a later output from the same ledger file."""
 
     reasons: list[str] = []
-    if not event.post_compaction_verified:
-        reasons.append("capture event lacks a committed post-compaction batch")
+    if not event.post_compaction_verified or not event.lineage_verified:
+        reasons.append(
+            "capture event lacks a committed post-compaction batch on a verified "
+            "restart lineage"
+        )
     if not provenance.smbh_capture_ledger_enabled:
         reasons.append("run provenance records SMBH capture ledger as disabled")
     ledger_reference = Path(provenance.smbh_capture_ledger_file).expanduser()

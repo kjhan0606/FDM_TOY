@@ -257,7 +257,9 @@ def test_capture_seed_rejects_sparse_legacy_ledger_without_native_conservation(
     )
     event = read_capture_ledger(ledger, allow_legacy_events=True).events[0]
     assert not event.native_conservation_verified
-    event = replace(event, post_compaction_verified=True)
+    event = replace(
+        event, post_compaction_verified=True, lineage_verified=True,
+    )
     with pytest.raises(ValueError, match="verified native ledger conservation"):
         derive_dual_smbh_sink_pair_from_capture(
             event, frame=_frame(), assignment=_assignment(),

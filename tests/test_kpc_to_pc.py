@@ -87,6 +87,7 @@ def _event(
         first_line=1,
         last_line=5,
         post_compaction_verified=True,
+        lineage_verified=True,
     )
 
 
@@ -100,6 +101,12 @@ def test_uncommitted_legacy_capture_remains_censored() -> None:
     )
     assert state.phase is InspiralPhase.CENSORED
     assert "committed post-compaction" in state.reason
+
+
+def test_manual_capture_without_explicit_lineage_remains_censored() -> None:
+    event = replace(_event(), lineage_verified=False)
+    assert event.post_compaction_verified
+    assert initial_capture_state(event).phase is InspiralPhase.CENSORED
 
 
 def test_event_specific_influence_and_hard_binary_radii() -> None:

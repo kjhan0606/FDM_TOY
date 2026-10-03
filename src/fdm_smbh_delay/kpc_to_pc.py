@@ -203,7 +203,7 @@ def transition_radii(
 
 def initial_capture_state(event: CaptureEvent) -> InspiralState:
     state = event.binary_orbital_state
-    if not event.post_compaction_verified:
+    if not event.post_compaction_verified or not event.lineage_verified:
         return InspiralState(
             event_uid=event.event_uid,
             phase=InspiralPhase.CENSORED,
@@ -211,7 +211,10 @@ def initial_capture_state(event: CaptureEvent) -> InspiralState:
             separation_pc=(None if state is None else state.separation_pc),
             semimajor_axis_pc=(None if state is None else state.semi_major_axis_pc),
             eccentricity=(None if state is None else state.eccentricity),
-            reason="capture lacks a committed post-compaction batch",
+            reason=(
+                "capture lacks a committed post-compaction batch and verified "
+                "restart lineage"
+            ),
         )
     return InspiralState(
         event_uid=event.event_uid,

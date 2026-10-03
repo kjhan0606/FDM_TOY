@@ -536,11 +536,14 @@ def bind_zoom_result_to_capture_ledger(
     event = matches[0]
     orbit = event.binary_orbital_state
     if (
-        not event.post_compaction_verified
+        not event.post_compaction_verified or not event.lineage_verified
         or not event.native_conservation_verified
         or orbit is None
     ):
-        raise ValueError("zoom capture lacks a committed native binary event")
+        raise ValueError(
+            "zoom capture lacks a committed native binary event on a verified "
+            "restart lineage"
+        )
     masses = [member.mass_msun for member in event.members]
     total = sum(masses)
     q = min(masses) / max(masses)

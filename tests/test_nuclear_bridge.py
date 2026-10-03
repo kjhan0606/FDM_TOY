@@ -201,6 +201,7 @@ def test_capture_event_constructor_preserves_ledger_provenance() -> None:
         first_line=1,
         last_line=3,
         post_compaction_verified=True,
+        lineage_verified=True,
     )
     bridge = NuclearBridgeInput.from_capture_event(
         event,
