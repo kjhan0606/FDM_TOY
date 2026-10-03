@@ -41,8 +41,8 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def finest_adjacent_pairs(manifest: Path) -> list[tuple[str, tuple[int, str], tuple[int, str]]]:
-    """Return case ID, finest run, and its next-coarser manifest run."""
+def all_adjacent_pairs(manifest: Path) -> list[tuple[str, tuple[int, str], tuple[int, str]]]:
+    """Return every fine/coarse adjacent resolution pair in the manifest."""
 
     grouped: dict[str, list[tuple[int, str]]] = {}
     seen_run_ids: set[str] = set()
@@ -65,8 +65,21 @@ def finest_adjacent_pairs(manifest: Path) -> list[tuple[str, tuple[int, str], tu
         ordered = sorted(runs, reverse=True)
         if len(ordered) < 2 or len({level for level, _ in ordered}) != len(ordered):
             raise ValueError(f"{case_id} lacks two distinct resolution levels")
-        pairs.append((case_id, ordered[0], ordered[1]))
+        pairs.extend(
+            (case_id, fine, coarse)
+            for fine, coarse in zip(ordered[:-1], ordered[1:], strict=True)
+        )
     return pairs
+
+
+def finest_adjacent_pairs(manifest: Path) -> list[tuple[str, tuple[int, str], tuple[int, str]]]:
+    """Return case ID, finest run, and its next-coarser manifest run."""
+
+    pairs = all_adjacent_pairs(manifest)
+    first_by_case = {}
+    for case_id, fine, coarse in pairs:
+        first_by_case.setdefault(case_id, (case_id, fine, coarse))
+    return list(first_by_case.values())
 
 
 def _require_complete(run: Path, *, case_id: str, resolution: int) -> dict[str, str]:

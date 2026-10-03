@@ -24,6 +24,10 @@ def test_finest_adjacent_pair_skips_obsolete_coarse_level(tmp_path: Path) -> Non
     assert reassessment.finest_adjacent_pairs(manifest) == [
         ("case_a", (512, "case_a_n512"), (256, "case_a_n256"))
     ]
+    assert reassessment.all_adjacent_pairs(manifest) == [
+        ("case_a", (512, "case_a_n512"), (256, "case_a_n256")),
+        ("case_a", (256, "case_a_n256"), (128, "case_a_n128")),
+    ]
 
 
 def test_missing_run_is_rejected_before_output_creation(tmp_path: Path) -> None:
