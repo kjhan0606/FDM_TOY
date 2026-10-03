@@ -73,6 +73,7 @@ def test_followup_manifest_rejects_unresolved_smaller_separation() -> None:
     [
         ("q030e000_a020", "qe_q030_e000_a020", [0.43, 0.438]),
         ("q100e030_a020", "qe_q100_e030_a020", [0.43, 0.438]),
+        ("q030e030_a020", "qe_q030_e030_a020", [0.43, 0.438]),
         ("q100e000_a010", "qe_q100_e000_a010", [0.215, 0.219]),
     ],
 )

@@ -523,6 +523,16 @@ single-resolution diagnostics, not accepted rate rows: the `n=384` spatial
 comparison, `n=768` doubled-box control, conservation and wave-response
 checks, and a separately validated `(a,e) -> <r>` mapping remain required.
 
+The separate `q=0.3, e=0` and `q=1, e=0.3` follow-ups do not by themselves
+support simultaneous interpolation in both variables: the runtime requires
+all four measured q/e corners with common mass and separation support. The
+prospective cross-corner `q=0.3, e=0.3, a/r_c=0.20` triplet is registered in
+`results/wave_calibration_qe_followup_q030e030_a020/` using the same fixed
+`[0.430, 0.438] pc` bin and `n=256/384/768` geometry. Registration does not
+launch it or establish that the measured q/e values form a common rectangle;
+orbit coverage, conservation, spatial convergence, doubled-box agreement,
+and the distinct joint `(a,e) -> <r>` mapping still have to pass.
+
 The `n=768` control has 52.8 pc box length and the same 0.06875 pc cell size
 as the `n=384` fine run. The 16-array estimate is 54 GiB, below the design's
 80 GiB reference but **not** a measured peak or a capacity clearance. Prior
