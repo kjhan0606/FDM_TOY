@@ -46,6 +46,7 @@ class FDMProjectedOrbitalResponse:
     diffusion_tensor_pc2_myr3: np.ndarray | None
     reason: str
     source_sha256: tuple[str, ...] = ()
+    diffusion_convention: str = "unspecified"
 
 
 def _orbital_basis(
@@ -150,6 +151,7 @@ def project_fdm_outer_response_to_orbit(
         drift_acceleration_pc_myr2=drift,
         diffusion_tensor_pc2_myr3=diffusion,
         reason="frame and q/e/r support only; no physical delay inferred",
+        diffusion_convention=table.diffusion_convention,
     )
 
 
@@ -201,4 +203,5 @@ def project_fdm_response_family_to_orbit(
         diffusion_tensor_pc2_myr3=diffusion,
         reason="q/e/r mixture and orbital projection only; no physical delay inferred",
         source_sha256=decision["source_sha256"],
+        diffusion_convention=decision["diffusion_convention"],
     )

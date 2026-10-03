@@ -25,6 +25,7 @@ class FDMOuterResponseTable:
     diffusion_tensor_pc2_myr3: np.ndarray
     response_status: str = "uncalibrated"
     component_frame: str = "unspecified"
+    diffusion_convention: str = "unspecified"
 
     def __post_init__(self) -> None:
         radii = np.asarray(self.radii_pc, dtype=float)
@@ -47,6 +48,8 @@ class FDMOuterResponseTable:
             raise ValueError("unsupported outer response status")
         if self.component_frame not in {"unspecified", "orbital_rtn", "cartesian_lab"}:
             raise ValueError("unsupported outer response component frame")
+        if self.diffusion_convention not in {"unspecified", "velocity_covariance_rate"}:
+            raise ValueError("unsupported outer response diffusion convention")
         # np.asarray may alias the caller's mutable arrays.  The drift
         # interpolators snapshot their inputs, whereas as_dict and diffusion
         # interpolation read these fields later; aliases would make one
@@ -121,17 +124,18 @@ class FDMOuterResponseTable:
 
     def as_dict(self) -> dict[str, Any]:
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "radii_pc": self.radii_pc.tolist(),
             "drift_acceleration_pc_myr2": self.drift_acceleration_pc_myr2.tolist(),
             "diffusion_tensor_pc2_myr3": self.diffusion_tensor_pc2_myr3.tolist(),
             "response_status": self.response_status,
             "component_frame": self.component_frame,
+            "diffusion_convention": self.diffusion_convention,
         }
 
     @classmethod
     def from_dict(cls, record: Mapping[str, Any]) -> "FDMOuterResponseTable":
-        if not isinstance(record, Mapping) or record.get("schema_version") != 1:
+        if not isinstance(record, Mapping) or record.get("schema_version") not in {1, 2}:
             raise ValueError("unsupported outer FDM response schema")
         return cls(
             radii_pc=record.get("radii_pc"),
@@ -139,4 +143,5 @@ class FDMOuterResponseTable:
             diffusion_tensor_pc2_myr3=record.get("diffusion_tensor_pc2_myr3"),
             response_status=record.get("response_status", "uncalibrated"),
             component_frame=record.get("component_frame", "unspecified"),
+            diffusion_convention=record.get("diffusion_convention", "unspecified"),
         )

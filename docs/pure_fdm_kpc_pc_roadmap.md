@@ -223,7 +223,7 @@ combine overlapping intervals, or create a coalescence time.
 SHA-256, and path.  These fields are diagnostics only; they do not define a
 drag law.
 
-### 2. Outer response and handoff contract — complete in the toy repository
+### 2. Outer response and handoff contract — numerical interface only
 
 `FDMOuterResponseTable` accepts a measured vector drift and a symmetric
 positive-semidefinite velocity-diffusion tensor.  It returns `censored` when
@@ -251,9 +251,19 @@ rotates the interpolated RTN vector/tensor into Cartesian coordinates.  The
 family snapshots its node and source-hash containers at construction.
 These are **numerical candidates**, not source verification: a digest alone
 does not establish that a run is physically converged or that q/e interpolation
-is accurate.  Paired resolution, phase replication, independent source audit,
-and restartable stochastic orbit evolution are still required before any
-physical delay is inferred.  The static kpc integrator does not consume them.
+is accurate.  Response schema v2 additionally declares whether its diffusion
+tensor is the full velocity-increment covariance rate,
+`Cov[Δv] / Δt`, rather than half that rate.  Legacy schema-v1 tables load with
+an unspecified convention and cannot be sampled; q/e cells whose corners
+disagree on the convention are censored.  `sample_candidate_fdm_velocity_kick`
+uses the full-rate convention to sample one local Gaussian velocity increment
+with a seed and accepted-step index that reproduce the same draw after a
+restart.  This is a numerical component only: no measured coherence-time
+criterion, white-noise validity, source-convergence audit, coupled stochastic
+orbit integration, or physical delay follows from it.  Paired resolution,
+phase replication, independent source audit, and restartable stochastic orbit
+evolution are still required before any physical delay is inferred.  The
+static kpc integrator does not consume these candidate kicks.
 
 `validate_outer_inner_handoff` requires:
 

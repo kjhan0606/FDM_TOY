@@ -108,3 +108,21 @@ def test_response_snapshots_inputs_and_cannot_be_mutated_after_construction() ->
     ):
         with pytest.raises(ValueError, match="WRITEABLE"):
             array.setflags(write=True)
+
+
+def test_diffusion_convention_roundtrip_and_legacy_default() -> None:
+    response = FDMOuterResponseTable(
+        radii_pc=np.array([10.0, 20.0]),
+        drift_acceleration_pc_myr2=np.zeros((2, 3)),
+        diffusion_tensor_pc2_myr3=np.array([np.eye(3)] * 2),
+        response_status="calibrated",
+        diffusion_convention="velocity_covariance_rate",
+    )
+    record = response.as_dict()
+    assert record["schema_version"] == 2
+    assert FDMOuterResponseTable.from_dict(record).diffusion_convention == "velocity_covariance_rate"
+    legacy = {key: value for key, value in record.items() if key != "diffusion_convention"}
+    legacy["schema_version"] = 1
+    assert FDMOuterResponseTable.from_dict(legacy).diffusion_convention == "unspecified"
+    with pytest.raises(ValueError, match="diffusion convention"):
+        FDMOuterResponseTable.from_dict({**record, "diffusion_convention": "half_rate"})

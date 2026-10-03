@@ -107,6 +107,20 @@ def test_qe_family_snapshots_mutable_grid_containers() -> None:
     assert after["source_sha256"] == before["source_sha256"]
 
 
+def test_qe_family_censors_mixed_diffusion_conventions() -> None:
+    explicit = FDMOuterResponseTable(
+        radii_pc=np.array([10.0, 20.0]),
+        drift_acceleration_pc_myr2=np.zeros((2, 3)),
+        diffusion_tensor_pc2_myr3=np.array([np.eye(3)] * 2),
+        response_status="calibrated",
+        component_frame="orbital_rtn",
+        diffusion_convention="velocity_covariance_rate",
+    )
+    family = _family(tables=((explicit, _table(2.0)), (_table(3.0), _table(4.0))))
+    assert "incompatible diffusion" in family.decision(0.3, 0.4, 15.0)["reason"]
+    assert family.decision(0.1, 0.0, 15.0)["diffusion_convention"] == "velocity_covariance_rate"
+
+
 @pytest.mark.parametrize("replacement", [
     {"mass_ratios_q": (0.5, 0.1)},
     {"eccentricities": (0.0, 1.0)},

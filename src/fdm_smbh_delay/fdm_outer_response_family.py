@@ -88,6 +88,7 @@ class FDMOuterResponseFamily:
         drift = np.zeros(3, dtype=float)
         diffusion = np.zeros((3, 3), dtype=float)
         sources: list[str] = []
+        conventions: set[str] = set()
         for qi, qw in q_weights:
             for ei, ew in e_weights:
                 response = self.tables[qi][ei].decision(radius_pc)
@@ -100,6 +101,9 @@ class FDMOuterResponseFamily:
                 drift += weight * response["drift_acceleration_pc_myr2"]
                 diffusion += weight * response["diffusion_tensor_pc2_myr3"]
                 sources.append(self.source_sha256[qi][ei])
+                conventions.add(self.tables[qi][ei].diffusion_convention)
+        if len(conventions) != 1:
+            return {"status": "censored", "reason": "q/e response corners use incompatible diffusion conventions"}
         diffusion = 0.5 * (diffusion + diffusion.T)
         if (
             np.any(~np.isfinite(drift)) or np.any(~np.isfinite(diffusion))
@@ -111,4 +115,5 @@ class FDMOuterResponseFamily:
             "drift_acceleration_pc_myr2": drift,
             "diffusion_tensor_pc2_myr3": diffusion,
             "source_sha256": tuple(sources),
+            "diffusion_convention": conventions.pop(),
         }
