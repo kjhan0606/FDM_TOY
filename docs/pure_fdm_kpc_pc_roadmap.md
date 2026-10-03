@@ -265,6 +265,17 @@ phase replication, independent source audit, and restartable stochastic orbit
 evolution are still required before any physical delay is inferred.  The
 static kpc integrator does not consume these candidate kicks.
 
+For kpc q/e queries, `spherical_host_turning_points` derives a distinct
+host-orbit eccentricity from peri- and apocentre in the static spherical
+potential, including the secondary SMBH's reflex point-mass term.  Its
+caller must declare a finite radial support interval that brackets both
+turning points; an unbound, radial, or unbracketed orbit is censored, including
+when a tabulated host profile runs out.  `project_fdm_response_family_in_host`
+derives q from the central primary mass and secondary mass, then projects only
+within the measured q/e/r response support.  This is a static-host numerical
+diagnostic, not the SMBH-only Keplerian eccentricity after binding, a model of
+galaxy-merger torques, or a validated stochastic orbit evolution.
+
 `validate_outer_inner_handoff` requires:
 
 - a positive-width overlap, at least a factor of two in separation;

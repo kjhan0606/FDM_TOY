@@ -17,6 +17,12 @@ from .fdm_outer_response import FDMOuterResponseTable
 
 
 def _axis_weights(nodes: tuple[float, ...], value: float) -> tuple[tuple[int, float], ...]:
+    # Turning-point roots can differ from a nominal measured q/e node by a
+    # handful of floating-point ulps.  Snap only at machine precision; a
+    # physically distinct query must still be rejected or interpolated.
+    for index, node in enumerate(nodes):
+        if math.isclose(value, node, rel_tol=0.0, abs_tol=8.0 * np.finfo(float).eps):
+            return ((index, 1.0),)
     if value < nodes[0] or value > nodes[-1]:
         raise ValueError("q/e query lies outside measured grid")
     right = int(np.searchsorted(nodes, value, side="left"))
