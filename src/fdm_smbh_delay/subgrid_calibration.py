@@ -687,8 +687,10 @@ class SubgridCalibrationTable:
         )
         if (
             np.any(~np.isfinite(acceptance_values))
+            or maximum_spatial < 0.0
             or maximum_spatial
             > MAXIMUM_ACCEPTED_SPATIAL_SYSTEMATIC_FRACTION
+            or maximum_energy_error <= 0.0
             or maximum_energy_error
             > MAXIMUM_ACCEPTED_ENERGY_ERROR_OVER_TRANSFER
             or (
@@ -709,6 +711,19 @@ class SubgridCalibrationTable:
             or acceptance.get("extrapolation") != "prohibited"
         ):
             raise ValueError("subgrid release acceptance criteria are unsafe")
+        if any(
+            row.orbital_power_spatial_systematic_fraction > maximum_spatial
+            or row.orbital_torque_spatial_systematic_fraction > maximum_spatial
+            or row.wave_total_spatial_systematic_fraction > maximum_spatial
+            or row.reference_complete_orbits < minimum_orbits
+            or row.comparison_complete_orbits < minimum_orbits
+            or row.reference_minimum_half_density_radius_over_cell_size
+            < minimum_core_cells
+            or row.comparison_minimum_half_density_radius_over_cell_size
+            < minimum_core_cells
+            for row in table.rows
+        ):
+            raise ValueError("subgrid release row exceeds its recorded acceptance criteria")
         if schema_version >= 4 and any(
             row.absolute_mean_eccentricity_mismatch
             > maximum_eccentricity_mismatch

@@ -968,6 +968,28 @@ def test_release_loader_rejects_relaxed_acceptance_criteria(
         SubgridCalibrationTable.from_release(output)
 
 
+@pytest.mark.parametrize(
+    "criterion,value",
+    (
+        ("maximum_spatial_systematic_fraction", 0.05),
+        ("minimum_complete_orbits_per_bin", 100),
+        ("minimum_core_radius_cells", 100.0),
+    ),
+)
+def test_release_loader_applies_recorded_limits_to_each_row(
+    tmp_path: Path, criterion: str, value: float,
+) -> None:
+    path = _write_summary(tmp_path)
+    output = tmp_path / "subgrid.csv"
+    write_calibration_table([CalibrationSource("boey2025", path)], output=output)
+    summary_path = output.with_suffix(".summary.json")
+    summary = json.loads(summary_path.read_text())
+    summary["acceptance"][criterion] = value
+    summary_path.write_text(json.dumps(summary))
+    with pytest.raises(ValueError, match="row exceeds its recorded acceptance criteria"):
+        SubgridCalibrationTable.from_release(output)
+
+
 def test_release_loader_rejects_relaxed_eccentricity_criterion(
     tmp_path: Path,
 ) -> None:
