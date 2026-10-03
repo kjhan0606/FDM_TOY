@@ -22,7 +22,11 @@ from fdm_smbh_delay.binary_evolution import (
 )
 from fdm_smbh_delay.constants import KM_S_TO_PC_MYR
 from fdm_smbh_delay.exchange_scaling import schrodinger_poisson_similarity_parameter
-from fdm_smbh_delay.subgrid_calibration import InterpolatedSubgridRates
+from fdm_smbh_delay.subgrid_calibration import (
+    InterpolatedSubgridRates,
+    SubgridCalibrationRow,
+    SubgridCalibrationTable,
+)
 
 
 def _particle_mass_for_similarity(similarity: float, core_radius_pc: float) -> float:
@@ -244,13 +248,13 @@ def test_qe_fdm_adapter_passes_runtime_e_and_censors_missing_plane() -> None:
                 raise ValueError("requested mass-ratio/eccentricity plane is absent")
             if coordinates["eccentricity"] != pytest.approx(0.3):
                 raise ValueError("requested mass-ratio/eccentricity plane is absent")
-            if coordinates["separation_over_core_radius"] != pytest.approx(0.2):
+            if coordinates["separation_over_core_radius"] != pytest.approx(0.209):
                 raise ValueError("separation lies outside the calibrated range")
             return InterpolatedSubgridRates(
                 profile_id="boey2025",
                 schrodinger_poisson_similarity_parameter=1.0,
                 binary_to_soliton_mass=0.13,
-                separation_over_core_radius=0.2,
+                separation_over_core_radius=0.209,
                 dimensionless_orbital_power=-1.0e-3,
                 dimensionless_orbital_torque=-2.0e-3,
                 dimensionless_wave_total_energy_rate=1.0e-3,
@@ -287,3 +291,51 @@ def test_qe_fdm_adapter_passes_runtime_e_and_censors_missing_plane() -> None:
     )
     with pytest.raises(UncalibratedBinaryState, match="similarity parameter"):
         unsupported_similarity(1.0, 0.3)
+
+
+def test_qe_provider_uses_mean_separation_at_measured_bin_boundary() -> None:
+    core_radius = 5.0
+    particle_mass = 1.0e-21
+    similarity = schrodinger_poisson_similarity_parameter(
+        particle_mass_ev=particle_mass,
+        soliton_mass_msun=1.0e9,
+        core_radius_pc=core_radius,
+    )
+    row = SubgridCalibrationRow(
+        profile_id="test_soliton",
+        source_case_id="qe_measured_e030",
+        schrodinger_poisson_similarity_parameter=similarity,
+        binary_to_soliton_mass=0.13,
+        separation_bin_index=0,
+        lower_separation_over_core_radius=0.205,
+        upper_separation_over_core_radius=0.215,
+        reference_mean_separation_over_core_radius=0.209,
+        dimensionless_orbital_power=-1.0e-3,
+        dimensionless_orbital_torque=-2.0e-3,
+        dimensionless_wave_total_energy_rate=1.0e-3,
+        orbital_power_spatial_systematic_fraction=0.1,
+        orbital_torque_spatial_systematic_fraction=0.1,
+        wave_total_spatial_systematic_fraction=0.1,
+        reference_resolution=512,
+        comparison_resolution=384,
+        reference_complete_orbits=12,
+        comparison_complete_orbits=12,
+        reference_minimum_half_density_radius_over_cell_size=8.0,
+        comparison_minimum_half_density_radius_over_cell_size=6.0,
+        mass_ratio_q=0.3,
+        reference_eccentricity=0.3,
+    )
+    provider = calibrated_qe_fdm_rate_provider(
+        SubgridCalibrationTable((row,)),
+        profile_id="test_soliton",
+        mass1_msun=1.0e8,
+        mass2_msun=3.0e7,
+        soliton_mass_msun=1.0e9,
+        core_radius_pc=core_radius,
+        particle_mass_ev=particle_mass,
+    )
+    assert provider(1.0, 0.3).orbital_power_msun_pc2_myr3 < 0.0
+    with pytest.raises(UncalibratedBinaryState, match="separation"):
+        provider(0.95, 0.3)
+    with pytest.raises(UncalibratedBinaryState, match="separation"):
+        provider(1.05, 0.3)

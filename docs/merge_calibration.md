@@ -130,6 +130,13 @@ Analytic FDM drag is disabled because the resolved wake supplies the force.
 The production table schema is version 4. Each accepted row now carries the
 SMBH mass ratio and the duration-weighted, orbit-averaged osculating
 eccentricity in addition to profile, binary mass fraction, and separation.
+Its separation coordinate is the orbit-mean physical SMBH distance, not the
+semimajor axis. The bound-binary runtime maps its secular `(a,e)` state to
+`<r>_t=a(1+e^2/2)` before lookup, matching the Kepler mean used in the run
+manifest. This mapping is a Kepler approximation: a strongly non-Keplerian
+orbit in a disturbed core requires an explicitly measured mean separation,
+not silent use of `a` as a substitute. If the mapped mean lies outside
+accepted bins, the binary is uncalibrated/censored.
 The manifest's input eccentricity remains separate provenance because the
 extended soliton potential shifts the point-mass osculating diagnostic.
 Runtime lookup interpolates in `q` or `e` only when

@@ -12,7 +12,10 @@ from scipy.optimize import brentq
 from .constants import G_INTERNAL
 from .delay_budget import DelaySegment
 from .gw import peters_orbital_rates, peters_time_myr
-from .orbital_exchange import keplerian_exchange_rates
+from .orbital_exchange import (
+    keplerian_exchange_rates,
+    keplerian_time_mean_separation_pc,
+)
 
 if TYPE_CHECKING:
     from .subgrid_calibration import SubgridCalibrationTable
@@ -185,7 +188,9 @@ def calibrated_qe_fdm_rate_provider(
     """Adapt an accepted schema-v4 table without q, e, or a extrapolation.
 
     The table admits interpolation only when measured ``(q, e)`` planes
-    bracket the state and share mass/separation support. Converting a failure to
+    bracket the state and share mass/separation support. Its separation bins
+    are orbit-mean distances, so ``a,e`` first map to their Kepler time mean.
+    Converting a failure to
     ``UncalibratedBinaryState`` makes the orbit integrator return a censored
     calibration gap instead of silently substituting another plane.
     """
@@ -201,6 +206,9 @@ def calibrated_qe_fdm_rate_provider(
         from .subgrid_calibration import physical_subgrid_rates
 
         try:
+            mean_separation_pc = keplerian_time_mean_separation_pc(
+                semimajor_axis_pc, eccentricity
+            )
             rates = physical_subgrid_rates(
                 table,
                 profile_id=profile_id,
@@ -209,7 +217,7 @@ def calibrated_qe_fdm_rate_provider(
                 soliton_mass_msun=soliton_mass_msun,
                 core_radius_pc=core_radius_pc,
                 particle_mass_ev=particle_mass_ev,
-                separation_pc=semimajor_axis_pc,
+                separation_pc=mean_separation_pc,
                 eccentricity=eccentricity,
             )
         except ValueError as error:

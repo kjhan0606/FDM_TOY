@@ -38,6 +38,25 @@ class OrbitalFrame:
     normal_unit: np.ndarray
 
 
+def keplerian_time_mean_separation_pc(
+    semimajor_axis_pc: float, eccentricity: float
+) -> float:
+    """Return the Kepler time mean of radius, ``a (1 + e**2 / 2)``.
+
+    The live-wave table bins orbit-mean separation, not semimajor axis. This
+    conversion is the secular Kepler approximation used by its run manifest.
+    """
+
+    if (
+        not np.isfinite(semimajor_axis_pc)
+        or semimajor_axis_pc <= 0.0
+        or not np.isfinite(eccentricity)
+        or not 0.0 <= eccentricity < 1.0
+    ):
+        raise ValueError("Kepler orbit-mean separation requires a bound orbit")
+    return float(semimajor_axis_pc * (1.0 + 0.5 * eccentricity**2))
+
+
 def orbital_frame_from_relative_state(
     displacement: np.ndarray, relative_velocity: np.ndarray
 ) -> OrbitalFrame:

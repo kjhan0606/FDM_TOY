@@ -5,8 +5,33 @@ from fdm_smbh_delay.orbital_exchange import (
     advance_keplerian_exchange,
     keplerian_elements_from_relative_state,
     keplerian_exchange_rates,
+    keplerian_time_mean_separation_pc,
     orbital_frame_from_relative_state,
 )
+
+
+@pytest.mark.parametrize("eccentricity", [0.0, 0.3, 0.8])
+def test_kepler_time_mean_separation_matches_orbital_quadrature(
+    eccentricity: float,
+) -> None:
+    axis = 2.0
+    anomaly = np.linspace(0.0, 2.0 * np.pi, 4097)
+    radius = axis * (1.0 - eccentricity * np.cos(anomaly))
+    mean_anomaly_weight = 1.0 - eccentricity * np.cos(anomaly)
+    quadrature = np.trapezoid(radius * mean_anomaly_weight, anomaly) / np.trapezoid(
+        mean_anomaly_weight, anomaly
+    )
+    assert keplerian_time_mean_separation_pc(axis, eccentricity) == pytest.approx(
+        quadrature, rel=1.0e-12
+    )
+
+
+@pytest.mark.parametrize("axis,eccentricity", [(0.0, 0.0), (1.0, 1.0), (1.0, -0.1)])
+def test_kepler_time_mean_separation_rejects_unbound_coordinates(
+    axis: float, eccentricity: float,
+) -> None:
+    with pytest.raises(ValueError, match="bound orbit"):
+        keplerian_time_mean_separation_pc(axis, eccentricity)
 
 
 def test_orbital_frame_is_right_handed() -> None:

@@ -15,6 +15,7 @@ from .literature import (
     koo2024_equivalent_schive_soliton,
 )
 from .orbit import make_orbital_state
+from .orbital_exchange import keplerian_time_mean_separation_pc
 from .soliton import SchiveSoliton
 
 
@@ -351,8 +352,8 @@ def run_specifications(
         for resolution in resolutions_by_tier[case.tier]:
             cell_size = box_size / resolution
             plummer_radius = max(0.001, 0.5 * cell_size)
-            kepler_mean_separation = case.semi_major_axis_pc * (
-                1.0 + 0.5 * case.eccentricity**2
+            kepler_mean_separation = keplerian_time_mean_separation_pc(
+                case.semi_major_axis_pc, case.eccentricity
             )
             pericentre_separation = case.semi_major_axis_pc * (
                 1.0 - case.eccentricity
