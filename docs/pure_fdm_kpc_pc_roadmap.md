@@ -273,6 +273,22 @@ phase replication, independent source audit, and restartable stochastic orbit
 evolution are still required before any physical delay is inferred.  The
 static kpc integrator does not consume these candidate kicks.
 
+`read_verified_fdm_response_sources` adds a byte-level provenance route for
+future measured q/e tables.  Its small JSON manifest names every rectangular
+q/e node by path and SHA-256; each node contains its own q/e coordinates,
+source case ID, versioned response table, and versioned halo closure.  The
+loader reads only those named files (at most 1 MB for the manifest and 8 MB
+per node), checks each digest and coordinate, and rejects missing corners.
+`VerifiedFDMResponseSourceBundle.verify_current_files()` re-hashes them before
+reuse.  `integrate_verified_candidate_fdm_to_hard_boundary` checks the files
+before and after a candidate run, while the verified phase checkpoint also
+binds the exact manifest digest.  These checks establish artifact identity,
+not raw-wave conservation, resolution convergence, phase replication, or a
+physical response law.  The 2026-10-03 finest-pair reassessment at
+`/gpfs/kjhan/FDM_TOY_RESULTS/qe_extension/reassessment_20261003_finest_v1/assessment.json`
+still reports 10 cases, zero candidates, and zero accepted separation bins;
+there is therefore no measured production q/e table to load or extrapolate.
+
 `integrate_candidate_fdm_outer_orbit` now supplies a separate, bounded
 numerical trajectory for the outer response.  It uses the existing
 primary--secondary relative RK4 force operator for the static host, stellar

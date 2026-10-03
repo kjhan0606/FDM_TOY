@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 from typing import Mapping
 
@@ -13,6 +14,7 @@ import numpy as np
 
 from .fdm_outer_halo import FDMOuterHaloClosure
 from .fdm_outer_response_family import FDMOuterResponseFamily
+from .fdm_response_sources import VerifiedFDMResponseSourceBundle
 from .kpc_checkpoint import (
     _digest, _physics_value, _state_from_record as _phase_state_from_record,
     _state_record as _phase_state_record, kpc_implementation_sha256,
@@ -27,7 +29,8 @@ _CANDIDATE_MODULES = (
     "fdm_candidate_checkpoint.py", "fdm_candidate_orbit.py",
     "fdm_candidate_phase.py",
     "fdm_orbital_response.py", "fdm_outer_response.py",
-    "fdm_outer_response_family.py", "fdm_response_kick.py", "host_orbit.py",
+    "fdm_outer_response_family.py", "fdm_response_kick.py",
+    "fdm_response_sources.py", "host_orbit.py",
 )
 
 
@@ -80,7 +83,13 @@ def candidate_phase_physics_sha256(
     closure_by_source_sha256: Mapping[str, FDMOuterHaloClosure],
     radial_support_pc: tuple[float, float],
     random_seed: int,
+    source_manifest_sha256: str | None = None,
 ) -> str:
+    if source_manifest_sha256 is not None and (
+        not isinstance(source_manifest_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", source_manifest_sha256) is None
+    ):
+        raise ValueError("candidate source manifest SHA-256 is invalid")
     return _digest({
         "outer_physics_sha256": candidate_physics_sha256(
             model=model, config=outer_config, response_family=response_family,
@@ -88,6 +97,7 @@ def candidate_phase_physics_sha256(
             radial_support_pc=radial_support_pc, random_seed=random_seed,
         ),
         "phase_config": _physics_value(phase_config),
+        "source_manifest_sha256": source_manifest_sha256,
     })
 
 
@@ -224,6 +234,7 @@ def write_candidate_fdm_phase_checkpoint(
     closure_by_source_sha256: Mapping[str, FDMOuterHaloClosure],
     radial_support_pc: tuple[float, float],
     random_seed: int,
+    source_manifest_sha256: str | None = None,
 ) -> None:
     """Atomically preserve trajectory state and full phase-transition history."""
 
@@ -242,6 +253,7 @@ def write_candidate_fdm_phase_checkpoint(
             response_family=response_family,
             closure_by_source_sha256=closure_by_source_sha256,
             radial_support_pc=radial_support_pc, random_seed=random_seed,
+            source_manifest_sha256=source_manifest_sha256,
         ),
         "implementation_sha256": candidate_implementation_sha256(),
         "state_sha256": _digest(record_state),
@@ -260,6 +272,7 @@ def read_candidate_fdm_phase_checkpoint(
     closure_by_source_sha256: Mapping[str, FDMOuterHaloClosure],
     radial_support_pc: tuple[float, float],
     random_seed: int,
+    source_manifest_sha256: str | None = None,
 ) -> KpcToHardState:
     """Reject changed response/phase physics, implementation, or history."""
 
@@ -274,6 +287,7 @@ def read_candidate_fdm_phase_checkpoint(
         response_family=response_family,
         closure_by_source_sha256=closure_by_source_sha256,
         radial_support_pc=radial_support_pc, random_seed=random_seed,
+        source_manifest_sha256=source_manifest_sha256,
     )
     if record["physics_sha256"] != expected_physics:
         raise ValueError("candidate phase checkpoint physics fingerprint differs")
@@ -285,4 +299,54 @@ def read_candidate_fdm_phase_checkpoint(
     dynamics = state.dynamical_state
     if dynamics.elapsed_myr > outer_config.maximum_time_myr or dynamics.completed_steps > outer_config.maximum_steps:
         raise ValueError("candidate phase checkpoint exceeds outer integration budget")
+    return state
+
+
+def write_verified_candidate_fdm_phase_checkpoint(
+    path: str | Path,
+    state: KpcToHardState,
+    *,
+    source_bundle: VerifiedFDMResponseSourceBundle,
+    model: KpcInspiralModel,
+    outer_config: KpcIntegrationConfig,
+    phase_config: KpcToHardConfig,
+    radial_support_pc: tuple[float, float],
+    random_seed: int,
+) -> None:
+    """Bind a phase checkpoint to an unchanged source manifest and nodes."""
+
+    source_bundle.verify_current_files()
+    write_candidate_fdm_phase_checkpoint(
+        path, state, model=model, outer_config=outer_config,
+        phase_config=phase_config,
+        response_family=source_bundle.response_family,
+        closure_by_source_sha256=source_bundle.closure_by_source_sha256,
+        radial_support_pc=radial_support_pc, random_seed=random_seed,
+        source_manifest_sha256=source_bundle.manifest_sha256,
+    )
+    source_bundle.verify_current_files()
+
+
+def read_verified_candidate_fdm_phase_checkpoint(
+    path: str | Path,
+    *,
+    source_bundle: VerifiedFDMResponseSourceBundle,
+    model: KpcInspiralModel,
+    outer_config: KpcIntegrationConfig,
+    phase_config: KpcToHardConfig,
+    radial_support_pc: tuple[float, float],
+    random_seed: int,
+) -> KpcToHardState:
+    """Re-check current source bytes and the manifest-bound phase state."""
+
+    source_bundle.verify_current_files()
+    state = read_candidate_fdm_phase_checkpoint(
+        path, model=model, outer_config=outer_config,
+        phase_config=phase_config,
+        response_family=source_bundle.response_family,
+        closure_by_source_sha256=source_bundle.closure_by_source_sha256,
+        radial_support_pc=radial_support_pc, random_seed=random_seed,
+        source_manifest_sha256=source_bundle.manifest_sha256,
+    )
+    source_bundle.verify_current_files()
     return state

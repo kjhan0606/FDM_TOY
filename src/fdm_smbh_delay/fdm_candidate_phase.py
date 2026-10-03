@@ -6,7 +6,7 @@ candidate stochastic trajectory into an accepted physical delay or handoff.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Mapping
 
 import numpy as np
@@ -16,6 +16,7 @@ from .fdm_candidate_orbit import (
 )
 from .fdm_outer_halo import FDMOuterHaloClosure
 from .fdm_outer_response_family import FDMOuterResponseFamily
+from .fdm_response_sources import VerifiedFDMResponseSourceBundle
 from .kpc_inspiral import (
     DualNucleusState,
     KpcIntegrationConfig,
@@ -57,6 +58,7 @@ class CandidateFDMKpcToHardResult:
     element_samples: tuple[CandidateBinaryElementSample, ...]
     used_source_sha256: tuple[str, ...]
     reason: str
+    source_manifest_sha256: str | None = None
 
 
 def _same_dynamics(first: DualNucleusState, second: DualNucleusState) -> bool:
@@ -243,3 +245,36 @@ def integrate_candidate_fdm_to_hard_boundary(
         steps += state.dynamical_state.completed_steps - orbit.accepted_states[0].completed_steps
         if assessment.status != "checkpoint":
             return result(assessment.status, assessment.reason)
+
+
+def integrate_verified_candidate_fdm_to_hard_boundary(
+    *,
+    source_bundle: VerifiedFDMResponseSourceBundle,
+    initial_state: KpcToHardState,
+    model: KpcInspiralModel,
+    outer_config: KpcIntegrationConfig,
+    phase_config: KpcToHardConfig,
+    radial_support_pc: tuple[float, float],
+    random_seed: int,
+    step_budget: int | None = None,
+) -> CandidateFDMKpcToHardResult:
+    """Run the numerical candidate only while all named source bytes match.
+
+    File identity is checked both before and after integration; it is not a
+    substitute for convergence, force conservation, or phase-replica audits.
+    """
+
+    source_bundle.verify_current_files()
+    result = integrate_candidate_fdm_to_hard_boundary(
+        initial_state=initial_state,
+        model=model,
+        outer_config=outer_config,
+        phase_config=phase_config,
+        response_family=source_bundle.response_family,
+        closure_by_source_sha256=source_bundle.closure_by_source_sha256,
+        radial_support_pc=radial_support_pc,
+        random_seed=random_seed,
+        step_budget=step_budget,
+    )
+    source_bundle.verify_current_files()
+    return replace(result, source_manifest_sha256=source_bundle.manifest_sha256)
