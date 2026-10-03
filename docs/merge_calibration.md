@@ -311,6 +311,24 @@ three require a changed resolution/initial-condition design before duration
 can matter.  The report is a design diagnostic, not a registered set of bin
 edges or authorization to launch or release a calibration row.
 
+An additional hash-verified audit of **all 18 adjacent pilot pairs**, not
+only the finest pair per case, is recorded at
+`/gpfs/kjhan/FDM_TOY_RESULTS/qe_extension/adjacent_pilot_audit_20261003_v1.json`
+(SHA-256 `32ded31033798e4ea6601419e61baaca6c4f6fc5f8f2b944d6f7933d3e7c3281`).
+It rechecked the 28 named completed runs and their diagnostic inputs before
+and after the audit. Eight pairs have common resolved-separation support but
+zero bins with eight complete orbits per run; six have no common support, and
+four lack even two initially resolved complete orbits in one member. In
+particular, the n=256/512 a/r_c=0.20 pairs with e=0 or 0.3 have common
+support and about 12 initially resolved orbits in each run, whereas the
+n=128/256 alternatives do not offer a usable common interval. A new n=256/384
+pair with n=512/768 same-cell-size box controls is therefore a *prospective
+resource design to test*, not an observed convergence result: its n=384
+support and long-duration behavior are unmeasured, and n=512 wave-response
+work remains subject to the project approval rule. The smaller-separation
+and e=0.6 cases also need separate resolution/initial-condition redesign;
+this audit does not justify promoting the n=256 route to them.
+
 For a **new** q/e campaign, record reviewed fixed physical edges, the
 resolution pair, the same-cell-size doubled-box control, and a necessary
 duration before running any seed or wave calculation:
