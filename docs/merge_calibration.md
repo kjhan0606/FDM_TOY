@@ -512,6 +512,17 @@ the bin. Neither nominal period count nor elapsed duration guarantees eight
 *resolved* orbits in that fixed bin. This one-plane feasibility triplet does
 not complete the required q/e and smaller-separation table extension.
 
+The completed baseline `n=256` orbit diagnostic has 15 complete orbit means
+in the registered `[0.430, 0.438] pc` bin. Their measured mean osculating
+eccentricity is 0.0332 (range 0.0259–0.0520), despite the nominal `e=0`
+initial condition. The calibration coordinate is the measured orbit-mean
+osculating eccentricity, not the input label. Consequently this coarse run
+cannot establish support at exactly `e=0`; that state remains censored unless
+separately measured support reaches it. These counts and coordinates are
+single-resolution diagnostics, not accepted rate rows: the `n=384` spatial
+comparison, `n=768` doubled-box control, conservation and wave-response
+checks, and a separately validated `(a,e) -> <r>` mapping remain required.
+
 The `n=768` control has 52.8 pc box length and the same 0.06875 pc cell size
 as the `n=384` fine run. The 16-array estimate is 54 GiB, below the design's
 80 GiB reference but **not** a measured peak or a capacity clearance. Prior

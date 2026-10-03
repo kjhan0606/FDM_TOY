@@ -251,6 +251,24 @@ def test_builder_accepts_only_bins_below_the_systematic_limit(
     )
 
 
+def test_nominal_circular_input_does_not_create_zero_e_support(
+    tmp_path: Path,
+) -> None:
+    path = _write_summary(tmp_path)
+    result = build_source_rows(CalibrationSource("boey2025", path))
+    row = result.accepted_rows[0]
+    assert row.reference_eccentricity == pytest.approx(0.23)
+    table = SubgridCalibrationTable((row,))
+    with pytest.raises(ValueError, match="eccentricity lies outside"):
+        table.interpolate(
+            profile_id="boey2025",
+            binary_to_soliton_mass=row.binary_to_soliton_mass,
+            separation_over_core_radius=row.reference_mean_separation_over_core_radius,
+            mass_ratio_q=row.mass_ratio_q,
+            eccentricity=0.0,
+        )
+
+
 def test_builder_rejects_an_underresolved_core(tmp_path: Path) -> None:
     path = _write_summary(tmp_path)
     n384 = tmp_path / "n384"
