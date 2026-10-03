@@ -6,10 +6,12 @@ import json
 import numpy as np
 import pytest
 
+import fdm_smbh_delay.kpc_checkpoint as kpc_checkpoint
 from fdm_smbh_delay.constants import G_INTERNAL
 from fdm_smbh_delay.galaxy_environment import CompositePotential, DehnenProfile
 from fdm_smbh_delay.kpc_checkpoint import (
     kpc_physics_sha256,
+    kpc_implementation_sha256,
     read_kpc_to_hard_checkpoint,
     write_kpc_to_hard_checkpoint,
 )
@@ -87,6 +89,19 @@ def test_checkpoint_rejects_changed_force_or_integration_controls(tmp_path) -> N
         read_kpc_to_hard_checkpoint(path, other_model, config)
     with pytest.raises(ValueError, match="physics/configuration identity changed"):
         read_kpc_to_hard_checkpoint(path, model, replace(config, maximum_step_myr=0.005))
+
+
+def test_checkpoint_rejects_changed_implementation_identity(tmp_path, monkeypatch) -> None:
+    model, config, initial = _case()
+    path = tmp_path / "kpc-checkpoint.json"
+    write_kpc_to_hard_checkpoint(path, initial, model, config)
+    saved = json.loads(path.read_text())
+    assert saved["schema_version"] == 2
+    assert saved["implementation_sha256"] == kpc_implementation_sha256()
+    assert len(saved["implementation_sha256"]) == 64
+    monkeypatch.setattr(kpc_checkpoint, "kpc_implementation_sha256", lambda: "0" * 64)
+    with pytest.raises(ValueError, match="physics implementation identity changed"):
+        read_kpc_to_hard_checkpoint(path, model, config)
 
 
 def test_checkpoint_rejects_state_corruption_and_out_of_budget_state(tmp_path) -> None:

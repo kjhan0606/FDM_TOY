@@ -61,8 +61,11 @@ The phase-aware static-host integrator has a disk restart contract through
 retains the Cartesian dynamical state, elapsed time, completed step count,
 and full ordered physical-phase history. It carries a SHA-256 identity of
 every declared model/background parameter and integration control, plus a
-separate digest of the saved state. A changed force model, timestep policy,
-corrupt state, or state beyond the configured time/step budget is rejected.
+separate digest of the saved state. The version-2 record also hashes an
+explicit bounded set of physics source files and the Python/NumPy/SciPy/Astropy
+versions, so a changed implementation cannot silently resume an old orbit.
+A changed force model, timestep policy, implementation, corrupt state, or
+state beyond the configured time/step budget is rejected.
 Writes replace only the explicitly named checkpoint atomically; this is a
 restart of the static-host calculation, not a lagRamses solver checkpoint or
 a physical calibration release.

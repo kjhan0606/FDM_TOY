@@ -8,10 +8,13 @@ import json
 import math
 import os
 from pathlib import Path
+import sys
 import tempfile
 from typing import Any
 
+import astropy
 import numpy as np
+import scipy
 
 from .kpc_inspiral import (
     DualNucleusState, KpcInspiralModel, KpcToHardConfig, KpcToHardState,
@@ -19,7 +22,17 @@ from .kpc_inspiral import (
 from .kpc_to_pc import InspiralPhase, InspiralState
 
 
-CHECKPOINT_SCHEMA_VERSION = 1
+CHECKPOINT_SCHEMA_VERSION = 2
+
+# Explicit physics dependency list, not a recursive package scan. A changed
+# integrator, force law, profile interpolation, handoff definition, or unit
+# conversion invalidates bitwise restart compatibility.
+_PHYSICS_MODULES = (
+    "binary_evolution.py", "constants.py", "delay_budget.py",
+    "environmental_friction.py", "fdm_outer_halo.py", "galaxy_environment.py",
+    "kpc_checkpoint.py", "kpc_inspiral.py", "kpc_to_pc.py",
+    "orbital_exchange.py", "profile_table.py", "soliton.py", "wave_drag.py",
+)
 
 
 def _canonical(record: Any) -> bytes:
@@ -59,6 +72,23 @@ def kpc_physics_sha256(model: KpcInspiralModel, config: KpcToHardConfig) -> str:
     """Bind every declared force/background parameter and integration control."""
 
     return _digest({"model": _physics_value(model), "config": _physics_value(config)})
+
+
+def kpc_implementation_sha256() -> str:
+    """Hash the bounded local physics source set and numerical dependency versions."""
+
+    module_directory = Path(__file__).resolve().parent
+    sources = {
+        name: hashlib.sha256((module_directory / name).read_bytes()).hexdigest()
+        for name in _PHYSICS_MODULES
+    }
+    return _digest({
+        "sources": sources,
+        "python": list(sys.version_info[:3]),
+        "numpy": np.__version__,
+        "scipy": scipy.__version__,
+        "astropy": astropy.__version__,
+    })
 
 
 def _phase_record(state: InspiralState) -> dict[str, Any]:
@@ -149,6 +179,7 @@ def write_kpc_to_hard_checkpoint(
     record = {
         "schema_version": CHECKPOINT_SCHEMA_VERSION,
         "physics_sha256": kpc_physics_sha256(model, config),
+        "implementation_sha256": kpc_implementation_sha256(),
         "state_sha256": _digest(state_record),
         "state": state_record,
     }
@@ -187,11 +218,14 @@ def read_kpc_to_hard_checkpoint(
     except (OSError, json.JSONDecodeError) as error:
         raise ValueError(f"cannot read kpc checkpoint: {error}") from error
     if not isinstance(record, dict) or set(record) != {
-        "schema_version", "physics_sha256", "state_sha256", "state",
+        "schema_version", "physics_sha256", "implementation_sha256",
+        "state_sha256", "state",
     } or record["schema_version"] != CHECKPOINT_SCHEMA_VERSION:
         raise ValueError("unsupported kpc checkpoint schema")
     if record["physics_sha256"] != kpc_physics_sha256(model, config):
         raise ValueError("kpc checkpoint physics/configuration identity changed")
+    if record["implementation_sha256"] != kpc_implementation_sha256():
+        raise ValueError("kpc checkpoint physics implementation identity changed")
     if record["state_sha256"] != _digest(record["state"]):
         raise ValueError("kpc checkpoint state digest disagrees")
     state = _state_from_record(record["state"])
