@@ -28,7 +28,7 @@ from fdm_smbh_delay.torch_wave import (
 from fdm_smbh_delay.pyul import (
     PYUL_MYR_S, PYUL_PARSEC_M, PYUL_SOLAR_MASS_KG,
 )
-from scripts import run_torch_wave_case
+from scripts import analyze_pyul_wave_run, run_torch_wave_case
 
 
 def test_tsc_deposition_preserves_mass_and_wraps_periodically() -> None:
@@ -528,3 +528,30 @@ def test_strang_timestep_failure_records_terminal_status(tmp_path, monkeypatch) 
         (spatial_output / "torch_run_summary.json").read_text()
     )
     assert spatial_summary["status"] == "stalled_spatial_domain"
+
+
+def test_strang_analyser_rejects_changed_hamiltonian_ledger(
+    tmp_path, monkeypatch,
+) -> None:
+    reference = tmp_path / "seed"
+    _small_reference(reference)
+    output = tmp_path / "partial"
+    monkeypatch.setattr(sys, "argv", [
+        "run_torch_wave_case.py", str(reference), "--output", str(output),
+        "--duration-myr", "0.01", "--save-number", "4",
+        "--save-3d-number", "0", "--movie-frame-number", "0",
+        "--checkpoint-every-saves", "1", "--device", "cpu",
+        "--wave-smbh-coupling", "periodic_tsc_strang",
+        "--diagnostic-stop-after-save", "2",
+    ])
+    assert run_torch_wave_case.main() == 0
+    monkeypatch.setattr(sys, "argv", [
+        "analyze_pyul_wave_run.py", str(output), "--diagnostic-partial",
+    ])
+    assert analyze_pyul_wave_run.main() == 0
+    ledger_path = output / "Outputs/total_hamiltonian.npy"
+    ledger = np.load(ledger_path)
+    ledger[1] += 1e-3
+    np.save(ledger_path, ledger)
+    with pytest.raises(ValueError, match="Strang Hamiltonian ledger"):
+        analyze_pyul_wave_run.main()

@@ -43,7 +43,12 @@ _TRANSFER_FIELDS = (
 )
 
 
-def _read_trace(run: Path, factor: float, saves: int, stop: int) -> tuple[dict, np.ndarray]:
+def _read_trace(
+    run: Path, factor: float, saves: int, stop: int, *,
+    coupling: str = "periodic_tsc_reciprocal",
+) -> tuple[dict, np.ndarray]:
+    if coupling not in {"periodic_tsc_reciprocal", "periodic_tsc_strang"}:
+        raise ValueError("unknown periodic TSC trace mode")
     project = Path(__file__).resolve().parents[1]
     analyser = project / "scripts/analyze_pyul_wave_run.py"
     if analyser.stat().st_mtime_ns > (
@@ -61,17 +66,24 @@ def _read_trace(run: Path, factor: float, saves: int, stop: int) -> tuple[dict, 
         "case_id": "qe_q030_e030_a020",
         "resolution": 256,
         "backend": "pytorch_cuda",
-        "wave_smbh_coupling": "periodic_tsc_reciprocal",
+        "wave_smbh_coupling": coupling,
         "experimental_coupling_not_a_calibration_release": True,
         "time_step_factor": factor,
         "save_number": saves,
         "actual_wave_steps": saves,
         "diagnostic_stop_after_save": stop,
-        "nbody_rk4_substeps_per_wave_step": 9,
+        "nbody_rk4_substeps_per_wave_step": (
+            0 if coupling == "periodic_tsc_strang" else 9
+        ),
         "analytic_fdm_drag": False,
     }
     if any(metadata.get(key) != value for key, value in expected.items()):
         raise ValueError(f"{run}: step-trace metadata differs from design")
+    if coupling == "periodic_tsc_strang" and (
+        metadata.get("binary_integrator") != "joint_kick_drift_kick_v1"
+        or metadata.get("coupled_hamiltonian_ledger") is not True
+    ):
+        raise ValueError(f"{run}: time-centred binary ledger is missing")
     if (
         solver.get("status") != "diagnostic_partial"
         or solver.get("actual_wave_steps") != stop

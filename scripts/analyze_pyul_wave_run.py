@@ -91,13 +91,15 @@ def main() -> int:
         (run / "fdm_adapter_metadata.json").read_text(encoding="utf-8")
     )
     coupling = metadata.get("wave_smbh_coupling", "legacy_plummer")
-    if coupling not in {"legacy_plummer", "periodic_tsc_reciprocal"}:
+    if coupling not in {
+        "legacy_plummer", "periodic_tsc_reciprocal", "periodic_tsc_strang"
+    }:
         raise ValueError("unrecognized wave--SMBH coupling in diagnostic")
     if (
-        coupling == "periodic_tsc_reciprocal"
+        coupling != "legacy_plummer"
         and metadata.get("experimental_coupling_not_a_calibration_release") is not True
     ):
-        raise ValueError("reciprocal TSC diagnostic lacks experimental scope flag")
+        raise ValueError("TSC diagnostic lacks experimental scope flag")
     config = json.loads((run / "config.uldm").read_text(encoding="utf-8"))
     particles = config["Matter Particles"]["Condition"]
     if len(particles) != 2:
@@ -228,6 +230,27 @@ def main() -> int:
         bh_kinetic=bh_kinetic_array,
         bh_mutual_gravity=np.asarray(binary_mutual),
     )
+    if coupling == "periodic_tsc_strang":
+        recorded_binary = (
+            np.load(run / "Outputs/binary_hamiltonian.npy")
+            * energy_code_to_internal
+        )
+        recorded_total = (
+            np.load(run / "Outputs/total_hamiltonian.npy")
+            * energy_code_to_internal
+        )
+        binary_energy = bh_kinetic_array + np.asarray(binary_mutual)
+        if (
+            recorded_binary.shape != binary_energy.shape
+            or recorded_total.shape != combined_energy.shape
+            or not np.allclose(
+                recorded_binary, binary_energy, rtol=1e-11, atol=1e-8
+            )
+            or not np.allclose(
+                recorded_total, combined_energy, rtol=1e-11, atol=1e-8
+            )
+        ):
+            raise ValueError("recorded Strang Hamiltonian ledger does not close")
     energy_scale = max(
         abs(combined_energy[0]),
         abs(wave_total[0]),
@@ -432,13 +455,13 @@ def main() -> int:
         ),
         "interaction_energy_definition": (
             "periodic TSC/Poisson integral rho*Phi_BH dV, counted once"
-            if coupling == "periodic_tsc_reciprocal"
+            if coupling != "legacy_plummer"
             else "integral rho*Phi_BH dV, counted once"
         ),
         "wave_smbh_coupling": coupling,
         "point_estimator_role": (
             "reciprocal periodic TSC interaction identity; not an extra energy term"
-            if coupling == "periodic_tsc_reciprocal"
+            if coupling != "legacy_plummer"
             else "gauge-dependent force diagnostic; not included in the Hamiltonian"
         ),
         "analytic_fdm_drag": metadata["analytic_fdm_drag"],
