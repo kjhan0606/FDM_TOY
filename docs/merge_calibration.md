@@ -652,6 +652,29 @@ for `conservation_summary.json` and
 `8ce5fe1668d782189310edfdb9fef48c7f36ac0a1de23349d9eced24da0500e3`
 for `conservation_timeseries.csv`.
 
+A separate Lageunha force/energy audit of this initial `n=256` state used
+`scripts/audit_wave_force_energy.py` at the actual first-step force-evaluation
+phase, after the wave half-kick and spectral drift but before SMBH RK4. The
+force conjugate to the grid Plummer interaction energy was independently
+checked by finite differences of the runtime energy operator. Its norm
+differs from the runtime interpolated periodic-Poisson force by 12.9% and
+4.64% for the two SMBHs. This establishes a discrete force/energy
+inconsistency for this state, not the cause of the first-step Hamiltonian
+excursion. With the initial velocities and force difference held fixed over
+one step, the corresponding linear-work estimate is only `+0.168` in the
+diagnostic physical energy units, versus the measured `-6.17e6`. That
+first-order estimate omits the evolving wave, split-step effects, and the
+change of force during the step. The CSV physical energy unit was verified
+against the raw solver energy logs and N-body states. The prior trace stored
+the seed path, but not a launch-time hash of its initial wave bytes, so the
+cross-run comparison remains provisional on exact wave identity. The audit
+artifact is explicitly non-calibrating; its SHA-256 is
+`cff55d4a72b1fd44d6e733d8d1bb86cee03e312a0a49531bc2a013b8686d6770`.
+The next controlled experiment should bind the initial wave by content hash,
+record each Hamiltonian component at common physical times under temporal
+refinement, and isolate the wave-only sector before assigning the residual
+to any force or integration mechanism.
+
 Only **five** of those 37 complete orbits lie in the prospectively registered
 `[0.430, 0.438] pc` bin, below the fixed eight-orbit minimum. The five orbit
 means have measured osculating eccentricity 0.27235–0.27494, not exactly the
