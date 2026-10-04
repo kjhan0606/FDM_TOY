@@ -806,8 +806,53 @@ calibration validator. The conservation summary SHA-256 is
 `8c1f332f4a9c231308fb3801b7ad3cdcc60b143945f0e95cc3357c47c71b0b47`;
 the first-step ledger SHA-256 is
 `8643f8194e0d0917a154272e384c9d5c961b083620b97b597cc98991ae1df2c3`.
-The next controlled comparison repeats the reciprocal calculation with
-half and quarter time steps at the same physical first-save time.
+Slurm job `412076` repeated the reciprocal calculation at half and quarter
+time steps with the same first ten physical save times. The source-bound
+comparison verified the initial wave and SMBH hashes, all four numerical
+source hashes, physical configuration, and saved times. The first-save
+Hamiltonian changes are `−946,665.094` and `−242,843.781 M_sun pc² Myr⁻²`.
+The corresponding maximum ratios sampled at the ten common save times are
+`0.005148` and `0.001315`. Neither value measures the unsaved wave-step
+prefixes. The comparison artifact SHA-256 is
+`7420650697aa9392c77b35a07aa8460427c65dbc7b9cf1a42413a94961`.
+
+Slurm job `412080` then saved *every wave step* through those same ten
+physical intervals for half, quarter, and eighth time steps. All three
+runs remained `diagnostic_partial`. The per-step analysis verified the
+source snapshots and launch commits, reconstructed the Hamiltonian and
+transfer-normalized error from each CSV, and matched the half- and
+quarter-step traces to their earlier common-time runs. The eighth-step
+trace shares the same initial hashes, numerical source, physical settings,
+and internal time grid, but has no independent eighth-step twin.
+
+| Time-step factor | Steps per common save | First common-save ΔH (M_sun pc² Myr⁻²) | Maximum per-wave-step error / exchange |
+| --- | ---: | ---: | ---: |
+| 1 | 1 | −3,335,473.375 | 0.0184475 |
+| 1/2 | 2 | −946,665.094 | 0.00575523 |
+| 1/4 | 4 | −242,843.781 | 0.00151927 |
+| 1/8 | 8 | −61,108.625 | 0.000384993 |
+
+Each maximum occurs at the run's first wave step, at a different physical
+time for each factor. The half-, quarter-, and eighth-step traces pass the
+fixed `0.01` criterion over **only** the first ten common physical
+intervals; the factor-1 trace fails. At the first common save, successive
+same-sign drift ratios imply pairwise orders `1.817`, `1.963`, and `1.991`
+if the limiting drift is assumed to be zero. At the tenth common save the
+corresponding orders are `1.964`, `1.991`, and `1.996`. Four short-startup
+levels support a drift approaching second-order time dependence, but do
+not prove a zero time-step-limit offset. The SMBH separation differences
+between adjacent levels decrease with observed orders `0.965` and `0.990`,
+indicating approximately first-order trajectory convergence despite the
+smaller energy drift. The step-trace summary SHA-256 is
+`395fd11f8df4418f94efaec2d81cd85740fb76fd52d568e851847d967578062f`.
+
+No reciprocal TSC run has completed even one orbit, and the TSC effective
+softening differs from the earlier Plummer calculation. The registered
+coarse q/e orbit bin also remains below its eight-orbit minimum. These
+diagnostics do not permit a q/e calibration row or a smaller-separation
+extrapolation. A time-centred wave--SMBH update must address the measured
+first-order trajectory behaviour before long-run and spatial convergence
+tests can establish a physical calibration.
 
 Only **five** of those 37 complete orbits lie in the prospectively registered
 `[0.430, 0.438] pc` bin, below the fixed eight-orbit minimum. The five orbit
