@@ -19,6 +19,7 @@ _UNCOMMITTED_SOLVER_PATHS = (
     Path("scripts/run_torch_wave_case.py"),
     Path("src/fdm_smbh_delay/torch_wave.py"),
 )
+_PERIODIC_TSC_PATH = Path("src/fdm_smbh_delay/periodic_mesh_coupling.py")
 _COMMITTED_DEPENDENCY_PATHS = (Path("src/fdm_smbh_delay/pyul.py"),)
 
 
@@ -120,6 +121,12 @@ def _snapshot_run(project: Path, run: Path) -> dict[str, Any]:
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     if metadata.get("backend") not in {"pytorch_cpu", "pytorch_cuda"}:
         raise ValueError(f"not a Torch live-wave calculation: {resolved}")
+    coupling = metadata.get("wave_smbh_coupling", "legacy_plummer")
+    if coupling not in {"legacy_plummer", "periodic_tsc_reciprocal"}:
+        raise ValueError(f"unknown wave--SMBH coupling mode: {coupling}")
+    solver_paths = _UNCOMMITTED_SOLVER_PATHS + (
+        (_PERIODIC_TSC_PATH,) if coupling == "periodic_tsc_reciprocal" else ()
+    )
     revision = str(metadata["adapter_revision"])
     metadata_mtime_ns = metadata_path.stat().st_mtime_ns
     destination = resolved / "torch_solver_provenance"
@@ -130,10 +137,16 @@ def _snapshot_run(project: Path, run: Path) -> dict[str, Any]:
         revision=revision,
     )
     if existing is not None:
+        recorded_paths = {row.get("path") for row in existing["source_files"]}
+        required_paths = {
+            path.as_posix() for path in solver_paths + _COMMITTED_DEPENDENCY_PATHS
+        }
+        if not required_paths.issubset(recorded_paths):
+            raise ValueError("existing source snapshot omits a coupling dependency")
         return existing
 
     records = []
-    for relative in _UNCOMMITTED_SOLVER_PATHS:
+    for relative in solver_paths:
         source = project / relative
         source_stat = source.stat()
         if source_stat.st_mtime_ns > metadata_mtime_ns:

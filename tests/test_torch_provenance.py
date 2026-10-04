@@ -242,6 +242,39 @@ def test_source_snapshot_is_repeatable_and_immutable(
         _snapshot_run(PROJECT, run)
 
 
+def test_periodic_tsc_snapshot_includes_its_force_operator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        snapshot_torch_provenance,
+        "_git_blob",
+        lambda project, revision, relative: (project / relative).read_bytes(),
+    )
+    run = tmp_path / "tsc_run"
+    run.mkdir()
+    (run / "config.uldm").write_text("{}")
+    (run / "fdm_adapter_metadata.json").write_text(json.dumps({
+        "backend": "pytorch_cpu", "adapter_revision": "test",
+        "wave_smbh_coupling": "periodic_tsc_reciprocal",
+    }))
+    manifest = _snapshot_run(PROJECT, run)
+    paths = {row["path"] for row in manifest["source_files"]}
+    assert len(paths) == 4
+    assert "src/fdm_smbh_delay/periodic_mesh_coupling.py" in paths
+    assert (
+        run / "torch_solver_provenance/source/src/fdm_smbh_delay/periodic_mesh_coupling.py"
+    ).is_file()
+    manifest["source_files"] = [
+        row for row in manifest["source_files"]
+        if row["path"] != "src/fdm_smbh_delay/periodic_mesh_coupling.py"
+    ]
+    (run / "torch_solver_provenance/manifest.json").write_text(
+        json.dumps(manifest)
+    )
+    with pytest.raises(ValueError, match="omits a coupling dependency"):
+        _snapshot_run(PROJECT, run)
+
+
 def test_existing_snapshot_does_not_depend_on_the_current_worktree(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -35,6 +35,7 @@ from fdm_smbh_delay.torch_wave import (
 
 
 _RESTART_METADATA_KEYS = (
+    "wave_smbh_coupling",
     "resolution",
     "box_size_pc",
     "duration_myr",
@@ -55,7 +56,10 @@ _RESTART_METADATA_KEYS = (
 
 def _require_resume_metadata(saved: dict, requested: dict) -> None:
     for key in _RESTART_METADATA_KEYS:
-        if saved.get(key) != requested[key]:
+        value = saved.get(
+            key, "legacy_plummer" if key == "wave_smbh_coupling" else None
+        )
+        if value != requested[key]:
             raise ValueError(f"restart request changes {key}")
     if saved.get("qe_design_binding") != requested.get("qe_design_binding"):
         raise ValueError("restart request changes q/e design binding")
@@ -260,12 +264,24 @@ def main() -> int:
     parser.add_argument("--save-3d-number", type=int, default=32)
     parser.add_argument("--rk4-substeps", type=int, default=9)
     parser.add_argument("--time-step-factor", type=float, default=1.0)
+    parser.add_argument(
+        "--wave-smbh-coupling",
+        choices=("legacy_plummer", "periodic_tsc_reciprocal"),
+        default="legacy_plummer",
+    )
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--checkpoint-every-saves", type=int, default=64)
     parser.add_argument("--diagnostic-stop-after-save", type=int)
     parser.add_argument("--profile-memory-stages", action="store_true")
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
+    if args.wave_smbh_coupling == "periodic_tsc_reciprocal":
+        from fdm_smbh_delay.periodic_mesh_coupling import (
+            advance_binary_rk4_tsc,
+            periodic_tsc_patches,
+            tsc_interaction_and_force,
+            tsc_source_density,
+        )
     if args.duration_myr <= 0.0 or args.save_number < 1:
         raise ValueError("duration and save number must be positive")
     if (
@@ -397,7 +413,12 @@ def main() -> int:
             "kinetic_phase_layout": "separable_axis_v1",
             "wave_buffer_lifetime": "release_previous_state_before_fft_v1",
             "wave_density_layout": "real_imag_addcmul_v1",
-            "compact_potential_layout": "x_slab32_inplace_rsqrt_v1",
+            "wave_smbh_coupling": args.wave_smbh_coupling,
+            "compact_potential_layout": (
+                "periodic_tsc_poisson_v1"
+                if args.wave_smbh_coupling == "periodic_tsc_reciprocal"
+                else "x_slab32_inplace_rsqrt_v1"
+            ),
             "potential_phase_layout": "complex_real_imag_inplace_trig_v1",
             "total_potential_lifetime": "recompute_before_first_kick_release_before_save_v1",
             "saved_energy_density_lifetime": "release_before_kinetic_fft_rebuild_for_output_v1",
@@ -405,7 +426,12 @@ def main() -> int:
             "checkpoint_every_saved_intervals": args.checkpoint_every_saves,
             "diagnostic_stop_after_save": args.diagnostic_stop_after_save,
             "wave_acceleration_during_particle_rk4": (
-                "interpolated_from_a_local_potential_patch_at_each_rk4_stage"
+                "position_gradient_of_periodic_tsc_interaction_at_each_rk4_stage"
+                if args.wave_smbh_coupling == "periodic_tsc_reciprocal"
+                else "interpolated_from_a_local_potential_patch_at_each_rk4_stage"
+            ),
+            "experimental_coupling_not_a_calibration_release": (
+                args.wave_smbh_coupling == "periodic_tsc_reciprocal"
             ),
             "analytic_fdm_drag": False,
             "live_wave_force_on_smbhs": True,
@@ -418,9 +444,16 @@ def main() -> int:
             (output / "fdm_adapter_metadata.json").read_text(encoding="utf-8")
         )
         _require_resume_metadata(saved_metadata, metadata)
-        diagnostic_run = saved_metadata.get("diagnostic_stop_after_save") is not None
+        diagnostic_run = (
+            saved_metadata.get("diagnostic_stop_after_save") is not None
+            or saved_metadata.get("experimental_coupling_not_a_calibration_release")
+            is True
+        )
     else:
-        diagnostic_run = args.diagnostic_stop_after_save is not None
+        diagnostic_run = (
+            args.diagnostic_stop_after_save is not None
+            or args.wave_smbh_coupling == "periodic_tsc_reciprocal"
+        )
         output.mkdir(parents=True)
         (output / "Outputs").mkdir()
         config["Duration"]["Time Duration"] = duration_completed_myr
@@ -477,12 +510,24 @@ def main() -> int:
         density, grid.poisson_inverse_wavenumber_squared
     )
     profile_stage("initial_poisson")
-    compact_potential = plummer_potential_torch(
-        coordinate=grid.coordinate,
-        masses=masses_code,
-        positions=state.reshape(2, 6)[:, :3],
-        plummer_radius=plummer_code,
-    )
+
+    def compact_field(positions: np.ndarray) -> torch.Tensor:
+        if args.wave_smbh_coupling == "periodic_tsc_reciprocal":
+            source = tsc_source_density(
+                masses=masses_code, positions=positions, resolution=resolution,
+                box_length=box_code, device=device,
+            )
+            field = periodic_poisson_torch(
+                source, grid.poisson_inverse_wavenumber_squared
+            )
+            del source
+            return field
+        return plummer_potential_torch(
+            coordinate=grid.coordinate, masses=masses_code,
+            positions=positions, plummer_radius=plummer_code,
+        )
+
+    compact_potential = compact_field(state.reshape(2, 6)[:, :3])
     profile_stage("initial_compact_potential")
 
     if args.resume:
@@ -516,12 +561,22 @@ def main() -> int:
         profile_stage(f"save_{index:06d}_kinetic_energy")
         density = wave_density(wavefunction)
         profile_stage(f"save_{index:06d}_energy")
-        point_potential, _ = sample_potential_and_acceleration(
-            potential=wave_potential,
-            positions=state.reshape(2, 6)[:, :3],
-            box_length=box_code,
-        )
-        point_interaction = float(masses_code @ point_potential)
+        if args.wave_smbh_coupling == "periodic_tsc_reciprocal":
+            point_interaction, _ = tsc_interaction_and_force(
+                wave_potential=wave_potential, masses=masses_code,
+                positions=state.reshape(2, 6)[:, :3], box_length=box_code,
+            )
+            if not np.isclose(
+                point_interaction, interaction, rtol=1e-11, atol=1e-9
+            ):
+                raise ValueError("periodic TSC wave--SMBH energy reciprocity failed")
+        else:
+            point_potential, _ = sample_potential_and_acceleration(
+                potential=wave_potential,
+                positions=state.reshape(2, 6)[:, :3],
+                box_length=box_code,
+            )
+            point_interaction = float(masses_code @ point_potential)
         logs["ekandqlist"].append(kinetic)
         logs["egpsilist"].append(self_gravity)
         logs["egpcmlist"].append(interaction)
@@ -575,30 +630,37 @@ def main() -> int:
             density, grid.poisson_inverse_wavenumber_squared
         )
         profile_stage(f"step_{step:06d}_poisson")
-        wave_patches, patch_starts = potential_patches(
-            potential=wave_potential,
-            positions=state.reshape(2, 6)[:, :3],
-            box_length=box_code,
-        )
-        state = advance_binary_rk4_patched(
-            state=state,
-            masses=masses_code,
-            patches=wave_patches,
-            patch_starts=patch_starts,
-            box_length=box_code,
-            resolution=resolution,
-            plummer_radius=plummer_code,
-            time_step=time_step,
-            substeps=args.rk4_substeps,
-        )
+        if args.wave_smbh_coupling == "periodic_tsc_reciprocal":
+            wave_patches, patch_starts = periodic_tsc_patches(
+                potential=wave_potential,
+                positions=state.reshape(2, 6)[:, :3], box_length=box_code,
+            )
+            state = advance_binary_rk4_tsc(
+                state=state, masses=masses_code, patches=wave_patches,
+                patch_starts=patch_starts, box_length=box_code,
+                resolution=resolution, plummer_radius=plummer_code,
+                time_step=time_step, substeps=args.rk4_substeps,
+            )
+        else:
+            wave_patches, patch_starts = potential_patches(
+                potential=wave_potential,
+                positions=state.reshape(2, 6)[:, :3],
+                box_length=box_code,
+            )
+            state = advance_binary_rk4_patched(
+                state=state,
+                masses=masses_code,
+                patches=wave_patches,
+                patch_starts=patch_starts,
+                box_length=box_code,
+                resolution=resolution,
+                plummer_radius=plummer_code,
+                time_step=time_step,
+                substeps=args.rk4_substeps,
+            )
         del wave_patches, patch_starts
         profile_stage(f"step_{step:06d}_particle_rk4")
-        compact_potential = plummer_potential_torch(
-            coordinate=grid.coordinate,
-            masses=masses_code,
-            positions=state.reshape(2, 6)[:, :3],
-            plummer_radius=plummer_code,
-        )
+        compact_potential = compact_field(state.reshape(2, 6)[:, :3])
         profile_stage(f"step_{step:06d}_compact_potential")
         total_potential = wave_potential + compact_potential
         apply_potential_half_kick_in_place(wavefunction, total_potential, time_step)

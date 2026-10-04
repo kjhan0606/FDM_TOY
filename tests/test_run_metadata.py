@@ -117,6 +117,15 @@ def test_complete_torch_calibration_contract_accepts_named_dt05_variant(
         ("fdm_adapter_metadata.json", "saved_3d_states", 16, "saved_3d_states"),
         ("fdm_adapter_metadata.json", "analytic_fdm_drag", True, "analytic_fdm_drag"),
         (
+            "fdm_adapter_metadata.json", "wave_smbh_coupling",
+            "periodic_tsc_reciprocal", "experimental",
+        ),
+        (
+            "fdm_adapter_metadata.json",
+            "experimental_coupling_not_a_calibration_release", True,
+            "experimental",
+        ),
+        (
             "fdm_adapter_metadata.json",
             "live_wave_force_on_smbhs",
             False,

@@ -74,6 +74,12 @@ def validate_torch_calibration_completion(
         raise ValueError("Torch calibration evolution is not complete")
     if metadata.get("diagnostic_stop_after_save") is not None:
         raise ValueError("Torch diagnostic evolution cannot be a calibration run")
+    if (
+        metadata.get("experimental_coupling_not_a_calibration_release") is True
+        or metadata.get("wave_smbh_coupling", "legacy_plummer")
+        != "legacy_plummer"
+    ):
+        raise ValueError("experimental wave--SMBH coupling cannot be a calibration run")
     exact_summary = {
         "saved_intervals": expected_saved_intervals,
     }
