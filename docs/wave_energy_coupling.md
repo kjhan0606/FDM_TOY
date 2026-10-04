@@ -341,6 +341,28 @@ and analytic-ledger gates; it did not read the GPFS outputs. This test varies
 the direct SMBH–SMBH softening only. It neither changes nor converges the
 TSC mesh smoothing, and does not provide a full-orbit or FDM calibration row.
 
+A matched isolated-Plummer kick–drift–kick reference, starting from the same
+SMBH state and using each run's time step, separates the large direct-binary
+response from a coupled-minus-isolated cross term. At factor 1/8, the
+quarter-cell softening changes the isolated final separation by
+−1.811398×10⁻⁶ pc versus −1.811415×10⁻⁶ pc in the coupled run; the one-cell
+changes are +6.979402×10⁻⁶ and +6.979467×10⁻⁶ pc. Thus the isolated direct
+binary reproduces more than 99.999% of each *softening-dependent difference*
+over this 17-year prefix. The remaining difference of differences is
+−1.718×10⁻¹¹ or +6.457×10⁻¹¹ pc, respectively. It is not a measured wake
+drag: the common smooth-field contribution cancels, and the residual combines
+trajectory-dependent live-wave response with numerical coupling cross terms.
+No error floor has established that this residual is physically resolved.
+The source-bound control is
+`/gpfs/kjhan/FDM_TOY_RESULTS/qe_followup_q030e030_a020_v1/direct_softening_step_trace_v1/isolated_control_v2.json`
+(SHA-256 `690587847fd8e4c907d91214118b1140ec3dbc28f1c949dc938678cb6128f16d`),
+bound to the strengthened parent `audit_v3.json` (SHA-256
+`5eb41d02896130df38a0ce39406d46f10e0a80b7ff74b64eaaf0b51a633de98b`).
+The parent now hashes every saved SMBH state. The independent Opus CLI review
+expired at its turn limit; the requested sol fallback found missing config
+and trajectory binding, which this version corrects, and confirmed the
+direct-force subflow match. The zero-wave subflow equivalence test passes.
+
 ## Double-counting prohibition
 
 Two calculations remain physically distinct.
