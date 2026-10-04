@@ -2,9 +2,11 @@ import numpy as np
 import pytest
 
 from scripts.audit_one_orbit_prefix import (
-    orbital_coverage, recompute_conservation_metrics,
+    endpoint_momentum_diagnostic, orbital_coverage,
+    recompute_conservation_metrics,
     validate_completed_checkpoint,
 )
+from scripts.audit_periodic_tsc_momentum import spectral_wave_diagnostics
 
 
 def test_coverage_measures_signed_unwrapped_turns_and_radial_extrema():
@@ -72,3 +74,25 @@ def test_raw_energy_recomputation_requires_component_closure():
     logs["total_hamiltonian"][-1] += 0.1
     with pytest.raises(ValueError, match="do not close"):
         recompute_conservation_metrics(logs, states, np.ones(2))
+
+
+def test_endpoint_momentum_uses_wave_checkpoint_and_raw_ledger(tmp_path):
+    initial = np.ones((4, 4, 4), dtype=np.complex128)
+    x = np.arange(4) / 4
+    final = np.broadcast_to(
+        np.exp(2j * np.pi * x)[:, None, None], (4, 4, 4)
+    ).copy()
+    first_path = tmp_path / "first.npy"
+    final_path = tmp_path / "final.npy"
+    np.save(first_path, initial)
+    np.save(final_path, final)
+    first = spectral_wave_diagnostics(initial, 4.0)
+    last = spectral_wave_diagnostics(final, 4.0)
+    states = np.zeros((19, 2, 6))
+    record = endpoint_momentum_diagnostic(
+        first_path, final_path, states, np.ones(2), 4.0,
+        np.array([first["mass_code"], last["mass_code"]]),
+        np.array([first["kinetic_code"], last["kinetic_code"]]),
+    )
+    assert record["total_residual_over_exchange"] == pytest.approx(1.0)
+    assert record["exchanged_momentum_norm_code"] > 0.0

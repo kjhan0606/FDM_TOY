@@ -15,10 +15,14 @@ import numpy as np
 from fdm_smbh_delay.pyul import pyul_unit_system
 from scripts.analyze_pyul_wave_run import _energy_error_over_transfer
 from scripts.audit_periodic_offset_step_trace import sha256
+from scripts.audit_periodic_tsc_momentum import (
+    _body_momentum, spectral_wave_diagnostics,
+)
 
 
 SOURCE = "scripts/audit_one_orbit_prefix.py"
 ANALYZER_SOURCE = "scripts/analyze_pyul_wave_run.py"
+MOMENTUM_SOURCE = "scripts/audit_periodic_tsc_momentum.py"
 SEED_MANIFEST_SHA256 = (
     "7a51b8df7bb6f360244e8f83ab6684b0bf41ed431c3c24fd336c116b344416f8"
 )
@@ -134,6 +138,50 @@ def recompute_conservation_metrics(
     return energy_ratio, mass_error
 
 
+def endpoint_momentum_diagnostic(
+    initial_wave: Path, final_wave: Path, states: np.ndarray,
+    masses_code: np.ndarray, box_code: float,
+    recorded_mass: np.ndarray, recorded_kinetic: np.ndarray,
+) -> dict:
+    first = spectral_wave_diagnostics(np.load(initial_wave, mmap_mode="r"), box_code)
+    last = spectral_wave_diagnostics(np.load(final_wave, mmap_mode="r"), box_code)
+    for index, measured in ((0, first), (-1, last)):
+        if (
+            not np.isclose(measured["mass_code"], recorded_mass[index],
+                           rtol=1e-11, atol=1e-9)
+            or not np.isclose(measured["kinetic_code"], recorded_kinetic[index],
+                              rtol=1e-11, atol=1e-9)
+        ):
+            raise ValueError("orbit wave endpoint disagrees with mass/kinetic ledger")
+    wave_change = last["momentum_code"] - first["momentum_code"]
+    body_change = (
+        _body_momentum(states[-1], masses_code)
+        - _body_momentum(states[0], masses_code)
+    )
+    residual = wave_change + body_change
+    exchange = max(np.linalg.norm(wave_change), np.linalg.norm(body_change))
+    if not np.isfinite(exchange) or exchange <= 0.0:
+        raise ValueError("one-orbit momentum exchange is nonpositive")
+    return {
+        "wave_momentum_change_code": wave_change.tolist(),
+        "smbh_momentum_change_code": body_change.tolist(),
+        "total_momentum_change_code": residual.tolist(),
+        "total_residual_norm_code": float(np.linalg.norm(residual)),
+        "exchanged_momentum_norm_code": float(exchange),
+        "total_residual_over_exchange": float(np.linalg.norm(residual) / exchange),
+        "initial_high_frequency_power_fraction": first[
+            "high_frequency_power_fraction"
+        ],
+        "final_high_frequency_power_fraction": last[
+            "high_frequency_power_fraction"
+        ],
+        "endpoint_summation_rounding_heuristic_code": float(
+            first["summation_rounding_floor_code"]
+            + last["summation_rounding_floor_code"]
+        ),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("run", type=Path)
@@ -146,7 +194,11 @@ def main() -> int:
     project = Path(__file__).resolve().parents[1]
     source_hash = sha256(project / SOURCE)
     analyzer_hash = sha256(project / ANALYZER_SOURCE)
-    for relative, digest in ((SOURCE, source_hash), (ANALYZER_SOURCE, analyzer_hash)):
+    momentum_hash = sha256(project / MOMENTUM_SOURCE)
+    for relative, digest in (
+        (SOURCE, source_hash), (ANALYZER_SOURCE, analyzer_hash),
+        (MOMENTUM_SOURCE, momentum_hash),
+    ):
         committed = subprocess.run(
             ["git", "show", f"{args.source_commit}:{relative}"], cwd=project,
             check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -258,6 +310,11 @@ def main() -> int:
     recomputed_energy, recomputed_mass = recompute_conservation_metrics(
         logs, states, masses_code,
     )
+    momentum = endpoint_momentum_diagnostic(
+        seed / "Outputs/3Wfn/P3D_#000.npy", checkpoint_wave,
+        states, masses_code, metadata["box_size_pc"] / units.length_pc,
+        logs["ULDMass"], logs["ekandqlist"],
+    )
     energy = float(conservation["max_total_energy_drift_over_energy_transfer"])
     mass_error = float(conservation["max_wave_mass_relative_error"])
     if (
@@ -273,6 +330,7 @@ def main() -> int:
         "source_commit": args.source_commit,
         "source_sha256": source_hash,
         "analyzer_source_sha256": analyzer_hash,
+        "momentum_source_sha256": momentum_hash,
         "run": str(run),
         "seed": str(seed),
         "seed_manifest_sha256": SEED_MANIFEST_SHA256,
@@ -281,6 +339,10 @@ def main() -> int:
         "energy_error_over_transfer": energy,
         "short_orbit_energy_gate_passed": energy <= 0.01,
         "wave_mass_relative_error": mass_error,
+        "endpoint_momentum": momentum,
+        "momentum_diagnostic_limit_passed": (
+            momentum["total_residual_over_exchange"] <= 0.001
+        ),
         "raw_energy_log_sha256": {
             name: sha256(run / "Outputs" / f"{name}.npy")
             for name in ENERGY_LOGS
