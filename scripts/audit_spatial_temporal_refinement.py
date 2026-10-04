@@ -93,6 +93,22 @@ def compare_matched_series(old: np.ndarray, half: np.ndarray) -> dict[str, float
     }
 
 
+def config_matches_except_save_count(old: dict, half: dict) -> bool:
+    comparison = json.loads(json.dumps(half))
+    try:
+        old_count = old["Save Options"]["Number"]
+        half_count = comparison["Save Options"]["Number"]
+        if (
+            type(old_count) is not int or old_count <= 0
+            or type(half_count) is not int or half_count != 2 * old_count
+        ):
+            return False
+        comparison["Save Options"]["Number"] = old_count
+    except (KeyError, TypeError):
+        return False
+    return comparison == old
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("coarse_audit", type=Path)
@@ -136,7 +152,6 @@ def main() -> int:
             new_run, seed, resolution=resolution, factor=factor,
             steps=STEPS, saves=SAVES,
         )
-        comparison = json.loads(json.dumps(new_config))
         physical_keys = (
             "box_size_pc", "cell_size_pc", "plummer_radius_pc",
             "particle_mass_ev", "pyul_length_unit_m", "pyul_mass_unit_kg",
@@ -144,7 +159,7 @@ def main() -> int:
             "initial_separation_pc", "semi_major_axis_pc",
         )
         if (
-            comparison != old_config
+            not config_matches_except_save_count(old_config, new_config)
             or any(new_metadata.get(key) != old_metadata.get(key)
                    for key in physical_keys)
             or old_metadata.get("solver_source_sha256")

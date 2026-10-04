@@ -1,7 +1,9 @@
 import numpy as np
 import pytest
 
-from scripts.audit_spatial_temporal_refinement import compare_matched_series
+from scripts.audit_spatial_temporal_refinement import (
+    compare_matched_series, config_matches_except_save_count,
+)
 
 
 def test_matched_half_step_series_uses_same_physical_times():
@@ -17,3 +19,16 @@ def test_matched_half_step_series_uses_same_physical_times():
     changed[0] += 1e-8
     with pytest.raises(ValueError, match="finite initial"):
         compare_matched_series(coarse, changed)
+
+
+def test_config_only_doubles_save_count():
+    old = {"Save Options": {"Number": 468000, "Flags": "Energy NBody"},
+           "Matter Particles": {"Plummer Radius": 0.05}}
+    half = {"Save Options": {"Number": 936000, "Flags": "Energy NBody"},
+            "Matter Particles": {"Plummer Radius": 0.05}}
+    assert config_matches_except_save_count(old, half)
+    half["Matter Particles"]["Plummer Radius"] = 0.04
+    assert not config_matches_except_save_count(old, half)
+    half["Matter Particles"]["Plummer Radius"] = 0.05
+    half["Save Options"]["Number"] = 936001
+    assert not config_matches_except_save_count(old, half)
