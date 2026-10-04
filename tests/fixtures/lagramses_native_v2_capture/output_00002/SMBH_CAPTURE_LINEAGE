@@ -1,0 +1,8 @@
+LAGRAMSES_SMBH_CAPTURE_LINEAGE_V1
+checkpoint_uid=20261004103449-282-793692824-1-1-output-00002
+attempt_uid=20261004103449-282-793692824-1-1
+run_uuid=run-20261004103424-802-793448025-0-0
+ledger_file=smbh_capture_ledger_v2.jsonl
+committed_batch_seq=0
+nstep_coarse=2
+output_index=2
