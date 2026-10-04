@@ -292,9 +292,25 @@ The source-bound CPU audit is
 Independent Opus 5.5 review agreed that this is a fixed-grid, short-prefix
 diagnostic only and identified parent-seed, unit, initial-energy and Nyquist
 checks, which the second audit includes. It did not independently read the
-GPFS outputs. Other sub-cell phases and axes, interaction-softening and
-spatial-resolution ladders, longer orbital coverage, and full conservation
+GPFS outputs. Other sub-cell phases, multi-axis combinations, interaction
+softening and spatial-resolution ladders, longer orbital coverage, and full conservation
 remain open; this test does not release a calibration row.
+
+The same source-bound half-cell shift was also applied separately along y
+and z at the finest short-prefix step (Slurm 412348). Relative to the
+unshifted f0125 run, the final separation changes by −2.934×10⁻¹⁰ pc for x,
++3.354×10⁻¹² pc for y, and +5.128×10⁻¹² pc for z. The x response is 57.2
+times the larger transverse response in this one setup. The initial
+discrete Hamiltonian shifts by about +1.177×10⁴ code units for x but only
++3.186×10³ for y and z. The three maximum Hamiltonian-error/transfer ratios
+are respectively 0.000395, 0.000304, and 0.000289, all below the short-prefix
+0.01 diagnostic threshold. These comparisons bind each translated input to
+the common parent and check the same numerical solver, units, masses,
+provenance and all saved SMBH states. The source-bound directional audit is
+`/gpfs/kjhan/FDM_TOY_RESULTS/qe_followup_q030e030_a020_v1/periodic_transverse_offset_step_trace_v1/directional_audit_v1.json`
+(SHA-256 `9d8ff34b8c8a33816dc7e07f9b217412eab6e7dad110067426ac8e06de4da1bb`).
+The axis dependence does not define a statistical spatial-error bar: each
+direction has only one sub-cell phase on one fixed grid and a 17-year prefix.
 
 ## Double-counting prohibition
 
