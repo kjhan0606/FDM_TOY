@@ -17,6 +17,7 @@ def test_coverage_measures_signed_unwrapped_turns_and_radial_extrema():
     states[:, 1, 1] = radius * np.sin(angle)
     result = orbital_coverage(states, 0.5)
     assert result["one_projected_turn_reached"] is True
+    assert result["xy_orbit_plane_gate_passed"] is True
     assert result["projected_azimuthal_turns"] == pytest.approx(1.2)
     assert result["sampled_radial_turning_points"] >= 2
     assert result["minimum_saved_separation_pc"] < result["initial_separation_pc"]
@@ -32,6 +33,18 @@ def test_coverage_rejects_undersampled_or_invalid_phase():
     states[:, 1, :2] = 0.0
     with pytest.raises(ValueError, match="zero"):
         orbital_coverage(states, 1.0)
+
+
+def test_projected_turn_cannot_pass_for_tilted_orbit():
+    angle = np.linspace(0.0, 2.2 * np.pi, 19)
+    states = np.zeros((19, 2, 6))
+    states[:, 1, 0] = np.cos(angle)
+    states[:, 1, 1] = np.sin(angle)
+    states[:, 1, 2] = 0.6
+    result = orbital_coverage(states, 1.0)
+    assert result["projected_azimuthal_turns"] > 1
+    assert result["xy_orbit_plane_gate_passed"] is False
+    assert result["one_projected_turn_reached"] is False
 
 
 def test_completed_checkpoint_matches_final_saved_body(tmp_path):

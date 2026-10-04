@@ -55,7 +55,8 @@ def orbital_coverage(states: np.ndarray, length_pc: float) -> dict[str, float | 
         raise ValueError("orbital coverage needs finite two-SMBH states")
     relative = body[:, 1, :3] - body[:, 0, :3]
     projected = np.linalg.norm(relative[:, :2], axis=1)
-    separation = np.linalg.norm(relative, axis=1) * length_pc
+    separation_code = np.linalg.norm(relative, axis=1)
+    separation = separation_code * length_pc
     if np.any(projected <= 0.0) or np.any(separation <= 0.0):
         raise ValueError("relative SMBH separation is zero")
     angle = np.unwrap(np.arctan2(relative[:, 1], relative[:, 0]))
@@ -64,13 +65,18 @@ def orbital_coverage(states: np.ndarray, length_pc: float) -> dict[str, float | 
     if maximum_increment >= np.pi / 2:
         raise ValueError("saved orbital phase is undersampled")
     turn = float(abs(angle[-1] - angle[0]) / (2.0 * np.pi))
+    minimum_projection_fraction = float(np.min(projected / separation_code))
     radial_change = np.diff(separation)
     turning_indices = np.flatnonzero(
         np.sign(radial_change[:-1]) != np.sign(radial_change[1:])
     ) + 1
     return {
         "projected_azimuthal_turns": turn,
-        "one_projected_turn_reached": turn >= 1.0,
+        "minimum_xy_projection_fraction": minimum_projection_fraction,
+        "xy_orbit_plane_gate_passed": minimum_projection_fraction >= 0.9,
+        "one_projected_turn_reached": (
+            turn >= 1.0 and minimum_projection_fraction >= 0.9
+        ),
         "maximum_saved_phase_advance_radians": maximum_increment,
         "initial_separation_pc": float(separation[0]),
         "final_separation_pc": float(separation[-1]),
@@ -253,10 +259,14 @@ def main() -> int:
         or metadata.get("qe_design_binding") is not None
         or metadata.get("save_number") != SAVES
         or metadata.get("actual_wave_steps") != STEPS
+        or metadata.get("time_step_factor") != 0.125
+        or metadata.get("checkpoint_every_saved_intervals") != 2
+        or metadata.get("diagnostic_stop_after_save") is not None
         or not np.isclose(metadata.get("duration_myr", np.nan), DURATION_MYR,
                           rtol=0, atol=1e-15)
         or summary.get("status") != "diagnostic_complete"
         or summary.get("actual_wave_steps") != STEPS
+        or summary.get("planned_wave_steps") != STEPS
         or summary.get("saved_intervals") != SAVES
         or conservation.get("status") != "diagnostic_complete"
         or conservation.get("samples") != SAVES + 1
@@ -300,6 +310,12 @@ def main() -> int:
         resolution=256, step=STEPS, save_index=SAVES,
     )
     coverage = orbital_coverage(states, units.length_pc)
+    initial_a = float(conservation.get("initial_osculating_semimajor_axis_pc", np.nan))
+    if (
+        not np.isfinite(initial_a)
+        or not 0.8 <= initial_a / metadata["semi_major_axis_pc"] <= 1.2
+    ):
+        raise ValueError("initial osculating orbit is inconsistent with seed")
     logs = {
         name: np.load(run / "Outputs" / f"{name}.npy")
         for name in ENERGY_LOGS
@@ -335,6 +351,7 @@ def main() -> int:
         "seed": str(seed),
         "seed_manifest_sha256": SEED_MANIFEST_SHA256,
         "coverage": coverage,
+        "initial_osculating_semimajor_axis_pc": initial_a,
         "one_orbit_coverage_gate_passed": coverage["one_projected_turn_reached"],
         "energy_error_over_transfer": energy,
         "short_orbit_energy_gate_passed": energy <= 0.01,
