@@ -299,6 +299,42 @@ def load_convergence_run(label: str, run: Path) -> dict:
     metadata = json.loads(artifact_bytes["fdm_adapter_metadata.json"])
     config = json.loads(artifact_bytes["config.uldm"])
     conservation = json.loads(artifact_bytes["conservation_summary.json"])
+    required_peak_fields = {
+        "maximum_initial_resolved_energy_error_over_transfer",
+        "time_of_maximum_initial_resolved_energy_error_myr",
+        "final_energy_error_over_transfer",
+        "maximum_energy_error_over_transfer_tolerance",
+        "initial_resolved_energy_conservation_passed",
+        "energy_transfer_conservation_passed",
+    }
+    missing_peak = sorted(required_peak_fields - set(conservation))
+    if missing_peak:
+        raise ValueError(
+            f"{label}: conservation summary lacks peak-resolved evidence: "
+            + ", ".join(missing_peak)
+        )
+    peak = float(conservation["maximum_initial_resolved_energy_error_over_transfer"])
+    peak_time = float(conservation["time_of_maximum_initial_resolved_energy_error_myr"])
+    final_error = float(conservation["final_energy_error_over_transfer"])
+    tolerance = float(conservation["maximum_energy_error_over_transfer_tolerance"])
+    if (
+        not all(np.isfinite(value) for value in (peak, peak_time, final_error, tolerance))
+        or min(peak, peak_time, final_error) < 0.0
+        or tolerance <= 0.0
+    ):
+        raise ValueError(f"{label}: peak-resolved conservation evidence is invalid")
+    passed = peak <= tolerance
+    for field in (
+        "initial_resolved_energy_conservation_passed",
+        "energy_transfer_conservation_passed",
+    ):
+        if not isinstance(conservation[field], bool) or conservation[field] != passed:
+            raise ValueError(
+                f"{label}: conservation pass flag disagrees with resolved peak"
+            )
+    legacy_alias = conservation.get("initial_resolved_energy_drift_over_transfer")
+    if legacy_alias is None or float(legacy_alias) != peak:
+        raise ValueError(f"{label}: initial-resolved conservation aliases disagree")
     orbit = json.loads(artifact_bytes["orbit_averaged_exchange_summary.json"])
     orbit_provenance = validate_orbit_artifact_provenance(
         resolved, metadata, orbit, artifact_bytes=artifact_bytes
@@ -325,6 +361,55 @@ def load_convergence_run(label: str, run: Path) -> dict:
             )
     if np.any(np.diff(series["time_myr"]) <= 0.0):
         raise ValueError(f"{label}: saved times are not strictly increasing")
+    transfer_scale = np.maximum.reduce(
+        [
+            np.maximum.accumulate(np.abs(series[field] - series[field][0]))
+            for field in (
+                "binary_orbital_energy", "bh_com_kinetic_energy",
+                "wave_intrinsic_energy", "wave_bh_interaction_grid",
+            )
+        ]
+    )
+    hamiltonian_error = np.maximum.accumulate(
+        np.abs(series["combined_energy"] - series["combined_energy"][0])
+    )
+    expected_history = np.divide(
+        hamiltonian_error, transfer_scale,
+        out=np.zeros_like(hamiltonian_error),
+        where=transfer_scale > np.finfo(float).tiny,
+    )
+    if not np.allclose(
+        series["energy_error_over_transfer"], expected_history,
+        rtol=1.0e-12, atol=0.0,
+    ):
+        raise ValueError(f"{label}: conservation error history disagrees with raw energies")
+    cell_size = float(metadata["cell_size_pc"])
+    if not np.isfinite(cell_size) or cell_size <= 0.0:
+        raise ValueError(f"{label}: cell size is invalid")
+    crossings = np.flatnonzero(series["separation_pc"] < 2.0 * cell_size)
+    resolved_samples = series.size if crossings.size == 0 else int(crossings[0])
+    if resolved_samples < 2:
+        raise ValueError(f"{label}: resolved conservation interval has fewer than two states")
+    expected_duration = float(series["time_myr"][resolved_samples - 1])
+    declared_duration = conservation.get("initial_spatially_resolved_duration_myr")
+    if not isinstance(declared_duration, (int, float)) or not np.isclose(
+        float(declared_duration), expected_duration, rtol=0.0, atol=1.0e-12
+    ):
+        raise ValueError(f"{label}: resolved duration disagrees with separation history")
+    resolved_indices = np.arange(resolved_samples)
+    resolved_history = series["energy_error_over_transfer"][resolved_indices]
+    expected_peak_offset = int(np.argmax(resolved_history))
+    expected_peak = float(resolved_history[expected_peak_offset])
+    expected_peak_time = float(series["time_myr"][resolved_indices[expected_peak_offset]])
+    if not np.isclose(peak, expected_peak, rtol=1.0e-12, atol=0.0) or not np.isclose(
+        peak_time, expected_peak_time, rtol=0.0, atol=1.0e-12
+    ):
+        raise ValueError(f"{label}: resolved peak evidence disagrees with time series")
+    if not np.isclose(
+        final_error, float(series["energy_error_over_transfer"][-1]),
+        rtol=1.0e-12, atol=0.0,
+    ):
+        raise ValueError(f"{label}: final conservation error disagrees with time series")
     orbit_series = None
     if "orbit_averaged_exchange.csv" in artifact_bytes:
         orbit_series = np.genfromtxt(
@@ -783,7 +868,7 @@ def summarize_convergence(
         config = item["config"]
         conservation = item["conservation"]
         initial_resolved_energy_error = float(
-            conservation["initial_resolved_energy_drift_over_transfer"]
+            conservation["maximum_initial_resolved_energy_error_over_transfer"]
         )
         if not np.isfinite(initial_resolved_energy_error) or (
             initial_resolved_energy_error < 0.0
@@ -813,7 +898,16 @@ def summarize_convergence(
                 "maximum_energy_error_over_transfer": float(
                     conservation["max_total_energy_drift_over_energy_transfer"]
                 ),
+                "final_energy_error_over_transfer": float(
+                    conservation["final_energy_error_over_transfer"]
+                ),
+                "maximum_energy_error_over_transfer_tolerance": float(
+                    conservation["maximum_energy_error_over_transfer_tolerance"]
+                ),
                 "initial_resolved_energy_drift_over_transfer": (
+                    initial_resolved_energy_error
+                ),
+                "maximum_initial_resolved_energy_error_over_transfer": (
                     initial_resolved_energy_error
                 ),
                 "initial_resolved_energy_conservation_passed": bool(

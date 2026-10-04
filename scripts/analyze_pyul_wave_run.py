@@ -31,10 +31,11 @@ def _first_below(time: np.ndarray, value: np.ndarray, threshold: float) -> float
 def _energy_error_over_transfer(
     combined_energy: np.ndarray, transfer_components: tuple[np.ndarray, ...]
 ) -> float:
+    """Return the maximum prefix error, never only the final prefix."""
     history = _energy_error_timeseries_over_transfer(
         combined_energy, transfer_components
     )
-    return float(history[-1])
+    return float(np.max(history))
 
 
 def _energy_error_timeseries_over_transfer(
@@ -249,6 +250,12 @@ def main() -> int:
             ),
         )
     )
+    initial_resolved_peak_index = (
+        None
+        if initial_resolved_samples < 2
+        else int(np.argmax(energy_error_over_transfer[:initial_resolved_samples]))
+    )
+    final_energy_error_over_transfer = float(energy_error_over_transfer[-1])
     energy_tolerance_crossings = np.flatnonzero(
         energy_error_over_transfer > args.max_energy_error_over_transfer
     )
@@ -299,6 +306,14 @@ def main() -> int:
         ),
         "initial_resolved_energy_drift_over_transfer": (
             initial_resolved_energy_error
+        ),
+        "maximum_initial_resolved_energy_error_over_transfer": (
+            initial_resolved_energy_error
+        ),
+        "time_of_maximum_initial_resolved_energy_error_myr": (
+            None
+            if initial_resolved_peak_index is None
+            else float(time[initial_resolved_peak_index])
         ),
         "initial_resolved_energy_conservation_passed": bool(
             initial_resolved_energy_error is not None
@@ -360,12 +375,13 @@ def main() -> int:
         "max_total_energy_drift_over_energy_transfer": float(
             maximum_energy_error_over_transfer
         ),
+        "final_energy_error_over_transfer": final_energy_error_over_transfer,
         "maximum_energy_error_over_transfer_tolerance": float(
             args.max_energy_error_over_transfer
         ),
         "energy_transfer_conservation_passed": bool(
-            maximum_energy_error_over_transfer
-            <= args.max_energy_error_over_transfer
+            initial_resolved_energy_error is not None
+            and initial_resolved_energy_error <= args.max_energy_error_over_transfer
         ),
         "energy_error_history_normalization": (
             "at each saved prefix, cumulative maximum absolute Hamiltonian "

@@ -331,12 +331,12 @@ def build_source_rows(
     global_reasons = []
     for row in (reference_summary, comparison_summary):
         initial_resolved_energy_error = row.get(
-            "initial_resolved_energy_drift_over_transfer"
+            "maximum_initial_resolved_energy_error_over_transfer"
         )
         if initial_resolved_energy_error is None:
             raise ValueError(
                 f"{row['label']} convergence summary lacks the "
-                "initial-resolved Hamiltonian error"
+                "maximum initial-resolved Hamiltonian error"
             )
         initial_resolved_energy_error = float(initial_resolved_energy_error)
         if not np.isfinite(initial_resolved_energy_error) or (
@@ -344,6 +344,28 @@ def build_source_rows(
         ):
             raise ValueError(
                 f"{row['label']} initial-resolved Hamiltonian error is invalid"
+            )
+        passed = row.get("initial_resolved_energy_conservation_passed")
+        if not isinstance(passed, bool):
+            raise ValueError(
+                f"{row['label']} convergence summary lacks the peak conservation gate"
+            )
+        analyzer_tolerance = row.get("maximum_energy_error_over_transfer_tolerance")
+        if analyzer_tolerance is None:
+            raise ValueError(
+                f"{row['label']} convergence summary lacks the analyzer tolerance"
+            )
+        analyzer_tolerance = float(analyzer_tolerance)
+        if not np.isfinite(analyzer_tolerance) or analyzer_tolerance <= 0.0:
+            raise ValueError(f"{row['label']} analyzer tolerance is invalid")
+        alias = row.get("initial_resolved_energy_drift_over_transfer")
+        if alias is None or float(alias) != initial_resolved_energy_error:
+            raise ValueError(
+                f"{row['label']} initial-resolved conservation aliases disagree"
+            )
+        if passed != (initial_resolved_energy_error <= analyzer_tolerance):
+            raise ValueError(
+                f"{row['label']} conservation pass flag disagrees with resolved peak"
             )
         if (
             initial_resolved_energy_error

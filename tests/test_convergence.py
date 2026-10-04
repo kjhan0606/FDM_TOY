@@ -115,9 +115,14 @@ def _write_run(
         json.dumps(
             {
                 "initial_spatially_resolved_duration_myr": 1.5,
-                "initial_resolved_energy_drift_over_transfer": 0.002,
+                "initial_resolved_energy_drift_over_transfer": 0.001,
+                "maximum_initial_resolved_energy_error_over_transfer": 0.001,
+                "time_of_maximum_initial_resolved_energy_error_myr": 1.5,
+                "final_energy_error_over_transfer": 0.001,
+                "maximum_energy_error_over_transfer_tolerance": 0.01,
                 "initial_resolved_energy_conservation_passed": True,
-                "max_total_energy_drift_over_energy_transfer": 0.02,
+                "energy_transfer_conservation_passed": True,
+                "max_total_energy_drift_over_energy_transfer": 0.001,
             }
         )
     )
@@ -132,17 +137,19 @@ def _write_run(
             }
         )
     )
-    time = np.array([0.0, 1.0, 2.0])
+    time = np.array([0.0, 1.5, 2.0])
+    separation = 1.0 - 0.1 * scale * time
+    separation[-1] = 0.4
     columns = {
         "time_myr": time,
-        "separation_pc": 1.0 - 0.1 * scale * time,
-        "energy_error_over_transfer": 0.001 * time,
+        "separation_pc": separation,
+        "energy_error_over_transfer": np.array([0.0, 0.001, 0.001]),
         "binary_orbital_energy": -2.0 * scale * time,
         "binary_angular_momentum_msun_pc2_myr": -scale * time,
         "wave_intrinsic_energy": 3.0 * scale * time,
         "wave_bh_interaction_grid": -scale * time,
         "bh_com_kinetic_energy": np.zeros_like(time),
-        "combined_energy": 0.01 * scale * time,
+        "combined_energy": 0.003 * scale * time,
     }
     np.savetxt(
         path / "conservation_timeseries.csv",
@@ -195,10 +202,13 @@ def test_common_interval_comparison_uses_resolved_duration(tmp_path: Path) -> No
     assert result["common_interval_end_myr"] == pytest.approx(1.5)
     second = result["runs"][1]
     assert second["initial_resolved_energy_drift_over_transfer"] == pytest.approx(
-        0.002
+        0.001
     )
+    assert second[
+        "maximum_initial_resolved_energy_error_over_transfer"
+    ] == pytest.approx(0.001)
     assert second["initial_resolved_energy_conservation_passed"] is True
-    assert second["maximum_energy_error_over_transfer"] == pytest.approx(0.02)
+    assert second["maximum_energy_error_over_transfer"] == pytest.approx(0.001)
     assert second["common_interval"]["mean_binary_orbital_energy_rate"] == pytest.approx(-2.2)
     assert second["difference_from_reference"][
         "mean_binary_orbital_energy_rate_fractional_difference"
@@ -273,6 +283,77 @@ def test_common_interval_comparison_uses_resolved_duration(tmp_path: Path) -> No
     ] == pytest.approx(0.1)
 
 
+def test_loader_rejects_legacy_summary_without_resolved_peak(tmp_path: Path) -> None:
+    run = tmp_path / "legacy"
+    _write_run(run, scale=1.0, time_step_factor=1.0)
+    path = run / "conservation_summary.json"
+    summary = json.loads(path.read_text())
+    del summary["maximum_initial_resolved_energy_error_over_transfer"]
+    path.write_text(json.dumps(summary))
+    with pytest.raises(ValueError, match="lacks peak-resolved evidence"):
+        load_convergence_run("legacy", run)
+
+
+def test_loader_rejects_passing_final_with_failing_resolved_peak(
+    tmp_path: Path,
+) -> None:
+    run = tmp_path / "false_positive"
+    _write_run(run, scale=1.0, time_step_factor=1.0)
+    path = run / "conservation_summary.json"
+    summary = json.loads(path.read_text())
+    summary["maximum_initial_resolved_energy_error_over_transfer"] = 0.012
+    summary["initial_resolved_energy_drift_over_transfer"] = 0.012
+    summary["final_energy_error_over_transfer"] = 0.0003
+    summary["initial_resolved_energy_conservation_passed"] = True
+    summary["energy_transfer_conservation_passed"] = True
+    path.write_text(json.dumps(summary))
+    with pytest.raises(ValueError, match="pass flag disagrees with resolved peak"):
+        load_convergence_run("false_positive", run)
+
+
+def test_loader_rejects_understated_resolved_cutoff(tmp_path: Path) -> None:
+    run = tmp_path / "understated"
+    _write_run(run, scale=1.0, time_step_factor=1.0)
+    path = run / "conservation_summary.json"
+    summary = json.loads(path.read_text())
+    summary["initial_spatially_resolved_duration_myr"] = 0.0
+    path.write_text(json.dumps(summary))
+    with pytest.raises(ValueError, match="resolved duration disagrees"):
+        load_convergence_run("understated", run)
+
+
+def test_loader_recomputes_normalized_history_from_raw_energies(
+    tmp_path: Path,
+) -> None:
+    run = tmp_path / "tampered_history"
+    _write_run(run, scale=1.0, time_step_factor=1.0)
+    path = run / "conservation_timeseries.csv"
+    table = np.genfromtxt(path, delimiter=",", names=True)
+    table["energy_error_over_transfer"][1] = 0.0
+    np.savetxt(
+        path,
+        np.column_stack([table[name] for name in table.dtype.names or ()]),
+        delimiter=",", header=",".join(table.dtype.names or ()), comments="",
+    )
+    with pytest.raises(ValueError, match="history disagrees with raw energies"):
+        load_convergence_run("tampered_history", run)
+
+
+def test_loader_rejects_one_resolved_sample(tmp_path: Path) -> None:
+    run = tmp_path / "one_sample"
+    _write_run(run, scale=1.0, time_step_factor=1.0)
+    path = run / "conservation_timeseries.csv"
+    table = np.genfromtxt(path, delimiter=",", names=True)
+    table["separation_pc"][1] = 0.4
+    np.savetxt(
+        path,
+        np.column_stack([table[name] for name in table.dtype.names or ()]),
+        delimiter=",", header=",".join(table.dtype.names or ()), comments="",
+    )
+    with pytest.raises(ValueError, match="fewer than two states"):
+        load_convergence_run("one_sample", run)
+
+
 def test_matched_separation_excludes_orbits_ending_after_instantaneous_cutoff(
     tmp_path: Path,
 ) -> None:
@@ -280,31 +361,23 @@ def test_matched_separation_excludes_orbits_ending_after_instantaneous_cutoff(
     second_path = tmp_path / "second"
     _write_run(first_path, scale=1.0, time_step_factor=1.0)
     _write_run(second_path, scale=1.0, time_step_factor=0.5)
-    conservation_path = second_path / "conservation_summary.json"
-    conservation = json.loads(conservation_path.read_text())
-    conservation["initial_spatially_resolved_duration_myr"] = 0.25
-    conservation_path.write_text(json.dumps(conservation))
-
     result = summarize_convergence(
         (
             load_convergence_run("first", first_path),
             load_convergence_run("second", second_path),
         ),
         separation_bins=1,
-        minimum_orbits_per_separation_bin=2,
+        minimum_orbits_per_separation_bin=4,
     )
 
     matched = result["matched_separation"]
     assert matched["retained_bins"] == 0
     assert matched["bins"] == []
-    assert matched["selection_status"] == (
-        "insufficient_complete_orbits_before_first_instantaneous_"
-        "underresolution"
-    )
+    assert matched["selection_status"] == "matched_separation_bins_evaluated"
     assert matched["resolved_complete_orbits_by_run"][1] == {
         "label": "second",
-        "complete_orbits": 0,
-        "initial_instantaneous_resolved_duration_myr": 0.25,
+        "complete_orbits": 3,
+        "initial_instantaneous_resolved_duration_myr": 1.5,
     }
 
 
@@ -522,6 +595,11 @@ def test_registered_fixed_comparison_recomputes_and_rechecks_design(
             },
         })
         metadata_path.write_text(json.dumps(metadata))
+        if role == "fine":
+            conservation_path = run / "conservation_summary.json"
+            conservation = json.loads(conservation_path.read_text())
+            conservation["initial_spatially_resolved_duration_myr"] = 2.0
+            conservation_path.write_text(json.dumps(conservation))
         (run / "wave_response_timeseries.csv").write_text(
             "time_myr,measured_half_density_radius_pc\n0,1\n1,1\n"
         )
@@ -640,7 +718,6 @@ def test_load_requires_energy_error_column(tmp_path: Path) -> None:
         header=",".join(names),
         comments="",
     )
-
     with pytest.raises(ValueError, match="energy_error_over_transfer"):
         load_convergence_run("run", run)
 
@@ -693,19 +770,5 @@ def test_common_interval_uses_latest_input_start_time(tmp_path: Path) -> None:
         header=",".join(table.dtype.names or ()),
         comments="",
     )
-
-    result = summarize_convergence(
-        (
-            load_convergence_run("first", first_path),
-            load_convergence_run("second", second_path),
-        )
-    )
-
-    assert result["common_interval_start_myr"] == pytest.approx(1.0)
-    assert result["common_interval_end_myr"] == pytest.approx(1.5)
-    assert result["runs"][0]["common_interval"][
-        "mean_binary_orbital_energy_rate"
-    ] == pytest.approx(-2.0)
-    assert result["runs"][1]["common_interval"][
-        "mean_binary_orbital_energy_rate"
-    ] == pytest.approx(-2.2)
+    with pytest.raises(ValueError, match="history disagrees with raw energies"):
+        load_convergence_run("second", second_path)

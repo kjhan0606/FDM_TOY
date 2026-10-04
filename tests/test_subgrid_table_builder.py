@@ -192,12 +192,18 @@ def _write_summary(tmp_path: Path) -> Path:
                         "label": "n512",
                         "run": str(n512),
                         "initial_resolved_energy_drift_over_transfer": 0.002,
+                        "maximum_initial_resolved_energy_error_over_transfer": 0.002,
+                        "initial_resolved_energy_conservation_passed": True,
+                        "maximum_energy_error_over_transfer_tolerance": 0.01,
                         "maximum_energy_error_over_transfer": 0.2,
                     },
                     {
                         "label": "n384",
                         "run": str(n384),
                         "initial_resolved_energy_drift_over_transfer": 0.003,
+                        "maximum_initial_resolved_energy_error_over_transfer": 0.003,
+                        "initial_resolved_energy_conservation_passed": True,
+                        "maximum_energy_error_over_transfer_tolerance": 0.01,
                         "maximum_energy_error_over_transfer": 0.3,
                     },
                 ],
@@ -293,8 +299,10 @@ def test_builder_rejects_initial_resolved_hamiltonian_error(
     path = _write_summary(tmp_path)
     summary = json.loads(path.read_text())
     summary["runs"][1][
-        "initial_resolved_energy_drift_over_transfer"
+        "maximum_initial_resolved_energy_error_over_transfer"
     ] = 0.011
+    summary["runs"][1]["initial_resolved_energy_drift_over_transfer"] = 0.011
+    summary["runs"][1]["initial_resolved_energy_conservation_passed"] = False
     path.write_text(json.dumps(summary))
 
     result = build_source_rows(CalibrationSource("boey2025", path))
@@ -312,11 +320,45 @@ def test_builder_requires_initial_resolved_hamiltonian_error(
 ) -> None:
     path = _write_summary(tmp_path)
     summary = json.loads(path.read_text())
-    del summary["runs"][1]["initial_resolved_energy_drift_over_transfer"]
+    del summary["runs"][1]["maximum_initial_resolved_energy_error_over_transfer"]
     path.write_text(json.dumps(summary))
 
-    with pytest.raises(ValueError, match="initial-resolved Hamiltonian error"):
+    with pytest.raises(ValueError, match="maximum initial-resolved Hamiltonian error"):
         build_source_rows(CalibrationSource("boey2025", path))
+
+
+def test_builder_rejects_passing_final_with_failing_resolved_peak(
+    tmp_path: Path,
+) -> None:
+    path = _write_summary(tmp_path)
+    summary = json.loads(path.read_text())
+    summary["runs"][1]["maximum_initial_resolved_energy_error_over_transfer"] = 0.012
+    summary["runs"][1]["initial_resolved_energy_drift_over_transfer"] = 0.012
+    summary["runs"][1]["initial_resolved_energy_conservation_passed"] = True
+    path.write_text(json.dumps(summary))
+
+    with pytest.raises(ValueError, match="pass flag disagrees with resolved peak"):
+        build_source_rows(CalibrationSource("boey2025", path))
+
+
+def test_builder_uses_analyzer_tolerance_for_flag_but_stricter_release_limit(
+    tmp_path: Path,
+) -> None:
+    path = _write_summary(tmp_path)
+    summary = json.loads(path.read_text())
+    row = summary["runs"][1]
+    row["maximum_initial_resolved_energy_error_over_transfer"] = 0.015
+    row["initial_resolved_energy_drift_over_transfer"] = 0.015
+    row["maximum_energy_error_over_transfer_tolerance"] = 0.02
+    row["initial_resolved_energy_conservation_passed"] = True
+    path.write_text(json.dumps(summary))
+
+    result = build_source_rows(CalibrationSource("boey2025", path))
+    assert not result.accepted_rows
+    assert all(
+        "n384 exceeds the initial-resolved Hamiltonian error limit" in item["reasons"]
+        for item in result.rejected_bins
+    )
 
 
 def test_builder_requires_wave_response_for_both_resolutions(
@@ -682,7 +724,9 @@ def test_qe_box_control_censors_missing_control_bin(tmp_path: Path) -> None:
 def test_qe_box_control_censors_failed_hamiltonian_gate(tmp_path: Path) -> None:
     pair, box_path = _write_qe_box_pair(tmp_path)
     box = json.loads(box_path.read_text())
+    box["runs"][0]["maximum_initial_resolved_energy_error_over_transfer"] = 0.02
     box["runs"][0]["initial_resolved_energy_drift_over_transfer"] = 0.02
+    box["runs"][0]["initial_resolved_energy_conservation_passed"] = False
     box_path.write_text(json.dumps(box))
     result = assess_qe_box_control(
         CalibrationSource("test", pair), CalibrationSource("test", box_path)
