@@ -90,6 +90,14 @@ def main() -> int:
     metadata = json.loads(
         (run / "fdm_adapter_metadata.json").read_text(encoding="utf-8")
     )
+    coupling = metadata.get("wave_smbh_coupling", "legacy_plummer")
+    if coupling not in {"legacy_plummer", "periodic_tsc_reciprocal"}:
+        raise ValueError("unrecognized wave--SMBH coupling in diagnostic")
+    if (
+        coupling == "periodic_tsc_reciprocal"
+        and metadata.get("experimental_coupling_not_a_calibration_release") is not True
+    ):
+        raise ValueError("reciprocal TSC diagnostic lacks experimental scope flag")
     config = json.loads((run / "config.uldm").read_text(encoding="utf-8"))
     particles = config["Matter Particles"]["Condition"]
     if len(particles) != 2:
@@ -422,9 +430,16 @@ def main() -> int:
                 / interaction_scale
             )
         ),
-        "interaction_energy_definition": "integral rho*Phi_BH dV, counted once",
+        "interaction_energy_definition": (
+            "periodic TSC/Poisson integral rho*Phi_BH dV, counted once"
+            if coupling == "periodic_tsc_reciprocal"
+            else "integral rho*Phi_BH dV, counted once"
+        ),
+        "wave_smbh_coupling": coupling,
         "point_estimator_role": (
-            "gauge-dependent force diagnostic; not included in the Hamiltonian"
+            "reciprocal periodic TSC interaction identity; not an extra energy term"
+            if coupling == "periodic_tsc_reciprocal"
+            else "gauge-dependent force diagnostic; not included in the Hamiltonian"
         ),
         "analytic_fdm_drag": metadata["analytic_fdm_drag"],
         "osculating_elements_role": (

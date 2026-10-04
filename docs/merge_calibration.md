@@ -768,9 +768,46 @@ identify a unique kernel or interpolation defect. The audit artifact is
 `startup_component_dt_v1/f100/first_step_force_work_audit_v5.json` with
 SHA-256 `c66bd76106c2a4be36492e7ee1cde50d8fc8da225ae4ea3b27afcf64f948fa51`.
 No result here licenses a q/e calibration row or a smaller-separation
-extrapolation. The next controlled test must pair an energy-conjugate SMBH
-force with a compatible periodic interaction convention and then repeat the
-same first-step and temporal-refinement conservation gates.
+extrapolation.
+
+An experimental reciprocal particle-mesh coupling now deposits each SMBH
+with a periodic 27-point TSC assignment. The same assignment determines
+the SMBH force through the position derivative of the periodic wave--SMBH
+interaction. The zero-mean periodic Poisson operator acts on both mass
+fields. The SMBH--SMBH mutual force remains the original Plummer force.
+The TSC assignment changes the effective wave--SMBH softening, so this
+experiment does **not** isolate a change of force interpolation at fixed
+physical potential and cannot be used as a calibration row. Unit tests
+check mass conservation, periodic wrapping, cross-energy reciprocity,
+finite-difference force conjugacy, fixed-wave energy refinement, and
+restart separation between the old and new coupling modes.
+
+Slurm job `412065` completed the registered `n=256`, factor-1 first-ten-step
+diagnostic on syn01. The job used source commit `c3a1e8b`, an isolated A10,
+one CPU thread, and at most `1.146 GB` allocated GPU memory. Its first-step
+grid and particle interaction energies agree to a relative `2.65e-16`, and
+the maximum wave-mass error through save 10 is `8.88e-16`. The first-step
+Hamiltonian change is `−3,335,473.375 M_sun pc² Myr⁻²`. The maximum
+sampled-prefix error/exchange is `0.0184475`, exceeding the unchanged
+`0.01` criterion despite the exactly reciprocal force and energy. The
+final-prefix ratio alone is `0.00184551` and would hide the first-step
+failure.
+
+A source-bound Lageunha reconstruction of the first step gives Hamiltonian
+changes of `−71,171.873947`, `−0.000015`, and `+69,356.527222` code units
+for the first wave substep, the fixed-wave SMBH substep, and the final wave
+substep. The three terms sum to `−1,815.346741` code units and reproduce
+the CSV first-step change to `0.015 M_sun pc² Myr⁻²`. The particle-substep
+exchange is only `−0.028 M_sun pc² Myr⁻²`; the wave substeps account for
+the remaining drift in this experimental calculation. The result does
+not establish temporal convergence or validate the changed softening.
+The diagnostic remains `diagnostic_partial` and is barred from the
+calibration validator. The conservation summary SHA-256 is
+`8c1f332f4a9c231308fb3801b7ad3cdcc60b143945f0e95cc3357c47c71b0b47`;
+the first-step ledger SHA-256 is
+`8643f8194e0d0917a154272e384c9d5c961b083620b97b597cc98991ae1df2c3`.
+The next controlled comparison repeats the reciprocal calculation with
+half and quarter time steps at the same physical first-save time.
 
 Only **five** of those 37 complete orbits lie in the prospectively registered
 `[0.430, 0.438] pc` bin, below the fixed eight-orbit minimum. The five orbit
