@@ -48,6 +48,7 @@ def verified_source(project: Path, commit: str) -> dict[str, str]:
 
 def verified_run(
     run: Path, seed: Path, *, resolution: int, factor: float,
+    steps: int = STEPS, saves: int = SAVES,
 ) -> tuple[dict, dict, dict]:
     metadata_path = run / "fdm_adapter_metadata.json"
     config_path = run / "config.uldm"
@@ -64,10 +65,10 @@ def verified_run(
     if (
         metadata.get("reference_initial_state") != str(seed)
         or metadata.get("resolution") != resolution
-        or metadata.get("save_number") != SAVES
-        or metadata.get("actual_wave_steps") != SAVES
+        or metadata.get("save_number") != saves
+        or metadata.get("actual_wave_steps") != saves
         or metadata.get("time_step_factor") != factor
-        or metadata.get("diagnostic_stop_after_save") != STEPS
+        or metadata.get("diagnostic_stop_after_save") != steps
         or metadata.get("wave_smbh_coupling") != "periodic_tsc_strang_momentum"
         or metadata.get("binary_integrator")
         != "joint_kick_drift_kick_spectral_momentum_v1"
@@ -76,9 +77,9 @@ def verified_run(
         or config.get("Spatial Resolution") != resolution
         or config["Matter Particles"].get("Position Units") != "pc"
         or summary.get("status") != "diagnostic_partial"
-        or summary.get("actual_wave_steps") != STEPS
+        or summary.get("actual_wave_steps") != steps
         or conservation.get("status") != "diagnostic_partial"
-        or conservation.get("samples") != STEPS + 1
+        or conservation.get("samples") != steps + 1
         or provenance.get("status") != "source_snapshot"
         or provenance.get("run") != str(run)
         or provenance.get("input_records", {}).get("config_sha256")
