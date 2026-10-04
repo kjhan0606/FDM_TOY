@@ -242,7 +242,10 @@ def test_source_snapshot_is_repeatable_and_immutable(
         _snapshot_run(PROJECT, run)
 
 
-@pytest.mark.parametrize("coupling", ["periodic_tsc_reciprocal", "periodic_tsc_strang"])
+@pytest.mark.parametrize("coupling", [
+    "periodic_tsc_reciprocal", "periodic_tsc_strang",
+    "periodic_tsc_strang_momentum",
+])
 def test_periodic_tsc_snapshot_includes_its_force_operator(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, coupling: str
 ) -> None:
@@ -258,7 +261,7 @@ def test_periodic_tsc_snapshot_includes_its_force_operator(
         "backend": "pytorch_cpu", "adapter_revision": "test",
         "wave_smbh_coupling": coupling,
     }
-    if coupling == "periodic_tsc_strang":
+    if coupling in {"periodic_tsc_strang", "periodic_tsc_strang_momentum"}:
         metadata["solver_source_sha256"] = {
             relative.as_posix(): snapshot_torch_provenance._sha256(
                 (PROJECT / relative).read_bytes()
@@ -270,7 +273,7 @@ def test_periodic_tsc_snapshot_includes_its_force_operator(
             )
         }
     metadata_path = run / "fdm_adapter_metadata.json"
-    if coupling == "periodic_tsc_strang":
+    if coupling in {"periodic_tsc_strang", "periodic_tsc_strang_momentum"}:
         changed = json.loads(json.dumps(metadata))
         changed["solver_source_sha256"]["scripts/run_torch_wave_case.py"] = "changed"
         metadata_path.write_text(json.dumps(changed))
@@ -295,14 +298,20 @@ def test_periodic_tsc_snapshot_includes_its_force_operator(
         _snapshot_run(PROJECT, run)
 
 
+@pytest.mark.parametrize("coupling", [
+    "legacy_plummer", "periodic_tsc_strang_momentum",
+])
 def test_existing_snapshot_does_not_depend_on_the_current_worktree(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, coupling: str,
 ) -> None:
     project = tmp_path / "project"
-    for relative in (
+    solver_paths = (
         *snapshot_torch_provenance._UNCOMMITTED_SOLVER_PATHS,
+        *((snapshot_torch_provenance._PERIODIC_TSC_PATH,)
+          if coupling != "legacy_plummer" else ()),
         *snapshot_torch_provenance._COMMITTED_DEPENDENCY_PATHS,
-    ):
+    )
+    for relative in solver_paths:
         path = project / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"launch source for {relative}\n")
@@ -316,14 +325,17 @@ def test_existing_snapshot_does_not_depend_on_the_current_worktree(
     run = tmp_path / "run"
     run.mkdir()
     (run / "config.uldm").write_text("{}")
-    (run / "fdm_adapter_metadata.json").write_text(
-        json.dumps(
-            {
-                "backend": "pytorch_cpu",
-                "adapter_revision": "launch-revision",
-            }
-        )
-    )
+    metadata = {
+        "backend": "pytorch_cpu", "adapter_revision": "launch-revision",
+        "wave_smbh_coupling": coupling,
+    }
+    if coupling == "periodic_tsc_strang_momentum":
+        metadata["solver_source_sha256"] = {
+            relative.as_posix(): snapshot_torch_provenance._sha256(
+                (project / relative).read_bytes()
+            ) for relative in solver_paths
+        }
+    (run / "fdm_adapter_metadata.json").write_text(json.dumps(metadata))
     first = _snapshot_run(project, run)
     (project / "scripts/run_torch_wave_case.py").write_text(
         "new post-run worktree source\n"

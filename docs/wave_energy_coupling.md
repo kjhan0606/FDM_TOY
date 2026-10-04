@@ -106,10 +106,11 @@ neighbouring cells. It binds restarts to the reference configuration and
 solver-source hashes. The small-grid tests cover interaction reciprocity,
 forward/backward reversal, second-order refinement of a coupled short orbit,
 energy bookkeeping, and restart equivalence. These checks justify a short
-diagnostic prefix, not a calibrated orbital-decay row. The n256 run must still
-measure Hamiltonian drift and SMBH separation convergence. Spatial-resolution
-convergence, cell-offset sensitivity, total-momentum drift, full-orbit and
-pericentre coverage, and the interaction-softening comparison remain open.
+diagnostic prefix, not a calibrated orbital-decay row. A short n256 time-step
+ladder now measures Hamiltonian drift, separation convergence, and total
+momentum drift (below). Spatial-resolution convergence, physical n256
+cell-offset sensitivity, full-orbit and pericentre coverage, and the
+interaction-softening comparison remain open.
 No result from this mode may enter the FDM delay table until those gates pass.
 
 A toy translation check is a warning about the remaining spatial gate, not an
@@ -131,6 +132,37 @@ does not prove convergence of the separation itself, since TSC source
 smoothing changes with cell size. Intermediate offsets, a wave-induced-signal
 control, longer orbits, and physical n256 spatial checks remain required
 before calibration.
+
+The source-bound n256, q=0.3, e=0.3, a=0.2 pc Strang ladder from Slurm job
+412096 covers only the first ten common saves (about 17 years). At wave-step
+factors 1, 1/2, 1/4, and 1/8, the maximum prefix Hamiltonian error divided
+by the component-transfer scale is respectively 0.01845, 0.00576, 0.00152,
+and 0.000385. The coarsest case fails the registered 0.01 diagnostic limit;
+the others pass that *short-prefix* energy check. The last-save separation
+differences show approximately second-order time-step refinement. Wave mass
+and grid/point interaction reciprocity close to numerical precision. The
+trace summary is
+`/gpfs/kjhan/FDM_TOY_RESULTS/qe_followup_q030e030_a020_v1/periodic_tsc_strang_step_trace_v1/strang_step_trace_summary_v1.json`
+(SHA-256 `4ea3b8d2143298af3f0d16b39fae91d2672fce69d48a6a3a5079f392819cce5f`).
+
+The independent spectral-wave-plus-SMBH momentum audit does *not* converge
+to zero as the time step shrinks: its quadratic-extrapolated total-momentum
+residual is 0.02327 of the exchanged momentum, above the registered 0.001
+diagnostic threshold. This is a short-prefix, fixed-spatial-grid inference,
+not a claim about a long-time or spatial limit. The source-bound summary is
+`/gpfs/kjhan/FDM_TOY_RESULTS/qe_followup_q030e030_a020_v1/periodic_tsc_strang_step_trace_v1/momentum_refinement_summary_v1.json`.
+The TSC interaction-energy gradient is not the force conjugate to the grid's
+spectral momentum operator. `periodic_tsc_strang_momentum` therefore tests a
+separate, spectral-gradient force candidate while retaining the same wave
+source, energy ledger, and fail-closed domain checks. Its instantaneous
+grid/particle momentum forces cancel in a controlled operator test, but the
+discrete wave evolution may still have aliasing and the new force is not the
+gradient of the interaction energy. A 16³ wave-only phase-kick control has
+zero grid self-force to 10⁻¹² code units yet changes spectral wave momentum
+by about 6.9×10⁻⁶ code units in one half step; this explicitly separates
+the operator identity from the time-integrated result. Neither exact momentum
+conservation nor acceptable energy drift is assumed; both must be measured
+before this mode can contribute any FDM delay calibration.
 
 ## Double-counting prohibition
 

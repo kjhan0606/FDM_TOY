@@ -92,9 +92,15 @@ def main() -> int:
     )
     coupling = metadata.get("wave_smbh_coupling", "legacy_plummer")
     if coupling not in {
-        "legacy_plummer", "periodic_tsc_reciprocal", "periodic_tsc_strang"
+        "legacy_plummer", "periodic_tsc_reciprocal", "periodic_tsc_strang",
+        "periodic_tsc_strang_momentum",
     }:
         raise ValueError("unrecognized wave--SMBH coupling in diagnostic")
+    if (
+        coupling == "periodic_tsc_strang_momentum"
+        and metadata.get("smbh_force_is_interaction_energy_gradient") is not False
+    ):
+        raise ValueError("spectral-momentum mode lacks its force/energy warning")
     if (
         coupling != "legacy_plummer"
         and metadata.get("experimental_coupling_not_a_calibration_release") is not True
@@ -230,7 +236,7 @@ def main() -> int:
         bh_kinetic=bh_kinetic_array,
         bh_mutual_gravity=np.asarray(binary_mutual),
     )
-    if coupling == "periodic_tsc_strang":
+    if coupling in {"periodic_tsc_strang", "periodic_tsc_strang_momentum"}:
         recorded_binary = (
             np.load(run / "Outputs/binary_hamiltonian.npy")
             * energy_code_to_internal
@@ -459,6 +465,9 @@ def main() -> int:
             else "integral rho*Phi_BH dV, counted once"
         ),
         "wave_smbh_coupling": coupling,
+        "smbh_force_is_interaction_energy_gradient": metadata.get(
+            "smbh_force_is_interaction_energy_gradient"
+        ),
         "point_estimator_role": (
             "reciprocal periodic TSC interaction identity; not an extra energy term"
             if coupling != "legacy_plummer"

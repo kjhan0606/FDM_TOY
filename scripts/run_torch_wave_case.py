@@ -33,6 +33,8 @@ from fdm_smbh_delay.torch_wave import (
     wave_potential_energy_components,
 )
 
+_STRANG_COUPLINGS = {"periodic_tsc_strang", "periodic_tsc_strang_momentum"}
+
 
 _RESTART_METADATA_KEYS = (
     "wave_smbh_coupling",
@@ -65,10 +67,15 @@ def _require_resume_metadata(saved: dict, requested: dict) -> None:
             raise ValueError(f"restart request changes {key}")
     if saved.get("qe_design_binding") != requested.get("qe_design_binding"):
         raise ValueError("restart request changes q/e design binding")
+    if (
+        saved.get("smbh_force_is_interaction_energy_gradient")
+        != requested.get("smbh_force_is_interaction_energy_gradient")
+    ):
+        raise ValueError("restart changes SMBH force/energy-gradient contract")
     for key in ("reference_initial_wave_sha256", "reference_initial_particle_sha256"):
         if key in saved and saved[key] != requested[key]:
             raise ValueError(f"restart reference initial content changed: {key}")
-    if requested.get("wave_smbh_coupling") == "periodic_tsc_strang":
+    if requested.get("wave_smbh_coupling") in _STRANG_COUPLINGS:
         for key in (
             "reference_config_sha256", "reference_metadata_sha256",
             "solver_source_sha256",
@@ -278,7 +285,8 @@ def main() -> int:
     parser.add_argument("--time-step-factor", type=float, default=1.0)
     parser.add_argument(
         "--wave-smbh-coupling",
-        choices=("legacy_plummer", "periodic_tsc_reciprocal", "periodic_tsc_strang"),
+        choices=("legacy_plummer", "periodic_tsc_reciprocal", "periodic_tsc_strang",
+                 "periodic_tsc_strang_momentum"),
         default="legacy_plummer",
     )
     parser.add_argument("--device", default="cuda:0")
@@ -287,7 +295,7 @@ def main() -> int:
     parser.add_argument("--profile-memory-stages", action="store_true")
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
-    if args.wave_smbh_coupling in {"periodic_tsc_reciprocal", "periodic_tsc_strang"}:
+    if args.wave_smbh_coupling in {"periodic_tsc_reciprocal"} | _STRANG_COUPLINGS:
         from fdm_smbh_delay.periodic_mesh_coupling import (
             advance_binary_rk4_tsc,
             drift_binary_tsc,
@@ -420,11 +428,13 @@ def main() -> int:
             "duration_myr": duration_completed_myr,
             "time_step_factor": args.time_step_factor,
             "nbody_rk4_substeps_per_wave_step": (
-                0 if args.wave_smbh_coupling == "periodic_tsc_strang"
+                0 if args.wave_smbh_coupling in _STRANG_COUPLINGS
                 else args.rk4_substeps
             ),
             "binary_integrator": (
-                "joint_kick_drift_kick_v1"
+                "joint_kick_drift_kick_spectral_momentum_v1"
+                if args.wave_smbh_coupling == "periodic_tsc_strang_momentum"
+                else "joint_kick_drift_kick_v1"
                 if args.wave_smbh_coupling == "periodic_tsc_strang"
                 else "post_wave_drift_rk4_v1"
             ),
@@ -454,6 +464,8 @@ def main() -> int:
                 else (
                     "position_gradient_of_periodic_tsc_interaction_at_both_kicks"
                     if args.wave_smbh_coupling == "periodic_tsc_strang"
+                    else "spectral_momentum_tsc_force_at_both_kicks"
+                    if args.wave_smbh_coupling == "periodic_tsc_strang_momentum"
                     else "interpolated_from_a_local_potential_patch_at_each_rk4_stage"
                 )
             ),
@@ -461,21 +473,36 @@ def main() -> int:
                 args.wave_smbh_coupling != "legacy_plummer"
             ),
             "coupled_hamiltonian_ledger": (
-                args.wave_smbh_coupling == "periodic_tsc_strang"
+                args.wave_smbh_coupling in _STRANG_COUPLINGS
+            ),
+            "smbh_force_is_interaction_energy_gradient": (
+                args.wave_smbh_coupling != "periodic_tsc_strang_momentum"
+                if args.wave_smbh_coupling != "legacy_plummer" else None
             ),
             "binary_step_max_angular_advance": (
-                0.1 if args.wave_smbh_coupling == "periodic_tsc_strang" else None
+                0.1 if args.wave_smbh_coupling in _STRANG_COUPLINGS else None
             ),
             "binary_step_max_cell_crossing": (
-                0.1 if args.wave_smbh_coupling == "periodic_tsc_strang" else None
+                0.1 if args.wave_smbh_coupling in _STRANG_COUPLINGS else None
             ),
             "analytic_fdm_drag": False,
             "live_wave_force_on_smbhs": True,
             "smbh_force_on_live_wave": True,
         }
     )
-    if args.wave_smbh_coupling == "periodic_tsc_strang":
+    if args.wave_smbh_coupling in _STRANG_COUPLINGS:
+        import fdm_smbh_delay.periodic_mesh_coupling as coupling_module
+        import fdm_smbh_delay.pyul as pyul_module
+        import fdm_smbh_delay.torch_wave as wave_module
+
         project = Path(__file__).resolve().parents[1]
+        for relative, module in (
+            (Path("src/fdm_smbh_delay/periodic_mesh_coupling.py"), coupling_module),
+            (Path("src/fdm_smbh_delay/pyul.py"), pyul_module),
+            (Path("src/fdm_smbh_delay/torch_wave.py"), wave_module),
+        ):
+            if Path(module.__file__).resolve() != (project / relative).resolve():
+                raise ValueError(f"executed module differs from hashed source: {relative}")
         metadata.update({
             "reference_config_sha256": _sha256(reference / "config.uldm"),
             "reference_metadata_sha256": _sha256(
@@ -592,7 +619,7 @@ def main() -> int:
 
     compact_potential = compact_field(state.reshape(2, 6)[:, :3])
     profile_stage("initial_compact_potential")
-    if args.wave_smbh_coupling == "periodic_tsc_strang" and not args.resume:
+    if args.wave_smbh_coupling in _STRANG_COUPLINGS and not args.resume:
         phase_jump = max(
             float((compact_potential - torch.roll(
                 compact_potential, shifts=1, dims=axis
@@ -608,7 +635,7 @@ def main() -> int:
     if args.resume:
         logs = _load_energy_logs(
             output, start_save_index,
-            coupled_hamiltonian=args.wave_smbh_coupling == "periodic_tsc_strang",
+            coupled_hamiltonian=args.wave_smbh_coupling in _STRANG_COUPLINGS,
         )
     else:
         logs: dict[str, list[float]] = {
@@ -620,7 +647,7 @@ def main() -> int:
             "egpcmMlist": [],
             "ULDMass": [],
         }
-        if args.wave_smbh_coupling == "periodic_tsc_strang":
+        if args.wave_smbh_coupling in _STRANG_COUPLINGS:
             logs["binary_hamiltonian"] = []
             logs["total_hamiltonian"] = []
 
@@ -665,7 +692,7 @@ def main() -> int:
         logs["masseslist"].append(wave_mass)
         logs["egpcmMlist"].append(point_interaction)
         logs["ULDMass"].append(wave_mass)
-        if args.wave_smbh_coupling == "periodic_tsc_strang":
+        if args.wave_smbh_coupling in _STRANG_COUPLINGS:
             body = state.reshape(2, 6)
             displacement = body[1, :3] - body[0, :3]
             binary_hamiltonian = float(
@@ -726,7 +753,7 @@ def main() -> int:
             raise
 
     for step in range(start_step + 1, actual_steps + 1):
-        if args.wave_smbh_coupling == "periodic_tsc_strang":
+        if args.wave_smbh_coupling in _STRANG_COUPLINGS:
             checked_strang(
                 validate_binary_tsc_timestep, step,
                 state=state.reshape(2, 6), masses=masses_code,
@@ -736,11 +763,13 @@ def main() -> int:
         total_potential = wave_potential + compact_potential
         profile_stage(f"step_{step:06d}_first_total_potential")
         apply_potential_half_kick_in_place(wavefunction, total_potential, time_step)
-        if args.wave_smbh_coupling == "periodic_tsc_strang":
+        if args.wave_smbh_coupling in _STRANG_COUPLINGS:
             state = checked_strang(kick_binary_tsc, step,
                 state=state.reshape(2, 6), masses=masses_code,
                 wave_potential=wave_potential, box_length=box_code,
                 plummer_radius=plummer_code, time_step=0.5 * time_step,
+                force_scheme=("spectral_momentum" if args.wave_smbh_coupling
+                              == "periodic_tsc_strang_momentum" else "energy_gradient"),
             ).reshape(-1)
             checked_strang(
                 validate_binary_tsc_timestep, step,
@@ -761,7 +790,7 @@ def main() -> int:
         wavefunction = torch.fft.ifftn(wavefunction_k)
         del wavefunction_k
         profile_stage(f"step_{step:06d}_inverse_fft")
-        if args.wave_smbh_coupling == "periodic_tsc_strang":
+        if args.wave_smbh_coupling in _STRANG_COUPLINGS:
             state = checked_strang(drift_binary_tsc, step,
                 state=state.reshape(2, 6), box_length=box_code,
                 time_step=time_step,
@@ -800,24 +829,26 @@ def main() -> int:
                 time_step=time_step,
                 substeps=args.rk4_substeps,
             )
-        if args.wave_smbh_coupling != "periodic_tsc_strang":
+        if args.wave_smbh_coupling not in _STRANG_COUPLINGS:
             del wave_patches, patch_starts
             profile_stage(f"step_{step:06d}_particle_rk4")
         compact_potential = compact_field(state.reshape(2, 6)[:, :3])
         profile_stage(f"step_{step:06d}_compact_potential")
         total_potential = wave_potential + compact_potential
         apply_potential_half_kick_in_place(wavefunction, total_potential, time_step)
-        if args.wave_smbh_coupling == "periodic_tsc_strang":
+        if args.wave_smbh_coupling in _STRANG_COUPLINGS:
             state = checked_strang(kick_binary_tsc, step,
                 state=state.reshape(2, 6), masses=masses_code,
                 wave_potential=wave_potential, box_length=box_code,
                 plummer_radius=plummer_code, time_step=0.5 * time_step,
+                force_scheme=("spectral_momentum" if args.wave_smbh_coupling
+                              == "periodic_tsc_strang_momentum" else "energy_gradient"),
             ).reshape(-1)
         del total_potential
         profile_stage(f"step_{step:06d}_second_kick")
         if step % steps_per_save == 0:
             save_index = step // steps_per_save
-            if args.wave_smbh_coupling == "periodic_tsc_strang":
+            if args.wave_smbh_coupling in _STRANG_COUPLINGS:
                 checked_strang(save, step, index=save_index)
             else:
                 save(save_index)

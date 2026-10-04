@@ -182,6 +182,14 @@ def tsc_spectral_momentum_force(
     without a measured total-energy error budget.
     """
 
+    if (
+        wave_potential.ndim != 3
+        or len(set(wave_potential.shape)) != 1
+        or wave_potential.dtype != torch.float64
+        or not torch.isfinite(wave_potential).all()
+        or not np.isfinite(box_length) or box_length <= 0.0
+    ):
+        raise ValueError("spectral TSC force requires a finite cubic wave potential")
     mass = np.asarray(masses, dtype=np.float64)
     indices, weights, _ = tsc_stencil(
         positions=positions, resolution=wave_potential.shape[0],
@@ -194,26 +202,39 @@ def tsc_spectral_momentum_force(
         raise ValueError("spectral TSC force requires positive finite masses")
     device_indices = torch.as_tensor(indices, device=wave_potential.device)
     force = np.empty((mass.size, 3), dtype=np.float64)
-    for axis, gradient in enumerate(periodic_spectral_gradient(
-        potential=wave_potential, box_length=box_length,
-    )):
+    resolution = wave_potential.shape[0]
+    wave_number = 2.0 * torch.pi * torch.fft.fftfreq(
+        resolution, d=box_length / resolution,
+        dtype=torch.float64, device=wave_potential.device,
+    )
+    if resolution % 2 == 0:
+        wave_number[resolution // 2] = 0.0
+    spectrum = torch.fft.fftn(wave_potential)
+    for axis in range(3):
+        shape = [1, 1, 1]
+        shape[axis] = resolution
+        gradient = torch.fft.ifftn(
+            spectrum * (1j * wave_number.reshape(shape))
+        ).real
         sampled = gradient[
             device_indices[..., 0], device_indices[..., 1],
             device_indices[..., 2],
         ].detach().cpu().numpy()
         force[:, axis] = -mass * np.sum(weights * sampled, axis=1)
+        del sampled, gradient
     return force
 
 
 def kick_binary_tsc(
     *, state: np.ndarray, masses: np.ndarray, wave_potential: torch.Tensor,
     box_length: float, plummer_radius: float, time_step: float,
+    force_scheme: str = "energy_gradient",
 ) -> np.ndarray:
     """Exact velocity subflow at fixed wave density and SMBH positions.
 
-    The wave force is the position gradient of the same TSC interaction
-    energy used by the compact source. A signed step permits a reversibility
-    check; production advances still use positive steps.
+    The default force is the position gradient of the TSC interaction energy.
+    The alternative spectral-momentum force is experimental and is not an
+    energy gradient. A signed step permits a reversibility check.
     """
 
     body = np.asarray(state, dtype=np.float64)
@@ -223,14 +244,21 @@ def kick_binary_tsc(
         or not np.all(np.isfinite(body)) or not np.all(np.isfinite(mass))
         or np.any(mass <= 0.0) or not np.isfinite(plummer_radius)
         or plummer_radius <= 0.0 or not np.isfinite(time_step)
+        or force_scheme not in {"energy_gradient", "spectral_momentum"}
     ):
         raise ValueError("TSC kick requires a finite two-body state")
     if np.any(np.abs(body[:, :3]) >= 0.5 * box_length):
         raise ValueError("SMBH left the nonperiodic direct-binary force domain")
-    _, wave_force = tsc_interaction_and_force(
-        wave_potential=wave_potential, masses=mass,
-        positions=body[:, :3], box_length=box_length,
-    )
+    if force_scheme == "energy_gradient":
+        _, wave_force = tsc_interaction_and_force(
+            wave_potential=wave_potential, masses=mass,
+            positions=body[:, :3], box_length=box_length,
+        )
+    else:
+        wave_force = tsc_spectral_momentum_force(
+            wave_potential=wave_potential, masses=mass,
+            positions=body[:, :3], box_length=box_length,
+        )
     displacement = body[1, :3] - body[0, :3]
     if np.linalg.norm(displacement) >= 0.5 * box_length:
         raise ValueError("SMBH separation exceeds the direct-binary force domain")

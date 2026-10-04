@@ -31,6 +31,7 @@ from fdm_smbh_delay.pyul import (
     PYUL_MYR_S, PYUL_PARSEC_M, PYUL_SOLAR_MASS_KG,
 )
 from scripts import analyze_pyul_wave_run, run_torch_wave_case
+from scripts.audit_periodic_tsc_momentum import spectral_wave_momentum
 
 
 def test_tsc_deposition_preserves_mass_and_wraps_periodically() -> None:
@@ -226,6 +227,59 @@ def test_spectral_and_energy_tsc_forces_approach_smooth_mode_gradient() -> None:
     assert momentum_errors[0] > momentum_errors[1] > momentum_errors[2]
 
 
+def test_spectral_momentum_kick_is_distinct_from_energy_gradient_kick() -> None:
+    potential = torch.as_tensor(
+        np.random.default_rng(1209).normal(size=(16, 16, 16)),
+        dtype=torch.float64,
+    )
+    body = np.array([
+        [-0.45, 0.01, 0.02, 0.01, -0.08, 0.0],
+        [0.45, -0.01, -0.02, -0.01, 0.06, 0.0],
+    ])
+    parameters = dict(
+        state=body, masses=np.array([0.7, 1.3]),
+        wave_potential=potential, box_length=4.0,
+        plummer_radius=0.1, time_step=0.001,
+    )
+    energy = kick_binary_tsc(**parameters)
+    momentum = kick_binary_tsc(**parameters, force_scheme="spectral_momentum")
+    np.testing.assert_array_equal(energy[:, :3], momentum[:, :3])
+    assert np.max(np.abs(energy[:, 3:] - momentum[:, 3:])) > 1e-6
+
+
+def test_wave_only_phase_kick_has_measurable_spectral_momentum_aliasing() -> None:
+    resolution = 16
+    box_length = 4.0
+    rng = np.random.default_rng(1902)
+    initial = np.asarray(
+        1.0 + 0.1 * rng.normal(size=(resolution,) * 3)
+        + 0.1j * rng.normal(size=(resolution,) * 3),
+        dtype=np.complex128,
+    )
+    wave = torch.as_tensor(initial.copy())
+    grid = spectral_grid(
+        resolution=resolution, box_length=box_length, time_step=0.001,
+        device=torch.device("cpu"),
+    )
+    density = wave_density(wave)
+    self_potential = periodic_poisson_torch(
+        density, grid.poisson_inverse_wavenumber_squared
+    )
+    continuum_grid_force = np.array([
+        -grid.cell_volume * float(torch.sum(density * derivative))
+        for derivative in periodic_spectral_gradient(
+            potential=self_potential, box_length=box_length
+        )
+    ])
+    np.testing.assert_allclose(continuum_grid_force, 0.0, rtol=0, atol=1e-12)
+    apply_potential_half_kick_in_place(wave, self_potential, 0.001)
+    actual_change = spectral_wave_momentum(wave.numpy(), box_length) - (
+        spectral_wave_momentum(initial, box_length)
+    )
+    assert np.linalg.norm(actual_change) > 1e-12
+    print(json.dumps({"wave_only_momentum_aliasing_code": actual_change.tolist()}))
+
+
 def test_tsc_rk4_conserves_fixed_wave_interaction_with_refinement() -> None:
     grid = spectral_grid(
         resolution=16, box_length=4.0, time_step=1e-3,
@@ -267,7 +321,10 @@ def test_tsc_rk4_conserves_fixed_wave_interaction_with_refinement() -> None:
     assert errors[1] < errors[0] / 50.0
 
 
-def test_tsc_binary_kick_drift_is_reversible_and_second_order() -> None:
+@pytest.mark.parametrize("force_scheme", ["energy_gradient", "spectral_momentum"])
+def test_tsc_binary_kick_drift_is_reversible_and_second_order(
+    force_scheme: str,
+) -> None:
     potential = torch.as_tensor(
         np.random.default_rng(9905).normal(scale=0.01, size=(16, 16, 16)),
         dtype=torch.float64,
@@ -282,6 +339,7 @@ def test_tsc_binary_kick_drift_is_reversible_and_second_order() -> None:
         first = kick_binary_tsc(
             state=state, masses=masses, wave_potential=potential,
             box_length=4.0, plummer_radius=0.1, time_step=0.5 * dt,
+            force_scheme=force_scheme,
         )
         middle = drift_binary_tsc(
             state=first, box_length=4.0, time_step=dt,
@@ -289,6 +347,7 @@ def test_tsc_binary_kick_drift_is_reversible_and_second_order() -> None:
         return kick_binary_tsc(
             state=middle, masses=masses, wave_potential=potential,
             box_length=4.0, plummer_radius=0.1, time_step=0.5 * dt,
+            force_scheme=force_scheme,
         )
 
     forward = step(initial, 0.02)
@@ -315,6 +374,12 @@ def test_tsc_binary_kick_drift_is_reversible_and_second_order() -> None:
             masses=masses, wave_potential=potential, box_length=4.0,
             plummer_radius=0.1, time_step=0.01,
         )
+    with pytest.raises(ValueError, match="finite two-body state"):
+        kick_binary_tsc(
+            state=initial, masses=masses, wave_potential=potential,
+            box_length=4.0, plummer_radius=0.1, time_step=0.01,
+            force_scheme="unknown",
+        )
     with pytest.raises(ValueError, match="orbit undersampled"):
         validate_binary_tsc_timestep(
             state=initial, masses=masses, box_length=4.0,
@@ -322,7 +387,8 @@ def test_tsc_binary_kick_drift_is_reversible_and_second_order() -> None:
         )
 
 
-def test_full_wave_binary_strang_step_reverses() -> None:
+@pytest.mark.parametrize("force_scheme", ["energy_gradient", "spectral_momentum"])
+def test_full_wave_binary_strang_step_reverses(force_scheme: str) -> None:
     axis = np.arange(8, dtype=float) * 0.5 - 2.0
     density = 1.0 + 0.1 * np.cos(2.0 * np.pi * axis[:, None, None] / 4.0)
     initial_wave = torch.as_tensor(
@@ -360,6 +426,7 @@ def test_full_wave_binary_strang_step_reverses() -> None:
         body = kick_binary_tsc(
             state=body, masses=masses, wave_potential=wave_potential,
             box_length=4.0, plummer_radius=0.1, time_step=0.5 * dt,
+            force_scheme=force_scheme,
         )
         spectrum = torch.fft.fftn(wave)
         phase = grid.kinetic_axis_phase
@@ -375,6 +442,7 @@ def test_full_wave_binary_strang_step_reverses() -> None:
         body = kick_binary_tsc(
             state=body, masses=masses, wave_potential=wave_potential,
             box_length=4.0, plummer_radius=0.1, time_step=0.5 * dt,
+            force_scheme=force_scheme,
         )
         return wave, body
 
@@ -458,7 +526,10 @@ def _small_reference(reference, resolution: int = 16) -> None:
     (reference / "reproducibility.uldm").write_text("test\n")
 
 
-@pytest.mark.parametrize("coupling", ["periodic_tsc_reciprocal", "periodic_tsc_strang"])
+@pytest.mark.parametrize("coupling", [
+    "periodic_tsc_reciprocal", "periodic_tsc_strang",
+    "periodic_tsc_strang_momentum",
+])
 def test_experimental_tsc_runner_restarts_without_changing_coupling(
     tmp_path, monkeypatch, coupling,
 ) -> None:
@@ -514,7 +585,7 @@ def test_experimental_tsc_runner_restarts_without_changing_coupling(
         )
     components = wave_components + [np.asarray(binary)]
     hamiltonian = sum(components)
-    if coupling == "periodic_tsc_strang":
+    if coupling in {"periodic_tsc_strang", "periodic_tsc_strang_momentum"}:
         phase_jump = json.loads(
             (full / "initial_compact_phase_jump.json").read_text()
         )["max_neighbour_phase_difference_over_pi"]
@@ -537,7 +608,7 @@ def test_experimental_tsc_runner_restarts_without_changing_coupling(
     assert abs(hamiltonian[-1] - hamiltonian[0]) / transfer_scale < 0.01
     with pytest.raises(ValueError, match="wave_smbh_coupling"):
         run(split, "--resume")
-    if coupling == "periodic_tsc_strang":
+    if coupling in {"periodic_tsc_strang", "periodic_tsc_strang_momentum"}:
         config_path = reference / "config.uldm"
         original_config = config_path.read_text()
         config = json.loads(original_config)
@@ -554,8 +625,11 @@ def test_experimental_tsc_runner_restarts_without_changing_coupling(
             run(split, *mode, "--resume")
 
 
+@pytest.mark.parametrize("coupling", [
+    "periodic_tsc_strang", "periodic_tsc_strang_momentum",
+])
 def test_strang_coupled_binary_separation_refines_quadratically(
-    tmp_path, monkeypatch,
+    tmp_path, monkeypatch, coupling,
 ) -> None:
     reference = tmp_path / "seed"
     _small_reference(reference)
@@ -568,12 +642,16 @@ def test_strang_coupled_binary_separation_refines_quadratically(
             "--duration-myr", "0.075", "--save-number", "1",
             "--save-3d-number", "0", "--movie-frame-number", "0",
             "--checkpoint-every-saves", "0", "--device", "cpu",
-            "--wave-smbh-coupling", "periodic_tsc_strang",
+            "--wave-smbh-coupling", coupling,
             "--time-step-factor", str(factor),
         ])
         assert run_torch_wave_case.main() == 0
         metadata = json.loads((output / "fdm_adapter_metadata.json").read_text())
-        assert metadata["binary_integrator"] == "joint_kick_drift_kick_v1"
+        assert metadata["binary_integrator"] == (
+            "joint_kick_drift_kick_spectral_momentum_v1"
+            if coupling == "periodic_tsc_strang_momentum"
+            else "joint_kick_drift_kick_v1"
+        )
         steps.append(metadata["actual_wave_steps"])
         body = np.load(output / "Outputs/NBody/NTM_#001.npy").reshape(2, 6)
         final_separation.append(np.linalg.norm(body[1, :3] - body[0, :3]))
@@ -623,8 +701,11 @@ def test_strang_timestep_failure_records_terminal_status(tmp_path, monkeypatch) 
     assert spatial_summary["status"] == "stalled_spatial_domain"
 
 
+@pytest.mark.parametrize("coupling", [
+    "periodic_tsc_strang", "periodic_tsc_strang_momentum",
+])
 def test_strang_analyser_rejects_changed_hamiltonian_ledger(
-    tmp_path, monkeypatch,
+    tmp_path, monkeypatch, coupling,
 ) -> None:
     reference = tmp_path / "seed"
     _small_reference(reference)
@@ -634,7 +715,7 @@ def test_strang_analyser_rejects_changed_hamiltonian_ledger(
         "--duration-myr", "0.01", "--save-number", "4",
         "--save-3d-number", "0", "--movie-frame-number", "0",
         "--checkpoint-every-saves", "1", "--device", "cpu",
-        "--wave-smbh-coupling", "periodic_tsc_strang",
+        "--wave-smbh-coupling", coupling,
         "--diagnostic-stop-after-save", "2",
     ])
     assert run_torch_wave_case.main() == 0
@@ -642,6 +723,10 @@ def test_strang_analyser_rejects_changed_hamiltonian_ledger(
         "analyze_pyul_wave_run.py", str(output), "--diagnostic-partial",
     ])
     assert analyze_pyul_wave_run.main() == 0
+    analyzed = json.loads((output / "conservation_summary.json").read_text())
+    assert analyzed["smbh_force_is_interaction_energy_gradient"] is (
+        coupling == "periodic_tsc_strang"
+    )
     ledger_path = output / "Outputs/total_hamiltonian.npy"
     ledger = np.load(ledger_path)
     ledger[1] += 1e-3
