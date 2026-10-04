@@ -670,10 +670,57 @@ the seed path, but not a launch-time hash of its initial wave bytes, so the
 cross-run comparison remains provisional on exact wave identity. The audit
 artifact is explicitly non-calibrating; its SHA-256 is
 `cff55d4a72b1fd44d6e733d8d1bb86cee03e312a0a49531bc2a013b8686d6770`.
-The next controlled experiment should bind the initial wave by content hash,
-record each Hamiltonian component at common physical times under temporal
-refinement, and isolate the wave-only sector before assigning the residual
-to any force or integration mechanism.
+That next controlled experiment has now been run. Slurm job 412026 completed
+on syn01 (exit 0) from source commit `b310517`, with three separately
+snapshotted Torch diagnostics under
+`/gpfs/kjhan/FDM_TOY_RESULTS/qe_followup_q030e030_a020_v1/startup_component_dt_v1/`.
+The launch-time SHA-256 values of the initial wave and SMBH state agree across
+all three runs and with the registered seed. The numerical source snapshots,
+physical configuration, and first ten save times agree; only the wave time
+step changes. Each run is `diagnostic_partial`, not an accepted calibration.
+Single-threaded Lageunha post-processing and the independent Hamiltonian
+component checker give, at the common first save
+`t=1.7094017094e-6 Myr`:
+
+| Wave-step factor | Steps to first save | Coupled ΔH (M_sun pc² Myr⁻²) | Maximum sampled-prefix error / exchange through save 10 |
+| --- | ---: | ---: | ---: |
+| 1 | 1 | −6,173,065 | 0.0318771 |
+| 0.5 | 2 | −1,102,192 | 0.0126720 |
+| 0.25 | 4 | +817,303 | 0.0131220 |
+
+All three exceed the unchanged registered `0.01` conservation limit at some
+saved prefix. The final save's Hamiltonian changes are respectively
+`+1.216e8`, `+1.401e8`, and `+1.452e8` in the same physical energy units;
+temporal refinement does not rescue the coupled run's ten-save conservation
+gate. The component comparison artifact SHA-256 is
+`9503981943a9c04027fa70bc62490513d528a1b4ff67a77bc1607e176391487a`.
+The three conservation-summary SHA-256 values, in factor order, are
+`9991ff7d7f7e80c4ebfa3d36980859b7f9e714f67e6dbf099cd8ed6ce51c035f`,
+`808f3a7df248f3f67053fe16028237d4f27bb0171272ec9de67274db05ab0f30`,
+and `9794e76ada87071612d163290739f71b83e936478876155f714c0e76f59214e4`.
+
+A separate source-bound Lageunha CPU audit held both SMBHs fixed and evolved
+the same initial wave through that first physical interval with 1, 2, and 4
+steps. Its Hamiltonian changes, converted with the seed's PyUL energy unit,
+are `−7.674e6`, `−2.604e6`, and `−0.685e6 M_sun pc² Myr⁻²`;
+wave-mass changes are at most `2.7e-15` fractionally. Its one-interval
+energy-error/exchange ratios are `0.03747`, `0.01189`, and `0.00307`.
+The fixed-source wave energy drift shrinks markedly with the time step, while
+the coupled first-save drift minus that fixed-source result is approximately
+`+1.501e6`, `+1.502e6`, and `+1.502e6` in physical units. This subtraction
+compares two different dynamical experiments: it is **not** an exact partition
+of the coupled Hamiltonian residual and does not prove which force or time
+integration term is responsible. It does show that improving the fixed-source
+wave step alone cannot certify coupled energy conservation. The wave-only
+artifact SHA-256 is
+`177cecafc847fef597ef2971827957c8b64abad8bdae9764c92fe97f78f2d147`.
+An independent read-only evaluation confirmed the numerical comparison but
+rejected any stronger claim that temporal refinement fixes the full system.
+The next discriminating test must measure the work done by the force actually
+applied to each SMBH against the evolving grid interaction energy, without
+assigning the nearly constant first-save difference to a specific mechanism
+in advance. No result here licenses a q/e calibration row or a smaller-
+separation extrapolation.
 
 Only **five** of those 37 complete orbits lie in the prospectively registered
 `[0.430, 0.438] pc` bin, below the fixed eight-orbit minimum. The five orbit
