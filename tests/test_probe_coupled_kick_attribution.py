@@ -110,6 +110,9 @@ def test_factorized_step_matches_unsplit_and_ledger_telescopes() -> None:
         reordered_changes["first_half_kick_defect"],
         changes["first_half_kick_defect"], rtol=0, atol=2e-13,
     )
+    assert reordered_changes["telescope_gap_code"] <= (
+        np.sqrt(3.0) * reordered_changes["telescope_tolerance_code"]
+    )
 
 
 def test_large_phase_factorization_over_two_kicks() -> None:

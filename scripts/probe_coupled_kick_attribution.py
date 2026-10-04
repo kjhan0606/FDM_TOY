@@ -264,9 +264,15 @@ def attributed_step(
         "wave_drift", "wave_self_second", "wave_compact_second",
         "body_second",
     )), np.zeros(3))
-    telescope_floor = 64.0 * np.finfo(float).eps * (
-        np.linalg.norm(p_wave_start) + np.linalg.norm(p_body_start)
-        + np.linalg.norm(final_total)
+    # The wave and body momenta can nearly cancel. A closure tolerance based
+    # only on their small total then understates subtraction round-off.
+    telescope_floor = 64.0 * np.finfo(float).eps * sum(
+        np.linalg.norm(value) for value in (
+            p_wave_start, p_body_start, p_after_self_first,
+            p_after_compact_first, p_after_body_first, p_after_drift,
+            p_after_self_second, p_after_compact_second, p_body_final,
+            final_total,
+        )
     )
     telescope_gap = float(np.linalg.norm(
         component_sum - (final_total - (p_wave_start + p_body_start))
@@ -279,6 +285,8 @@ def attributed_step(
             "attributed momentum ledger does not telescope: "
             f"gap={telescope_gap:.9g}, floor={telescope_floor:.9g}"
         )
+    components["telescope_gap_code"] = telescope_gap
+    components["telescope_tolerance_code"] = telescope_floor
     return (wave, final_body, next_wave_potential,
             next_compact_potential, components)
 

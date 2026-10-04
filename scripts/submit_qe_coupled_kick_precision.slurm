@@ -53,7 +53,7 @@ if [[ ! "$task_index" =~ ^[01]$ ]]; then
 fi
 level=${levels[$task_index]}
 stop=${stops[$task_index]}
-root=/gpfs/kjhan/FDM_TOY_RESULTS/qe_followup_q030e030_a020_v1/coupled_kick_precision_v2
+root=/gpfs/kjhan/FDM_TOY_RESULTS/qe_followup_q030e030_a020_v1/coupled_kick_precision_v3
 run=/gpfs/kjhan/FDM_TOY_RESULTS/qe_followup_q030e030_a020_v1/periodic_tsc_strang_momentum_step_trace_v1/$level
 printf -v checkpoint 'wave_%06d.npy' "$stop"
 printf -v state_checkpoint 'state_%06d.npz' "$stop"
