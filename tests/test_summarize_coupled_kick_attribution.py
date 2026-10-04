@@ -1,10 +1,13 @@
 """Checks for interaction-only versus joint half-kick accounting."""
 
 from copy import deepcopy
+import json
 
 import pytest
 
-from scripts.summarize_coupled_kick_attribution import assess_level
+from scripts.summarize_coupled_kick_attribution import (
+    assess_level, write_exclusive_json,
+)
 
 
 def _row() -> dict:
@@ -68,3 +71,12 @@ def test_interaction_dominance_fails_closed() -> None:
     payload["final_total_momentum_residual_code"] = [3.204, 0.0, 0.0]
     with pytest.raises(ValueError, match="interaction attribution does not dominate"):
         assess_level(payload, label="f100", factor=1.0, steps=1)
+
+
+def test_summary_write_is_exclusive(tmp_path) -> None:
+    output = tmp_path / "summary.json"
+    write_exclusive_json(output, {"status": "checked"})
+    assert json.loads(output.read_text()) == {"status": "checked"}
+    with pytest.raises(FileExistsError):
+        write_exclusive_json(output, {"status": "replacement"})
+    assert json.loads(output.read_text()) == {"status": "checked"}

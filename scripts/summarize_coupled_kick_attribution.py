@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -24,6 +25,16 @@ def sha256(path: Path) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def write_exclusive_json(output: Path, payload: dict) -> None:
+    if output.exists():
+        raise FileExistsError(f"refusing to overwrite attribution summary: {output}")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_suffix(output.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    os.link(temporary, output)
+    temporary.unlink()
 
 
 def vector(record: dict, key: str) -> np.ndarray:
@@ -195,11 +206,7 @@ def main() -> int:
             "nor full-orbit conservation nor calibration is established."
         ),
     }
-    output.parent.mkdir(parents=True, exist_ok=True)
-    temporary = output.with_suffix(output.suffix + ".tmp")
-    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-    temporary.link_to(output)
-    temporary.unlink()
+    write_exclusive_json(output, payload)
     print(json.dumps({"status": payload["status"],
                       "refinement_ratios": payload[
                           "endpoint_residual_norm_refinement_ratios"]}))
