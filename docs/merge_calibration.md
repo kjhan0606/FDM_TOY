@@ -575,6 +575,14 @@ Hamiltonian-error/transfer ratio over the initially resolved interval is
 final ratio is only `2.77868e-4`. The audited peak-resolved gate therefore
 marks conservation **failed**. These are single-resolution diagnostics,
 not convergence or a rate release.
+Only the first nonzero saved prefix exceeds the tolerance (one of 1171 saved
+states); it occurs after `8.547e-5` Myr. Across that prefix, the Hamiltonian
+changes by approximately `1.88e9` in the diagnostic energy units while the
+largest component exchange is approximately `1.49e11`. Later prefixes fall
+below `0.01`, but that does not undo the failed registered peak gate. The
+single-frame concentration suggests a targeted time-step/startup study as
+the next *diagnostic*, not a retrospective exclusion of the first state or a
+relaxation of the tolerance. No numerical cause is established yet.
 
 Only **five** of those 37 complete orbits lie in the prospectively registered
 `[0.430, 0.438] pc` bin, below the fixed eight-orbit minimum. The five orbit
