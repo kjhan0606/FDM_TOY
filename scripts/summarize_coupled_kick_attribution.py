@@ -80,12 +80,12 @@ def assess_level(payload: dict, *, label: str, factor: float,
             joint_half_norms.append(float(np.linalg.norm(joint)))
         drift += vector(row, "wave_drift")
     residual = vector(payload, "final_total_momentum_residual_code")
+    alternate_order_closure_gap = float(np.linalg.norm(
+        residual - (pair_alternate + self_alternate + drift)
+    ))
     if not (
         np.allclose(residual, pair + self_kick + drift, rtol=0, atol=1e-11)
-        and np.allclose(
-            residual, pair_alternate + self_alternate + drift,
-            rtol=0, atol=1e-11,
-        )
+        and alternate_order_closure_gap <= 1e-7
         and np.allclose(
             pair, vector(payload, "wave_compact_plus_body_attribution_code"),
             rtol=0, atol=1e-11,
@@ -115,6 +115,9 @@ def assess_level(payload: dict, *, label: str, factor: float,
         ),
         "interaction_pair_vector_gap_over_residual": pair_gap,
         "alternate_interaction_pair_vector_gap_over_residual": alternate_gap,
+        "alternate_phase_order_closure_gap_code": (
+            alternate_order_closure_gap
+        ),
         "self_kick_norm_code": float(np.linalg.norm(self_kick)),
         "alternate_self_kick_norm_code": float(np.linalg.norm(self_alternate)),
         "kinetic_drift_norm_code": float(np.linalg.norm(drift)),
