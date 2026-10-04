@@ -48,19 +48,25 @@ def spectral_wave_diagnostics(wave: np.ndarray, box_length: float) -> dict:
     wave_number = 2.0 * np.pi * np.fft.fftfreq(
         resolution, d=box_length / resolution
     )
+    momentum_wave_number = wave_number.copy()
+    if resolution % 2 == 0:
+        # The Nyquist plane represents the same real-grid mode with either
+        # sign. Its derivative is not a signed observable; assigning it -k
+        # would give a spurious momentum even for a real wavefunction.
+        momentum_wave_number[resolution // 2] = 0.0
     factor = (box_length / resolution) ** 3 / resolution**3
     marginals = (
         power.sum(axis=(1, 2)), power.sum(axis=(0, 2)),
         power.sum(axis=(0, 1)),
     )
     momentum = factor * np.asarray([
-        wave_number @ marginal for marginal in marginals
+        momentum_wave_number @ marginal for marginal in marginals
     ])
     kinetic = 0.5 * factor * sum(
         wave_number**2 @ marginal for marginal in marginals
     )
     absolute_weight = factor * sum(
-        np.abs(wave_number) @ marginal for marginal in marginals
+        np.abs(momentum_wave_number) @ marginal for marginal in marginals
     )
     high_frequency = np.abs(np.fft.fftfreq(resolution)) >= 0.375
     high_shell = np.zeros(power.shape, dtype=bool)

@@ -54,6 +54,16 @@ def test_momentum_rejects_invalid_wave_and_sums_binary() -> None:
     )
 
 
+def test_nyquist_real_wave_has_no_spurious_signed_momentum() -> None:
+    axis = np.arange(8)
+    wave = np.broadcast_to(
+        (1.0 + 0.2 * (-1.0) ** axis[:, None, None]), (8, 8, 8)
+    ).astype(np.complex128)
+    np.testing.assert_allclose(
+        spectral_wave_momentum(wave, 4.0), 0.0, rtol=0, atol=1e-13
+    )
+
+
 def test_momentum_audit_binds_reference_and_final_checkpoint(
     tmp_path, monkeypatch,
 ) -> None:

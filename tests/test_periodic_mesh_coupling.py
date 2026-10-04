@@ -12,8 +12,10 @@ from fdm_smbh_delay.periodic_mesh_coupling import (
     advance_binary_rk4_tsc,
     drift_binary_tsc,
     kick_binary_tsc,
+    periodic_spectral_gradient,
     periodic_tsc_patches,
     tsc_interaction_and_force,
+    tsc_spectral_momentum_force,
     tsc_source_density,
     tsc_stencil,
     validate_binary_tsc_timestep,
@@ -133,6 +135,95 @@ def test_tsc_poisson_cross_energy_is_reciprocal_and_force_is_its_gradient() -> N
     )
     assert periodic_energy == pytest.approx(particle_interaction, rel=1e-13)
     np.testing.assert_allclose(periodic_force, force, rtol=1e-12, atol=1e-12)
+
+
+@pytest.mark.parametrize("resolution", [16, 32, 64])
+def test_spectral_tsc_force_balances_discrete_wave_momentum(resolution: int) -> None:
+    box_length = 4.0
+    grid = spectral_grid(
+        resolution=resolution, box_length=box_length, time_step=1e-3,
+        device=torch.device("cpu"),
+    )
+    density = torch.as_tensor(
+        np.random.default_rng(9930 + resolution).uniform(
+            0.3, 1.2, size=(resolution,) * 3
+        ), dtype=torch.float64,
+    )
+    mass = np.array([0.7, 1.3])
+    positions = np.array([[0.13, -0.27, 0.19], [-0.48, 0.31, -0.21]])
+    source = tsc_source_density(
+        masses=mass, positions=positions, resolution=resolution,
+        box_length=box_length, device=torch.device("cpu"),
+    )
+    wave_potential = periodic_poisson_torch(
+        density, grid.poisson_inverse_wavenumber_squared
+    )
+    compact_potential = periodic_poisson_torch(
+        source, grid.poisson_inverse_wavenumber_squared
+    )
+    grid_wave_force = np.array([
+        -grid.cell_volume * float(torch.sum(density * gradient))
+        for gradient in periodic_spectral_gradient(
+            potential=compact_potential, box_length=box_length
+        )
+    ])
+    momentum_force = tsc_spectral_momentum_force(
+        wave_potential=wave_potential, masses=mass,
+        positions=positions, box_length=box_length,
+    )
+    np.testing.assert_allclose(
+        momentum_force.sum(axis=0) + grid_wave_force,
+        0.0, rtol=0, atol=2e-11,
+    )
+    _, energy_force = tsc_interaction_and_force(
+        wave_potential=wave_potential, masses=mass,
+        positions=positions, box_length=box_length,
+    )
+    print(json.dumps({
+        "resolution": resolution,
+        "energy_force_balance_defect": (
+            energy_force.sum(axis=0) + grid_wave_force
+        ).tolist(),
+        "momentum_force_balance_defect": (
+            momentum_force.sum(axis=0) + grid_wave_force
+        ).tolist(),
+    }))
+
+
+def test_spectral_and_energy_tsc_forces_approach_smooth_mode_gradient() -> None:
+    box_length = 4.0
+    mass = np.array([0.7, 1.3])
+    positions = np.array([[0.173, -0.261, 0.117], [-0.427, 0.318, -0.229]])
+    wave_number = 2.0 * np.pi / box_length
+    analytic = -mass[:, None] * np.column_stack((
+        -wave_number * np.sin(wave_number * positions[:, 0]),
+        0.3 * wave_number * np.cos(wave_number * positions[:, 1]),
+        -0.2 * wave_number * np.sin(wave_number * positions[:, 2]),
+    ))
+    energy_errors = []
+    momentum_errors = []
+    for resolution in (16, 32, 64):
+        axis = np.arange(resolution) * box_length / resolution - box_length / 2
+        potential = torch.as_tensor(
+            np.cos(wave_number * axis[:, None, None])
+            + 0.3 * np.sin(wave_number * axis[None, :, None])
+            + 0.2 * np.cos(wave_number * axis[None, None, :]),
+            dtype=torch.float64,
+        )
+        momentum_force = tsc_spectral_momentum_force(
+            wave_potential=potential, masses=mass,
+            positions=positions, box_length=box_length,
+        )
+        _, energy_force = tsc_interaction_and_force(
+            wave_potential=potential, masses=mass,
+            positions=positions, box_length=box_length,
+        )
+        momentum_errors.append(np.max(np.abs(momentum_force - analytic)))
+        energy_errors.append(np.max(np.abs(energy_force - analytic)))
+        assert np.sum(momentum_force * analytic) > 0.0
+        assert np.sum(energy_force * analytic) > 0.0
+    assert energy_errors[0] > energy_errors[1] > energy_errors[2]
+    assert momentum_errors[0] > momentum_errors[1] > momentum_errors[2]
 
 
 def test_tsc_rk4_conserves_fixed_wave_interaction_with_refinement() -> None:

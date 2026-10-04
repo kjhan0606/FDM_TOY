@@ -1,7 +1,7 @@
-"""Reciprocal periodic wave--compact-mass coupling on a TSC particle mesh.
+"""Experimental periodic wave--compact-mass coupling on a TSC particle mesh.
 
-The source and force use the same position-dependent assignment weights.
-This is an experimental coupling operator, not an accepted calibration mode.
+The energy-gradient and spectral-momentum force candidates are distinct.
+Neither is an accepted calibration mode.
 """
 
 from __future__ import annotations
@@ -138,6 +138,71 @@ def tsc_interaction_and_force(
     energy = float(np.sum(mass[:, None] * weights * sampled))
     force = -mass[:, None] * np.sum(derivatives * sampled[..., None], axis=1)
     return energy, force
+
+
+def periodic_spectral_gradient(
+    *, potential: torch.Tensor, box_length: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Return a skew-adjoint periodic gradient with zero Nyquist derivative."""
+
+    if (
+        potential.ndim != 3 or len(set(potential.shape)) != 1
+        or potential.dtype != torch.float64 or not torch.isfinite(potential).all()
+        or not np.isfinite(box_length) or box_length <= 0.0
+    ):
+        raise ValueError("spectral gradient requires a finite cubic potential")
+    resolution = potential.shape[0]
+    wave_number = 2.0 * torch.pi * torch.fft.fftfreq(
+        resolution, d=box_length / resolution,
+        dtype=torch.float64, device=potential.device,
+    )
+    if resolution % 2 == 0:
+        wave_number[resolution // 2] = 0.0
+    spectrum = torch.fft.fftn(potential)
+    gradients = []
+    for axis in range(3):
+        shape = [1, 1, 1]
+        shape[axis] = resolution
+        derivative = torch.fft.ifftn(
+            spectrum * (1j * wave_number.reshape(shape))
+        ).real
+        gradients.append(derivative)
+    return tuple(gradients)
+
+
+def tsc_spectral_momentum_force(
+    *, wave_potential: torch.Tensor, masses: np.ndarray,
+    positions: np.ndarray, box_length: float,
+) -> np.ndarray:
+    """Interpolate minus spectral wave gradient with TSC weights.
+
+    This force is conjugate to the grid's spectral momentum operator, not to
+    the position derivative of the TSC interaction energy. It is a separate
+    experimental candidate and must not replace the energy-gradient force
+    without a measured total-energy error budget.
+    """
+
+    mass = np.asarray(masses, dtype=np.float64)
+    indices, weights, _ = tsc_stencil(
+        positions=positions, resolution=wave_potential.shape[0],
+        box_length=box_length,
+    )
+    if (
+        mass.shape != (indices.shape[0],) or np.any(~np.isfinite(mass))
+        or np.any(mass <= 0.0)
+    ):
+        raise ValueError("spectral TSC force requires positive finite masses")
+    device_indices = torch.as_tensor(indices, device=wave_potential.device)
+    force = np.empty((mass.size, 3), dtype=np.float64)
+    for axis, gradient in enumerate(periodic_spectral_gradient(
+        potential=wave_potential, box_length=box_length,
+    )):
+        sampled = gradient[
+            device_indices[..., 0], device_indices[..., 1],
+            device_indices[..., 2],
+        ].detach().cpu().numpy()
+        force[:, axis] = -mass * np.sum(weights * sampled, axis=1)
+    return force
 
 
 def kick_binary_tsc(
