@@ -363,6 +363,40 @@ expired at its turn limit; the requested sol fallback found missing config
 and trajectory binding, which this version corrects, and confirmed the
 direct-force subflow match. The zero-wave subflow equivalence test passes.
 
+The next short-prefix mesh diagnostic resamples the *same n256 wave seed*
+spectrally to n192 and n384 in the same 26.4 pc box. Initial SMBH state,
+physical 0.0515625 pc direct Plummer radius, and actual 17-year, 80-step
+time interval remain fixed. Input wave-mass changes are −2.12×10⁻¹⁰ and
+−1.57×10⁻¹², respectively. Slurm 412360 completed both runs, and the
+source-bound audit verifies the common solver-source hash set, seed and body
+states, physical units, and identical *actual* time steps. The nominal
+time-step factors (0.125 for n192/n256, 0.30 for n384) only set a lower
+step-count target before rounding to 468,000 planned intervals; the n384
+directory retains a misleading `_f0125` suffix.
+
+| Grid | Final coupled − n256 separation (pc) | Final coupled − isolated separation (pc) | Initial compact phase jump / π | Maximum Hamiltonian error / transfer |
+| --- | ---: | ---: | ---: | ---: |
+| n192 | +9.373×10⁻⁹ | −1.085389×10⁻⁵ | 5.795×10⁻⁵ | 1.230×10⁻⁴ |
+| n256 | 0 | −1.086326×10⁻⁵ | 8.302×10⁻⁵ | 3.806×10⁻⁴ |
+| n384 | −6.860×10⁻⁹ | −1.087012×10⁻⁵ | 1.181×10⁻⁴ | 2.120×10⁻³ |
+
+All three energy ratios pass 0.01 on this prefix only. The n192 and n384
+initial wave kinetic energies differ from n256 by −1.585×10⁵ and
+−1.528×10³ code units, while the initial wave–compact interaction also
+changes substantially. Their final separation spread is about 0.15% of the
+n256 coupled-minus-isolated displacement, which itself contains the smooth
+FDM field and is *not* an isolated wake measurement. The TSC compact-mass
+kernel changes with cell size, and the fixed step samples different maximum
+spectral kinetic phases. The resampled field need not be in discrete
+equilibrium on either new mesh. Therefore the nearly second-order-looking
+three-grid pattern cannot establish a continuum error bar, a secular delay,
+or a calibration row. An additional time-step ladder at each grid and longer
+orbital coverage remain required. The authoritative audit is
+`/gpfs/kjhan/FDM_TOY_RESULTS/qe_followup_q030e030_a020_v1/spatial_resolution_step_trace_v1/audit_v3.json`
+(SHA-256 `51f8828917f6c631fd6ff12496fed8175c3acdd9fa899034531a7fed6eaaedef`).
+Opus independently reviewed the implementation but could not read GPFS
+outputs; its source-equality objection was incorporated into this audit.
+
 ## Double-counting prohibition
 
 Two calculations remain physically distinct.
