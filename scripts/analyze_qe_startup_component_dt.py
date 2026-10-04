@@ -20,6 +20,10 @@ _COMPONENTS = (
     "bh_total_kinetic_energy",
     "bh_mutual_gravity_energy",
 )
+_TRANSFER_COMPONENTS = (
+    "binary_orbital_energy", "bh_com_kinetic_energy",
+    "wave_intrinsic_energy", "wave_bh_interaction_grid",
+)
 _RUNS = (("f100", 1.0, 1), ("f050", 0.5, 2), ("f025", 0.25, 4))
 _SAVED_INTERVALS = 58500
 _DIAGNOSTIC_STOPS = 10
@@ -44,7 +48,8 @@ def _validated_component_changes(series: np.ndarray) -> dict[str, list[float]]:
         raise ValueError("startup diagnostic needs exactly eleven energy states")
     if series.dtype.names is None or any(
         field not in series.dtype.names
-        for field in (*_COMPONENTS, "combined_energy", "time_myr", "energy_error_over_transfer")
+        for field in (*_COMPONENTS, *_TRANSFER_COMPONENTS,
+                      "combined_energy", "time_myr", "energy_error_over_transfer")
     ):
         raise ValueError("startup energy series lacks Hamiltonian components")
     components = [np.asarray(series[field], dtype=float) for field in _COMPONENTS]
@@ -54,6 +59,27 @@ def _validated_component_changes(series: np.ndarray) -> dict[str, list[float]]:
     scale = np.maximum.reduce([np.abs(component) for component in components])
     if np.any(np.abs(sum(components) - total) > 1.0e-12 * np.maximum(scale, 1.0)):
         raise ValueError("startup Hamiltonian components do not sum to total")
+    transfers = [np.asarray(series[field], dtype=float) for field in _TRANSFER_COMPONENTS]
+    if not all(np.all(np.isfinite(item)) for item in transfers):
+        raise ValueError("startup exchange components are not finite")
+    intrinsic = transfers[2]
+    if np.any(np.abs(intrinsic - components[0] - components[1])
+              > 1.0e-12 * np.maximum(scale, 1.0)):
+        raise ValueError("startup wave intrinsic energy does not match components")
+    exchanged = np.maximum.reduce([
+        np.maximum.accumulate(np.abs(component - component[0]))
+        for component in transfers
+    ])
+    drift = np.maximum.accumulate(np.abs(total - total[0]))
+    recomputed_error = np.divide(
+        drift, exchanged, out=np.zeros_like(drift),
+        where=exchanged > np.finfo(float).tiny,
+    )
+    recorded_error = np.asarray(series["energy_error_over_transfer"], dtype=float)
+    if (not np.all(np.isfinite(recorded_error))
+            or not np.allclose(recorded_error, recomputed_error,
+                               rtol=1.0e-10, atol=1.0e-12)):
+        raise ValueError("startup energy-error history differs from components")
     return {
         field: (np.asarray(series[field], dtype=float) - float(series[field][0])).tolist()
         for field in (*_COMPONENTS, "combined_energy")

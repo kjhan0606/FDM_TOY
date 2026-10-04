@@ -103,11 +103,18 @@ def _write_fixture(root: Path) -> None:
             -10.0 - 0.1 * index,
         )
         total = sum(components)
+        wave_intrinsic = components[0] + components[1]
+        binary_orbital = 50.0 * index
+        bh_com_kinetic = np.zeros_like(index)
         np.savetxt(
             run / "conservation_timeseries.csv",
-            np.column_stack((0.1 * index / 58500, *components, total, 0.0012 * index)),
+            np.column_stack((0.1 * index / 58500, *components, total,
+                             binary_orbital, bh_com_kinetic, wave_intrinsic,
+                             np.where(index > 0, 0.012, 0.0))),
             delimiter=",",
-            header=",".join(("time_myr", *_COMPONENTS, "combined_energy", "energy_error_over_transfer")),
+            header=",".join(("time_myr", *_COMPONENTS, "combined_energy",
+                             "binary_orbital_energy", "bh_com_kinetic_energy",
+                             "wave_intrinsic_energy", "energy_error_over_transfer")),
             comments="",
         )
 
@@ -229,6 +236,17 @@ def test_rejects_different_physics_with_identical_initial_hashes(tmp_path: Path)
     ).hexdigest()
     manifest_path.write_text(json.dumps(manifest))
     with pytest.raises(ValueError, match="identical physical setup"):
+        summarize(tmp_path)
+
+
+def test_rejects_falsified_energy_error_history(tmp_path: Path) -> None:
+    _write_fixture(tmp_path)
+    csv_path = tmp_path / "f025/conservation_timeseries.csv"
+    data = np.genfromtxt(csv_path, delimiter=",", names=True)
+    data["energy_error_over_transfer"][5] = 0.0
+    np.savetxt(csv_path, np.column_stack([data[name] for name in data.dtype.names or ()]),
+               delimiter=",", header=",".join(data.dtype.names or ()), comments="")
+    with pytest.raises(ValueError, match="history differs from components"):
         summarize(tmp_path)
 
 
