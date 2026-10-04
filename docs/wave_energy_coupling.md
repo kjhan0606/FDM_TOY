@@ -177,12 +177,16 @@ momentum conservation. The maximum prefix Hamiltonian error divided by
 component transfer is 0.01844, 0.00575, 0.00151, and 0.000381; the coarsest
 step still fails the registered 0.01 energy diagnostic. Peak allocated GPU
 memory was 1.68 GB, versus 1.15 GB for the earlier energy-gradient run.
-The source-bound comparison is
-`/gpfs/kjhan/FDM_TOY_RESULTS/qe_followup_q030e030_a020_v1/periodic_tsc_strang_momentum_step_trace_v1/momentum_candidate_comparison_v1.json`
-(SHA-256 `103eb11ab91efe1045cdd8a5d29ca7a51f463ef06e9a3561faebc3e5d128eda7`).
+The source-bound comparison verifies identical initial-wave and SMBH-state
+hashes, physical configuration, and the same maximum-prefix energy-error
+definition in both runs. It is
+`/gpfs/kjhan/FDM_TOY_RESULTS/qe_followup_q030e030_a020_v1/periodic_tsc_strang_momentum_step_trace_v1/momentum_candidate_comparison_v2.json`
+(SHA-256 `be3f363f07118771c8f1369effe3885cc5252258fe01b9fcfccdfa065a7a580d`).
 This is evidence about a 17-year prefix, not an orbital-decay or coalescence
-time. Physical n256 spatial, offset, softening, and full-orbit gates remain
-open; no q/e/a calibration row is released.
+time. The momentum diagnostic samples only the endpoint, so it does not
+bound intermediate drift. The cause of the residual floor is not established.
+Physical n256 spatial, offset, softening, and full-orbit gates remain open;
+no q/e/a calibration row is released.
 
 ## Double-counting prohibition
 

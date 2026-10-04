@@ -67,10 +67,13 @@ def summarize(candidate_root: Path, reference_root: Path,
     bodies = []
     energies = []
     separations = []
-    for label, (factor, _saves, stop) in _LEVELS.items():
+    for index, (label, (factor, _saves, stop)) in enumerate(_LEVELS.items()):
         audit_path = new_root / f"momentum_{label}_v1.json"
         run = new_root / label
         record = json.loads(audit_path.read_text())
+        metadata = json.loads((run / "fdm_adapter_metadata.json").read_text())
+        config = json.loads((run / "config.uldm").read_text())
+        reference = old_trace["runs"][index]
         conservation_path = run / "conservation_summary.json"
         conservation = json.loads(conservation_path.read_text())
         if (
@@ -84,6 +87,17 @@ def summarize(candidate_root: Path, reference_root: Path,
             or record.get("source_commit")
             != "d6709d2368ddd56ade596c6cbe79e28b6a749d15"
             or record.get("launch_owner_sha256") != _sha256(new_root / "OWNER.txt")
+            or record.get("initial_wave_sha256") != reference["launch_hashes"][0]
+            or record.get("initial_body_sha256") != reference["launch_hashes"][1]
+            or metadata.get("case_id") != "qe_q030_e030_a020"
+            or metadata.get("resolution") != 256
+            or not np.isclose(metadata.get("duration_myr", np.nan), 0.1,
+                              rtol=0, atol=1e-12)
+            or config.get("Matter Particles") != reference["physical_configuration"]
+            or any(
+                metadata.get(key) != value
+                for key, value in reference["physical_metadata"].items()
+            )
             or record.get("analysis_source_sha256") != audit_hash
             or record.get("conservation_summary_sha256")
             != _sha256(conservation_path)
@@ -104,6 +118,35 @@ def summarize(candidate_root: Path, reference_root: Path,
             raise ValueError(f"{audit_path}: momentum ledger does not close")
         exchange = max(np.linalg.norm(wave), np.linalg.norm(body))
         ratio = float(np.linalg.norm(total) / exchange)
+        series = np.genfromtxt(
+            run / "conservation_timeseries.csv", delimiter=",", names=True
+        )
+        transfer_fields = (
+            "binary_orbital_energy", "bh_com_kinetic_energy",
+            "wave_intrinsic_energy", "wave_bh_interaction_grid",
+        )
+        if (
+            series.ndim != 1 or series.size != stop + 1
+            or series.dtype.names is None
+            or any(field not in series.dtype.names for field in (
+                "combined_energy", "energy_error_over_transfer",
+                *transfer_fields,
+            ))
+        ):
+            raise ValueError(f"{audit_path}: candidate energy series is incomplete")
+        energy = np.asarray(series["combined_energy"], dtype=float)
+        transfer = [np.asarray(series[field], dtype=float)
+                    for field in transfer_fields]
+        exchange_energy = np.maximum.reduce([
+            np.maximum.accumulate(np.abs(item - item[0]))
+            for item in transfer
+        ])
+        drift_energy = np.maximum.accumulate(np.abs(energy - energy[0]))
+        energy_ratio = np.divide(
+            drift_energy, exchange_energy,
+            out=np.zeros_like(drift_energy),
+            where=exchange_energy > np.finfo(float).tiny,
+        )
         if (
             not np.isfinite(ratio)
             or not np.isclose(
@@ -114,6 +157,14 @@ def summarize(candidate_root: Path, reference_root: Path,
                 record.get("max_energy_error_over_transfer"),
                 conservation.get("max_total_energy_drift_over_energy_transfer"),
                 rtol=1e-12, atol=0,
+            )
+            or not np.allclose(
+                energy_ratio, series["energy_error_over_transfer"],
+                rtol=1e-10, atol=1e-12,
+            )
+            or not np.isclose(
+                np.max(energy_ratio), record["max_energy_error_over_transfer"],
+                rtol=1e-10, atol=1e-12,
             )
         ):
             raise ValueError(f"{audit_path}: diagnostic ratios differ")
