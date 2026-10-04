@@ -583,6 +583,16 @@ below `0.01`, but that does not undo the failed registered peak gate. The
 single-frame concentration suggests a targeted time-step/startup study as
 the next *diagnostic*, not a retrospective exclusion of the first state or a
 relaxation of the tolerance. No numerical cause is established yet.
+The registered-seed startup diagnostic runs the same `n=256` initial state
+at time-step factors `1`, `0.5`, and `0.25`, stopping after two saved intervals
+at the original cadence. Its Slurm entry point is
+`scripts/submit_qe_startup_dt_diagnostic.slurm`; outputs belong under a new
+`startup_dt_diagnostic_v1/` root. Each output is explicitly marked
+`diagnostic_partial`, carries a checkpoint and source snapshot, and is
+ineligible for calibration even if subsequently resumed to the nominal end.
+The comparison tests whether the initial conservation excursion responds to
+temporal refinement; it cannot establish a spatially converged rate or repair
+the registered five-orbit common-bin deficit.
 
 Only **five** of those 37 complete orbits lie in the prospectively registered
 `[0.430, 0.438] pc` bin, below the fixed eight-orbit minimum. The five orbit

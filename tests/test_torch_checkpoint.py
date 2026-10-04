@@ -13,6 +13,14 @@ PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT / "scripts"))
 
 import run_torch_wave_case  # noqa: E402
+from fdm_smbh_delay.pyul import (  # noqa: E402
+    PYUL_MYR_S,
+    PYUL_PARSEC_M,
+    PYUL_SOLAR_MASS_KG,
+)
+from fdm_smbh_delay.run_metadata import (  # noqa: E402
+    validate_torch_calibration_completion,
+)
 from fdm_smbh_delay.torch_wave import (  # noqa: E402
     apply_potential_half_kick_in_place,
     apply_kinetic_phase_in_place,
@@ -32,6 +40,124 @@ def _wave(value: float):
     )
 
 
+def test_diagnostic_stop_writes_restartable_partial_not_completion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reference = tmp_path / "reference"
+    (reference / "Outputs/3Wfn").mkdir(parents=True)
+    (reference / "Outputs/NBody").mkdir()
+    np.save(reference / "Outputs/3Wfn/P3D_#000.npy", np.ones((16, 16, 16), dtype=complex))
+    np.save(
+        reference / "Outputs/NBody/NTM_#000.npy",
+        np.array([[-0.5, 0, 0, 0, 0, 0], [0.5, 0, 0, 0, 0, 0]], dtype=float),
+    )
+    energy_unit = PYUL_SOLAR_MASS_KG * (PYUL_PARSEC_M / PYUL_MYR_S) ** 2
+    (reference / "fdm_adapter_metadata.json").write_text(json.dumps({
+        "adapter_revision": "test",
+        "box_size_pc": 4.0,
+        "resolution": 16,
+        "case_id": "diagnostic",
+        "pyul_length_unit_m": PYUL_PARSEC_M,
+        "pyul_time_unit_s": PYUL_MYR_S,
+        "pyul_mass_unit_kg": PYUL_SOLAR_MASS_KG,
+        "pyul_energy_unit_j": energy_unit,
+    }))
+    (reference / "config.uldm").write_text(json.dumps({
+        "Matter Particles": {
+            "Plummer Radius": 0.1,
+            "Condition": [[1.0, [-0.5, 0, 0], [0, 0, 0]],
+                          [1.0, [0.5, 0, 0], [0, 0, 0]]],
+        },
+        "Duration": {"Time Duration": 0.001},
+        "Save Options": {"Number": 4},
+    }))
+    (reference / "reproducibility.uldm").write_text("test\n")
+    output = tmp_path / "partial"
+    monkeypatch.setattr(sys, "argv", [
+        "run_torch_wave_case.py", str(reference), "--output", str(output),
+        "--duration-myr", "0.001", "--save-number", "4",
+        "--save-3d-number", "0", "--movie-frame-number", "0",
+        "--checkpoint-every-saves", "1", "--device", "cpu",
+        "--diagnostic-stop-after-save", "1",
+    ])
+    assert run_torch_wave_case.main() == 0
+    summary = json.loads((output / "torch_run_summary.json").read_text())
+    assert summary["status"] == "diagnostic_partial"
+    assert summary["saved_intervals"] == 1
+    assert summary["actual_wave_steps"] < summary["planned_wave_steps"]
+    assert len(list((output / "Outputs/NBody").glob("NTM_#*.npy"))) == 2
+    assert (output / "Checkpoints/latest.json").is_file()
+    with pytest.raises(ValueError, match="not complete"):
+        validate_torch_calibration_completion(
+            output,
+            expected_case_id="diagnostic",
+            expected_resolution=16,
+            expected_duration_myr=0.001,
+            expected_saved_intervals=4,
+            expected_saved_3d_states=1,
+            expected_rk4_substeps=9,
+            expected_checkpoint_interval=1,
+            expected_run_id="partial",
+        )
+    monkeypatch.setattr(sys, "argv", [
+        "run_torch_wave_case.py", str(reference), "--output", str(output),
+        "--duration-myr", "0.001", "--save-number", "4",
+        "--save-3d-number", "0", "--movie-frame-number", "0",
+        "--checkpoint-every-saves", "1", "--device", "cpu", "--resume",
+    ])
+    assert run_torch_wave_case.main() == 0
+    resumed_summary = json.loads((output / "torch_run_summary.json").read_text())
+    assert resumed_summary["status"] == "diagnostic_complete"
+    assert resumed_summary["saved_intervals"] == 4
+    assert len(list((output / "Outputs/NBody").glob("NTM_#*.npy"))) == 5
+    with pytest.raises(ValueError, match="not complete"):
+        validate_torch_calibration_completion(
+            output,
+            expected_case_id="diagnostic",
+            expected_resolution=16,
+            expected_duration_myr=0.001,
+            expected_saved_intervals=4,
+            expected_saved_3d_states=1,
+            expected_rk4_substeps=9,
+            expected_checkpoint_interval=1,
+            expected_run_id="partial",
+        )
+    resumed_summary["status"] = "complete"
+    (output / "torch_run_summary.json").write_text(json.dumps(resumed_summary))
+    with pytest.raises(ValueError, match="diagnostic evolution cannot be a calibration run"):
+        validate_torch_calibration_completion(
+            output,
+            expected_case_id="diagnostic",
+            expected_resolution=16,
+            expected_duration_myr=0.001,
+            expected_saved_intervals=4,
+            expected_saved_3d_states=1,
+            expected_rk4_substeps=9,
+            expected_checkpoint_interval=1,
+            expected_run_id="partial",
+        )
+
+
+@pytest.mark.parametrize(
+    "extra", (
+        ["--checkpoint-every-saves", "0", "--diagnostic-stop-after-save", "1"],
+        ["--resume", "--diagnostic-stop-after-save", "1"],
+        ["--diagnostic-stop-after-save", "4"],
+    ),
+)
+def test_diagnostic_stop_rejects_unsafe_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extra: list[str]
+) -> None:
+    monkeypatch.setattr(sys, "argv", [
+        "run_torch_wave_case.py", str(tmp_path / "missing"),
+        "--output", str(tmp_path / "output"),
+        "--duration-myr", "0.001", "--save-number", "4",
+        *extra,
+    ])
+    with pytest.raises(ValueError, match="checkpointed run"):
+        run_torch_wave_case.main()
+
+
 def test_remaining_time_uses_only_steps_completed_since_resume() -> None:
     assert run_torch_wave_case._estimated_remaining_seconds(
         elapsed_seconds=20.0,
@@ -49,6 +175,7 @@ def test_remaining_time_uses_only_steps_completed_since_resume() -> None:
 
 @pytest.mark.parametrize(
     "field", (
+        "time_step_factor", "nbody_rk4_substeps_per_wave_step",
         "wave_density_layout", "compact_potential_layout", "potential_phase_layout",
         "total_potential_lifetime",
         "saved_energy_density_lifetime",

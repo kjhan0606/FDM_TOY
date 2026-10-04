@@ -33,6 +33,10 @@ class NvmlComputeProcesses:
         self._library = ctypes.CDLL("libnvidia-ml.so.1")
         self._library.nvmlInit_v2.restype = ctypes.c_int
         self._library.nvmlShutdown.restype = ctypes.c_int
+        self._library.nvmlDeviceGetCount_v2.argtypes = [
+            ctypes.POINTER(ctypes.c_uint),
+        ]
+        self._library.nvmlDeviceGetCount_v2.restype = ctypes.c_int
         self._library.nvmlDeviceGetHandleByIndex_v2.argtypes = [
             ctypes.c_uint,
             ctypes.POINTER(ctypes.c_void_p),
@@ -54,6 +58,14 @@ class NvmlComputeProcesses:
             ),
             "nvmlDeviceGetHandleByIndex_v2",
         )
+
+    def visible_device_count(self) -> int:
+        count = ctypes.c_uint()
+        self._check(
+            self._library.nvmlDeviceGetCount_v2(ctypes.byref(count)),
+            "nvmlDeviceGetCount_v2",
+        )
+        return int(count.value)
 
     @staticmethod
     def _check(return_code: int, operation: str) -> None:

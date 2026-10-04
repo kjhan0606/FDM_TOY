@@ -1,12 +1,51 @@
 """Focused transfer-normalized conservation regressions."""
 
+import json
+
 import numpy as np
 import pytest
 
 from scripts.analyze_pyul_wave_run import (
+    _diagnostic_status,
     _energy_error_over_transfer,
     _energy_error_timeseries_over_transfer,
 )
+
+
+def test_partial_torch_analysis_requires_explicit_diagnostic_mode(tmp_path) -> None:
+    (tmp_path / "fdm_adapter_metadata.json").write_text(json.dumps({
+        "backend": "pytorch_cuda", "diagnostic_stop_after_save": 2,
+    }))
+    summary = tmp_path / "torch_run_summary.json"
+    summary.write_text(json.dumps({"status": "diagnostic_partial"}))
+    with pytest.raises(ValueError, match="complete Torch evolution"):
+        _diagnostic_status(tmp_path, allow_partial=False)
+    assert _diagnostic_status(tmp_path, allow_partial=True) == "diagnostic_partial"
+    summary.write_text(json.dumps({"status": "diagnostic_complete"}))
+    with pytest.raises(ValueError, match="requires diagnostic_partial"):
+        _diagnostic_status(tmp_path, allow_partial=True)
+    summary.write_text(json.dumps({"status": "complete"}))
+    with pytest.raises(ValueError, match="complete Torch evolution"):
+        _diagnostic_status(tmp_path, allow_partial=False)
+    with pytest.raises(ValueError, match="requires diagnostic_partial"):
+        _diagnostic_status(tmp_path, allow_partial=True)
+
+
+def test_interrupted_torch_diagnostic_without_summary_cannot_be_diagnosed(
+    tmp_path,
+) -> None:
+    metadata = tmp_path / "fdm_adapter_metadata.json"
+    metadata.write_text(json.dumps({
+        "backend": "pytorch_cuda", "diagnostic_stop_after_save": 2,
+    }))
+    for allow_partial in (False, True):
+        with pytest.raises(ValueError, match="requires a run summary"):
+            _diagnostic_status(tmp_path, allow_partial=allow_partial)
+    metadata.write_text(json.dumps({"backend": "pytorch_cuda"}))
+    with pytest.raises(ValueError, match="requires a run summary"):
+        _diagnostic_status(tmp_path, allow_partial=False)
+    metadata.write_text(json.dumps({"backend": "pyul_nbody"}))
+    assert _diagnostic_status(tmp_path, allow_partial=False) == "diagnosed"
 
 
 def _transient_history_inputs() -> tuple[np.ndarray, tuple[np.ndarray, ...]]:

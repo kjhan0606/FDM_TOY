@@ -28,6 +28,24 @@ def _first_below(time: np.ndarray, value: np.ndarray, threshold: float) -> float
     return None if indices.size == 0 else float(time[indices[0]])
 
 
+def _diagnostic_status(run: Path, *, allow_partial: bool) -> str:
+    metadata = json.loads((run / "fdm_adapter_metadata.json").read_text(encoding="utf-8"))
+    diagnostic_run = metadata.get("diagnostic_stop_after_save") is not None
+    torch_summary = run / "torch_run_summary.json"
+    if not torch_summary.is_file():
+        if allow_partial or diagnostic_run or str(metadata.get("backend", "")).startswith("pytorch"):
+            raise ValueError("Torch or partial diagnostic requires a run summary")
+        return "diagnosed"
+    status = json.loads(torch_summary.read_text(encoding="utf-8")).get("status")
+    if allow_partial:
+        if not diagnostic_run or status != "diagnostic_partial":
+            raise ValueError("partial diagnostic requires diagnostic_partial evolution")
+        return "diagnostic_partial"
+    if diagnostic_run or status != "complete":
+        raise ValueError("complete Torch evolution is required for normal analysis")
+    return "diagnosed"
+
+
 def _energy_error_over_transfer(
     combined_energy: np.ndarray, transfer_components: tuple[np.ndarray, ...]
 ) -> float:
@@ -63,10 +81,12 @@ def main() -> int:
     parser.add_argument("run", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--max-energy-error-over-transfer", type=float, default=0.01)
+    parser.add_argument("--diagnostic-partial", action="store_true")
     args = parser.parse_args()
     if args.max_energy_error_over_transfer <= 0.0:
         raise ValueError("energy-error tolerance must be positive")
     run = args.run.expanduser().resolve()
+    analysis_status = _diagnostic_status(run, allow_partial=args.diagnostic_partial)
     metadata = json.loads(
         (run / "fdm_adapter_metadata.json").read_text(encoding="utf-8")
     )
@@ -273,7 +293,7 @@ def main() -> int:
         minimum_separation_pc**2 + plummer_radius_pc**2
     ) ** 1.5
     summary = {
-        "status": "diagnosed",
+        "status": analysis_status,
         "case_id": metadata["case_id"],
         "resolution": metadata["resolution"],
         "duration_myr": metadata["duration_myr"],

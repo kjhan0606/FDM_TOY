@@ -40,6 +40,8 @@ _RESTART_METADATA_KEYS = (
     "save_number",
     "actual_wave_steps",
     "wave_time_step_code",
+    "time_step_factor",
+    "nbody_rk4_substeps_per_wave_step",
     "kinetic_phase_layout",
     "wave_buffer_lifetime",
     "wave_density_layout",
@@ -248,6 +250,7 @@ def main() -> int:
     parser.add_argument("--time-step-factor", type=float, default=1.0)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--checkpoint-every-saves", type=int, default=64)
+    parser.add_argument("--diagnostic-stop-after-save", type=int)
     parser.add_argument("--profile-memory-stages", action="store_true")
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
@@ -259,6 +262,15 @@ def main() -> int:
         or args.checkpoint_every_saves < 0
     ):
         raise ValueError("RK4 substeps and time-step factor are invalid")
+    if args.diagnostic_stop_after_save is not None and (
+        args.resume
+        or args.checkpoint_every_saves == 0
+        or not 1 <= args.diagnostic_stop_after_save < args.save_number
+    ):
+        raise ValueError(
+            "diagnostic stop requires a fresh checkpointed run and an index "
+            "strictly between zero and the final saved interval"
+        )
 
     reference = args.reference_run.expanduser().resolve()
     output = args.output.expanduser().resolve()
@@ -375,6 +387,7 @@ def main() -> int:
             "saved_energy_density_lifetime": "release_before_kinetic_fft_rebuild_for_output_v1",
             "memory_stage_profile_enabled": args.profile_memory_stages,
             "checkpoint_every_saved_intervals": args.checkpoint_every_saves,
+            "diagnostic_stop_after_save": args.diagnostic_stop_after_save,
             "wave_acceleration_during_particle_rk4": (
                 "interpolated_from_a_local_potential_patch_at_each_rk4_stage"
             ),
@@ -389,7 +402,9 @@ def main() -> int:
             (output / "fdm_adapter_metadata.json").read_text(encoding="utf-8")
         )
         _require_resume_metadata(saved_metadata, metadata)
+        diagnostic_run = saved_metadata.get("diagnostic_stop_after_save") is not None
     else:
+        diagnostic_run = args.diagnostic_stop_after_save is not None
         output.mkdir(parents=True)
         (output / "Outputs").mkdir()
         config["Duration"]["Time Duration"] = duration_completed_myr
@@ -516,6 +531,7 @@ def main() -> int:
                 step=0,
                 save_index=0,
             )
+    last_saved_index = start_save_index
     for step in range(start_step + 1, actual_steps + 1):
         total_potential = wave_potential + compact_potential
         profile_stage(f"step_{step:06d}_first_total_potential")
@@ -571,9 +587,11 @@ def main() -> int:
         if step % steps_per_save == 0:
             save_index = step // steps_per_save
             save(save_index)
+            last_saved_index = save_index
             if args.checkpoint_every_saves and (
                 save_index % args.checkpoint_every_saves == 0
                 or save_index == save_number
+                or save_index == args.diagnostic_stop_after_save
             ):
                 _save_checkpoint(
                     run=output,
@@ -603,6 +621,8 @@ def main() -> int:
                 ),
                 flush=True,
             )
+            if save_index == args.diagnostic_stop_after_save:
+                break
 
     if device.type == "cuda":
         torch.cuda.synchronize(device)
@@ -618,10 +638,15 @@ def main() -> int:
     else:
         peak_memory = 0
     summary = {
-        "status": "complete",
-        "actual_wave_steps": actual_steps,
-        "saved_intervals": save_number,
-        "duration_myr": duration_completed_myr,
+        "status": (
+            "diagnostic_partial" if last_saved_index < save_number
+            else "diagnostic_complete" if diagnostic_run
+            else "complete"
+        ),
+        "actual_wave_steps": last_saved_index * steps_per_save,
+        "planned_wave_steps": actual_steps,
+        "saved_intervals": last_saved_index,
+        "duration_myr": duration_completed_myr * last_saved_index / save_number,
         "elapsed_seconds": time.perf_counter() - start,
         "peak_device_memory_bytes": peak_memory,
     }

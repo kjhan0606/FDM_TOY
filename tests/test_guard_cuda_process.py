@@ -8,7 +8,7 @@ import sys
 PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT / "scripts"))
 
-from guard_cuda_process import guard_solver  # noqa: E402
+from guard_cuda_process import NvmlComputeProcesses, guard_solver  # noqa: E402
 
 
 class _Monitor:
@@ -17,6 +17,18 @@ class _Monitor:
 
     def pids(self) -> set[int]:
         return set(self._pids)
+
+
+def test_visible_gpu_count_is_read_from_nvml() -> None:
+    class Library:
+        @staticmethod
+        def nvmlDeviceGetCount_v2(pointer):
+            pointer._obj.value = 1
+            return 0
+
+    monitor = object.__new__(NvmlComputeProcesses)
+    monitor._library = Library()
+    assert monitor.visible_device_count() == 1
 
 
 def test_guard_exits_cleanly_after_the_solver_finishes(tmp_path: Path) -> None:

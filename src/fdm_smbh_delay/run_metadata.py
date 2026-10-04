@@ -72,6 +72,8 @@ def validate_torch_calibration_completion(
         raise ValueError("expected Torch calibration run ID is required")
     if summary.get("status") != "complete":
         raise ValueError("Torch calibration evolution is not complete")
+    if metadata.get("diagnostic_stop_after_save") is not None:
+        raise ValueError("Torch diagnostic evolution cannot be a calibration run")
     exact_summary = {
         "saved_intervals": expected_saved_intervals,
     }

@@ -114,6 +114,7 @@ def _write_run(
     (path / "conservation_summary.json").write_text(
         json.dumps(
             {
+                "status": "diagnosed",
                 "initial_spatially_resolved_duration_myr": 1.5,
                 "initial_resolved_energy_drift_over_transfer": 0.001,
                 "maximum_initial_resolved_energy_error_over_transfer": 0.001,
@@ -292,6 +293,44 @@ def test_loader_rejects_legacy_summary_without_resolved_peak(tmp_path: Path) -> 
     path.write_text(json.dumps(summary))
     with pytest.raises(ValueError, match="lacks peak-resolved evidence"):
         load_convergence_run("legacy", run)
+
+
+def test_loader_rejects_diagnostic_partial_conservation(tmp_path: Path) -> None:
+    run = tmp_path / "partial"
+    _write_run(run, scale=1.0, time_step_factor=1.0)
+    path = run / "conservation_summary.json"
+    summary = json.loads(path.read_text())
+    summary["status"] = "diagnostic_partial"
+    path.write_text(json.dumps(summary))
+    with pytest.raises(ValueError, match="incomplete or diagnostic"):
+        load_convergence_run("partial", run)
+
+
+def test_loader_rejects_diagnostic_metadata_with_forged_normal_summary(
+    tmp_path: Path,
+) -> None:
+    run = tmp_path / "forged"
+    _write_run(run, scale=1.0, time_step_factor=1.0)
+    path = run / "fdm_adapter_metadata.json"
+    metadata = json.loads(path.read_text())
+    metadata["diagnostic_stop_after_save"] = 2
+    path.write_text(json.dumps(metadata))
+    with pytest.raises(ValueError, match="diagnostic Torch evolution"):
+        load_convergence_run("forged", run)
+
+
+def test_loader_requires_completed_torch_summary(tmp_path: Path) -> None:
+    run = tmp_path / "torch"
+    _write_run(run, scale=1.0, time_step_factor=1.0)
+    path = run / "fdm_adapter_metadata.json"
+    metadata = json.loads(path.read_text())
+    metadata["backend"] = "pytorch_cuda"
+    path.write_text(json.dumps(metadata))
+    with pytest.raises(ValueError, match="completion summary is missing"):
+        load_convergence_run("torch", run)
+    (run / "torch_run_summary.json").write_text(json.dumps({"status": "diagnostic_partial"}))
+    with pytest.raises(ValueError, match="Torch evolution is not complete"):
+        load_convergence_run("torch", run)
 
 
 def test_loader_rejects_passing_final_with_failing_resolved_peak(

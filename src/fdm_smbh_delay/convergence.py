@@ -299,6 +299,17 @@ def load_convergence_run(label: str, run: Path) -> dict:
     metadata = json.loads(artifact_bytes["fdm_adapter_metadata.json"])
     config = json.loads(artifact_bytes["config.uldm"])
     conservation = json.loads(artifact_bytes["conservation_summary.json"])
+    if conservation.get("status") != "diagnosed":
+        raise ValueError(f"{label}: incomplete or diagnostic conservation analysis")
+    if metadata.get("diagnostic_stop_after_save") is not None:
+        raise ValueError(f"{label}: diagnostic Torch evolution cannot enter convergence")
+    if str(metadata.get("backend", "")).startswith("pytorch"):
+        try:
+            torch_summary = json.loads((resolved / "torch_run_summary.json").read_text())
+        except (OSError, json.JSONDecodeError) as error:
+            raise ValueError(f"{label}: Torch completion summary is missing") from error
+        if torch_summary.get("status") != "complete":
+            raise ValueError(f"{label}: Torch evolution is not complete")
     required_peak_fields = {
         "maximum_initial_resolved_energy_error_over_transfer",
         "time_of_maximum_initial_resolved_energy_error_myr",
