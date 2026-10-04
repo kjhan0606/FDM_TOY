@@ -243,6 +243,25 @@ full-orbit accuracy. A precision cross-check of stage momenta, physical n256
 spatial/offset/softening gates, and a full-orbit conservation gate remain
 required before any q/e/a calibration row can be released.
 
+A follow-up n256 replay (Slurm 412319) changed only the order of the
+floating-point summation used to evaluate spectral wave momentum at each
+stage, using the same wave and SMBH trajectories at factors 1 and 1/8. The
+original closure check was initially too strict when large individual wave
+and SMBH momenta nearly cancelled; its tolerance is now scaled to the
+individual operands. That correction changes no evolution operator or
+saved trajectory. The final corrected replay has wave checkpoint agreement
+better than 6.1×10⁻¹⁵ relative. The interaction-pair attribution changes
+by 1.89×10⁻⁸ and 2.48×10⁻⁸ code units in the self-first ordering, respectively
+4.1×10⁻⁵ and 4.7×10⁻⁵ of the endpoint residual. Across both phase orders,
+the largest change is 1.50×10⁻⁷ code units, 2.83×10⁻⁴ of the finest-level
+residual. Therefore the measured dominance of the interaction pair survives
+this reduction-order perturbation; the much smaller individual self and
+drift attributions remain unresolved. This test shares the same FFT and does
+not establish a rigorous numerical error bound or spatial convergence. Its
+source-bound comparison is
+`/gpfs/kjhan/FDM_TOY_RESULTS/qe_followup_q030e030_a020_v1/coupled_kick_precision_v3/comparison_v1.json`
+(SHA-256 `f27a16b4f5603972a18039e1082494319e18b0d4b260ca1fb8baff1f4df290a6`).
+
 ## Double-counting prohibition
 
 Two calculations remain physically distinct.
