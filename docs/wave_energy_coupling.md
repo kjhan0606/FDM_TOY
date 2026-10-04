@@ -262,6 +262,40 @@ source-bound comparison is
 `/gpfs/kjhan/FDM_TOY_RESULTS/qe_followup_q030e030_a020_v1/coupled_kick_precision_v3/comparison_v1.json`
 (SHA-256 `f27a16b4f5603972a18039e1082494319e18b0d4b260ca1fb8baff1f4df290a6`).
 
+An n256 spatial-anchoring check has now translated the *same* designated
+q030/e030/a020 initial wave, SMBHs, and declared soliton centre along x by
+one whole cell or half a cell. The one-cell seed uses an exact array roll;
+the half-cell seed uses a periodic Fourier phase. Both parent and derived
+arrays, units, source, and physical parameters are hash-bound. Four matching
+17-year coupled prefixes at factors 1 and 1/8 ran under Slurm 412333. The
+one-cell control reproduces the baseline SMBH trajectory after undoing the
+translation to at most 2.3×10⁻¹³ code units and the final wave to 1.15×10⁻¹⁴
+relative. Its maximum separation difference is 3.33×10⁻¹⁶ pc. This tests
+discrete translation equivariance, not physical resolution.
+
+The half-cell-minus-baseline final separation is −3.047×10⁻¹⁰ pc at factor 1
+and −2.934×10⁻¹⁰ pc at factor 1/8; their difference is 1.13×10⁻¹¹ pc. The
+finest-level offset is 4.91×10⁻⁶ of the *total* baseline separation change
+over this prefix, which includes the direct SMBH orbit and cannot be called
+an FDM-only decay uncertainty. The initial Nyquist-plane power fraction is
+3.15×10⁻¹² in both seeds, and the high-frequency shell at or above 0.375 cycles
+per cell contains 2.29×10⁻¹⁰ of their power. Yet the half-cell translation
+changes the initial *discrete* Hamiltonian by +1.177×10⁴ code units, almost
+entirely through the mesh wave–SMBH interaction; it is not an identical
+discrete initial state. The maximum Hamiltonian-error/component-transfer
+ratios are 0.01844 (baseline) versus 0.01898 (half-cell) at factor 1, and
+0.0003806 versus 0.0003948 at factor 1/8. The coarse case fails the unchanged
+0.01 diagnostic limit. All four wave-mass relative errors are below 2×10⁻¹⁴.
+The source-bound CPU audit is
+`/gpfs/kjhan/FDM_TOY_RESULTS/qe_followup_q030e030_a020_v1/periodic_offset_step_trace_v1/audit_v2.json`
+(SHA-256 `1e6237b68cb697c94c91468ca2fa4f9c4da54ef0268f36330ab71749749899d4`).
+Independent Opus 5.5 review agreed that this is a fixed-grid, short-prefix
+diagnostic only and identified parent-seed, unit, initial-energy and Nyquist
+checks, which the second audit includes. It did not independently read the
+GPFS outputs. Other sub-cell phases and axes, interaction-softening and
+spatial-resolution ladders, longer orbital coverage, and full conservation
+remain open; this test does not release a calibration row.
+
 ## Double-counting prohibition
 
 Two calculations remain physically distinct.
