@@ -70,6 +70,27 @@ def orbital_coverage(states: np.ndarray, length_pc: float) -> dict[str, float | 
     }
 
 
+def validate_completed_checkpoint(
+    wave_path: Path, state_path: Path, final_state: np.ndarray,
+    *, resolution: int, step: int, save_index: int,
+) -> None:
+    wave = np.load(wave_path, mmap_mode="r")
+    if wave.shape != (resolution,) * 3 or wave.dtype != np.complex128:
+        raise ValueError("completed checkpoint wave has wrong shape or precision")
+    for start in range(0, resolution, 16):
+        if not np.all(np.isfinite(wave[start:start + 16])):
+            raise ValueError("completed checkpoint wave contains nonfinite values")
+    with np.load(state_path) as saved:
+        body = np.asarray(saved["state"], dtype=np.float64)
+        saved_step = int(saved["step"])
+        saved_index = int(saved["save_index"])
+    if (
+        body.shape != (12,) or not np.array_equal(body, final_state.reshape(12))
+        or saved_step != step or saved_index != save_index
+    ):
+        raise ValueError("completed checkpoint state differs from final save")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("run", type=Path)
@@ -173,6 +194,10 @@ def main() -> int:
         np.load(run / f"Outputs/NBody/NTM_#{index:03d}.npy").reshape(2, 6)
         for index in range(SAVES + 1)
     ])
+    validate_completed_checkpoint(
+        checkpoint_wave, checkpoint_state, states[-1],
+        resolution=256, step=STEPS, save_index=SAVES,
+    )
     coverage = orbital_coverage(states, units.length_pc)
     energy = float(conservation["max_total_energy_drift_over_energy_transfer"])
     mass_error = float(conservation["max_wave_mass_relative_error"])
