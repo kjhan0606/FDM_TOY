@@ -48,6 +48,26 @@ def separation_series(run: Path, *, stop: int, length_pc: float) -> np.ndarray:
     return np.asarray(values)
 
 
+def expected_binary_energy_shift_code(
+    masses_code: np.ndarray, separation_code: float,
+    baseline_radius_code: float, changed_radius_code: float,
+) -> float:
+    masses = np.asarray(masses_code, dtype=float)
+    if (
+        masses.shape != (2,) or np.any(masses <= 0.0)
+        or not np.all(np.isfinite(masses))
+        or not np.isfinite(separation_code) or separation_code <= 0.0
+        or not np.isfinite(baseline_radius_code)
+        or not np.isfinite(changed_radius_code)
+        or min(baseline_radius_code, changed_radius_code) <= 0.0
+    ):
+        raise ValueError("binary energy shift needs positive code-unit inputs")
+    return float(-np.prod(masses) * (
+        1.0 / np.hypot(separation_code, changed_radius_code)
+        - 1.0 / np.hypot(separation_code, baseline_radius_code)
+    ))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("baseline_root", type=Path)
@@ -117,6 +137,16 @@ def main() -> int:
         }
         baseline = records["baseline"]["metadata"]
         baseline_config = records["baseline"]["config"]
+        if (
+            baseline.get("wave_smbh_coupling")
+            != "periodic_tsc_strang_momentum"
+            or baseline.get("binary_integrator")
+            != "joint_kick_drift_kick_spectral_momentum_v1"
+            or baseline.get("compact_potential_layout")
+            != "periodic_tsc_poisson_v1"
+            or baseline_config["Matter Particles"].get("Position Units") != "pc"
+        ):
+            raise ValueError("baseline is not the registered TSC/pc direct-force mode")
         baseline_seed = Path(baseline["reference_initial_state"]).resolve()
         source = baseline["solver_source_sha256"]
         if common_source is None:
@@ -164,7 +194,15 @@ def main() -> int:
                 or binding.get("changed_operator")
                 != "direct_smbh_smbh_plummer_only"
                 or metadata.get("compact_potential_layout")
-                != baseline.get("compact_potential_layout")
+                != "periodic_tsc_poisson_v1"
+                or metadata.get("binary_integrator")
+                != "joint_kick_drift_kick_spectral_momentum_v1"
+                or config["Matter Particles"].get("Position Units") != "pc"
+                or np.isclose(
+                    config["Matter Particles"]["Plummer Radius"],
+                    baseline_config["Matter Particles"]["Plummer Radius"],
+                    rtol=0, atol=1e-14,
+                )
             ):
                 raise ValueError(f"only direct Plummer may differ: {label}")
         length_pc = pyul_unit_system(baseline).length_pc
@@ -207,6 +245,65 @@ def main() -> int:
                 "initial_energy_components_code": initial_energy[label],
                 "run_input_sha256": records[label]["hashes"],
             }
+        baseline_initial_energy = initial_energy["baseline"]
+        baseline_phase_hash = sha256(
+            paths["baseline"] / "initial_compact_phase_jump.json"
+        )
+        units = pyul_unit_system(baseline)
+        masses_code = np.asarray([
+            row[0] for row in baseline_config["Matter Particles"]["Condition"]
+        ], dtype=float) / units.mass_msun
+        initial_state = np.load(
+            paths["baseline"] / "Outputs/NBody/NTM_#000.npy"
+        ).reshape(2, 6)
+        separation_code = float(np.linalg.norm(
+            initial_state[1, :3] - initial_state[0, :3]
+        ))
+        baseline_radius_code = (
+            float(baseline_config["Matter Particles"]["Plummer Radius"])
+            / units.length_pc
+        )
+        baseline_binary_hamiltonian = float(np.load(
+            paths["baseline"] / "Outputs/binary_hamiltonian.npy",
+            mmap_mode="r",
+        )[0])
+        for label, _fraction in VARIANTS:
+            if (
+                any(initial_energy[label][key] != baseline_initial_energy[key]
+                    for key in (
+                        "wave_kinetic", "wave_self_gravity",
+                        "wave_compact_interaction", "wave_mass",
+                    ))
+                or sha256(paths[label] / "initial_compact_phase_jump.json")
+                != baseline_phase_hash
+            ):
+                raise ValueError(f"wave/TSC initial components differ: {label}")
+            changed_radius_code = (
+                float(records[label]["config"]["Matter Particles"][
+                    "Plummer Radius"
+                ]) / units.length_pc
+            )
+            predicted = expected_binary_energy_shift_code(
+                masses_code, separation_code, baseline_radius_code,
+                changed_radius_code,
+            )
+            measured = (
+                initial_energy[label]["total_hamiltonian"]
+                - baseline_initial_energy["total_hamiltonian"]
+            )
+            binary_measured = float(np.load(
+                paths[label] / "Outputs/binary_hamiltonian.npy",
+                mmap_mode="r",
+            )[0]) - baseline_binary_hamiltonian
+            if (
+                abs(measured - predicted) > 1e-3
+                or abs(binary_measured - predicted) > 1e-3
+            ):
+                raise ValueError(f"direct binary ledger does not match Plummer: {label}")
+            variants[label]["initial_binary_energy_shift_predicted_code"] = predicted
+            variants[label]["initial_binary_energy_shift_measured_code"] = binary_measured
+            variants[label]["initial_total_hamiltonian_shift_code"] = measured
+            variants[label]["initial_compact_phase_jump_sha256"] = baseline_phase_hash
         results.append({
             "label": level, "time_step_factor": factor,
             "wave_steps": stop,

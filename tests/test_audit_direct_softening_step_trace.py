@@ -5,7 +5,8 @@ from copy import deepcopy
 import numpy as np
 
 from scripts.audit_direct_softening_step_trace import (
-    matching_except_direct_plummer, separation_series,
+    expected_binary_energy_shift_code, matching_except_direct_plummer,
+    separation_series,
 )
 
 
@@ -35,3 +36,17 @@ def test_separation_series_uses_code_to_pc_conversion(tmp_path) -> None:
         separation_series(tmp_path / "run", stop=1, length_pc=8.0),
         [2.0, 3.0], rtol=0, atol=0,
     )
+
+
+def test_plummer_energy_shift_sign_and_scale() -> None:
+    masses = np.array([2.0, 1.0])
+    smaller = expected_binary_energy_shift_code(
+        masses, separation_code=1.0,
+        baseline_radius_code=0.2, changed_radius_code=0.1,
+    )
+    larger = expected_binary_energy_shift_code(
+        masses, separation_code=1.0,
+        baseline_radius_code=0.2, changed_radius_code=0.4,
+    )
+    assert smaller < 0.0
+    assert larger > 0.0
