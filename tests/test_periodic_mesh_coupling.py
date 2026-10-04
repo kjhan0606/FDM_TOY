@@ -555,3 +555,92 @@ def test_strang_analyser_rejects_changed_hamiltonian_ledger(
     np.save(ledger_path, ledger)
     with pytest.raises(ValueError, match="Strang Hamiltonian ledger"):
         analyze_pyul_wave_run.main()
+
+
+def test_strang_integer_cell_translation_and_fractional_offset(
+    tmp_path, monkeypatch,
+) -> None:
+    box_length = 4.0
+    resolution = 16
+    cell = box_length / resolution
+
+    def shifted_reference(label: str, shift: float):
+        reference = tmp_path / label
+        _small_reference(reference)
+        axis = np.arange(resolution) * cell - box_length / 2.0
+        density = 1.0 + 0.1 * np.cos(
+            2.0 * np.pi * (axis - shift)[:, None, None] / box_length
+        )
+        wave = np.broadcast_to(
+            np.sqrt(density), (resolution, resolution, resolution)
+        ).astype(np.complex128)
+        np.save(reference / "Outputs/3Wfn/P3D_#000.npy", wave)
+        particle_path = reference / "Outputs/NBody/NTM_#000.npy"
+        particle = np.load(particle_path)
+        particle[:, 0] += shift
+        np.save(particle_path, particle)
+        config_path = reference / "config.uldm"
+        config = json.loads(config_path.read_text())
+        for condition in config["Matter Particles"]["Condition"]:
+            condition[1][0] += shift
+        config_path.write_text(json.dumps(config))
+        return reference
+
+    references = {
+        label: shifted_reference(f"seed_{label}", shift)
+        for label, shift in (
+            ("base", 0.0), ("cell", cell), ("half", cell / 2.0)
+        )
+    }
+    outputs = {}
+    for factor, label in (
+        (0.25, "base"), (0.25, "half"),
+        (0.125, "base"), (0.125, "cell"), (0.125, "half"),
+    ):
+        reference = references[label]
+        output = tmp_path / f"run_{label}_{factor}"
+        monkeypatch.setattr(sys, "argv", [
+            "run_torch_wave_case.py", str(reference), "--output", str(output),
+            "--duration-myr", "0.075", "--save-number", "1",
+            "--save-3d-number", "0", "--movie-frame-number", "0",
+            "--checkpoint-every-saves", "1", "--device", "cpu",
+            "--wave-smbh-coupling", "periodic_tsc_strang",
+            "--time-step-factor", str(factor),
+        ])
+        assert run_torch_wave_case.main() == 0
+        body = np.load(output / "Outputs/NBody/NTM_#001.npy").reshape(2, 6)
+        wave = np.load(output / "Checkpoints/wave_000001.npy")
+        outputs[factor, label] = (body, wave)
+
+    base_body, base_wave = outputs[0.125, "base"]
+    integer_body, integer_wave = outputs[0.125, "cell"]
+    translated_body = integer_body.copy()
+    translated_body[:, 0] -= cell
+    np.testing.assert_allclose(translated_body, base_body, rtol=0, atol=2e-12)
+    np.testing.assert_allclose(
+        integer_wave, np.roll(base_wave, 1, axis=0), rtol=0, atol=2e-12
+    )
+    separations = {
+        key: np.linalg.norm(body[1, :3] - body[0, :3])
+        for key, (body, _wave) in outputs.items()
+    }
+    offset_sensitivity = {
+        factor: separations[factor, "half"] - separations[factor, "base"]
+        for factor in (0.25, 0.125)
+    }
+    base_signal = separations[0.125, "base"] - 1.0
+    temporal_difference = (
+        separations[0.25, "base"] - separations[0.125, "base"]
+    )
+    assert all(np.isfinite(value) for value in offset_sensitivity.values())
+    assert np.isfinite(base_signal) and np.isfinite(temporal_difference)
+    assert abs(offset_sensitivity[0.125] - offset_sensitivity[0.25]) < (
+        0.1 * abs(offset_sensitivity[0.125])
+    )
+    assert abs(offset_sensitivity[0.125]) > 10.0 * abs(temporal_difference)
+    print(json.dumps({
+        "scope": "n16 toy only; not a calibration or systematic-error estimate",
+        "half_cell_offset_sensitivity_pc": offset_sensitivity,
+        "base_separation_change_pc": base_signal,
+        "base_16_minus_32_step_difference_pc": temporal_difference,
+    }, sort_keys=True))
