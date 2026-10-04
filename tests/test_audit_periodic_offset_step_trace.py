@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from scripts.audit_periodic_offset_step_trace import (
-    compare_bodies, max_rolled_wave_difference,
+    compare_bodies, max_rolled_wave_difference, spectral_tail_fractions,
 )
 
 
@@ -50,3 +50,18 @@ def test_whole_and_half_cell_body_offsets(tmp_path) -> None:
     assert result["endpoint_half_minus_base_separation_pc"] == pytest.approx(
         2e-4
     )
+
+
+def test_exact_nyquist_and_low_frequency_tail() -> None:
+    n = 8
+    low = np.exp(2j * np.pi * np.arange(n)[:, None, None] / n)
+    low = np.broadcast_to(low, (n, n, n)).astype(np.complex128)
+    low_tail = spectral_tail_fractions(low)
+    assert low_tail["nyquist_plane_power_fraction"] < 1e-25
+    assert low_tail["high_frequency_shell_power_fraction"] < 1e-25
+    nyquist = np.broadcast_to(
+        (-1.0) ** np.arange(n)[:, None, None], (n, n, n)
+    ).astype(np.complex128)
+    high_tail = spectral_tail_fractions(nyquist)
+    assert high_tail["nyquist_plane_power_fraction"] == pytest.approx(1.0)
+    assert high_tail["high_frequency_shell_power_fraction"] == pytest.approx(1.0)

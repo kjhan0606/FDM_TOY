@@ -56,14 +56,54 @@ def max_rolled_wave_difference(base_path: Path, shifted_path: Path) -> tuple[flo
     return maximum_difference, maximum_difference / maximum_amplitude
 
 
+def spectral_tail_fractions(wave: np.ndarray) -> dict[str, float]:
+    """Measure high-frequency and exact Nyquist power before evolution."""
+
+    state = np.asarray(wave)
+    if (
+        state.ndim != 3 or len(set(state.shape)) != 1
+        or state.dtype != np.complex128 or state.shape[0] % 2 != 0
+        or not np.all(np.isfinite(state))
+    ):
+        raise ValueError("spectral tail needs an even cubic complex128 wave")
+    resolution = state.shape[0]
+    spectrum = np.fft.fftn(state)
+    power = np.square(spectrum.real)
+    power += np.square(spectrum.imag)
+    del spectrum
+    total = float(np.sum(power))
+    if not np.isfinite(total) or total <= 0.0:
+        raise ValueError("spectral tail has invalid total power")
+    nyquist = resolution // 2
+    nyquist_mask = np.zeros(power.shape, dtype=bool)
+    nyquist_mask[nyquist, :, :] = True
+    nyquist_mask[:, nyquist, :] = True
+    nyquist_mask[:, :, nyquist] = True
+    high = np.abs(np.fft.fftfreq(resolution)) >= 0.375
+    high_mask = np.zeros(power.shape, dtype=bool)
+    high_mask[high, :, :] = True
+    high_mask[:, high, :] = True
+    high_mask[:, :, high] = True
+    return {
+        "nyquist_plane_power_fraction": float(
+            np.sum(power[nyquist_mask]) / total
+        ),
+        "high_frequency_shell_power_fraction": float(
+            np.sum(power[high_mask]) / total
+        ),
+    }
+
+
 def compare_bodies(
     base_run: Path, whole_run: Path, half_run: Path, *, stop: int,
     whole_shift_code: float, length_pc: float,
 ) -> dict:
-    maximum_body_difference = 0.0
+    maximum_position_difference = 0.0
+    maximum_velocity_difference = 0.0
     maximum_whole_separation_difference = 0.0
     maximum_half_separation_difference = 0.0
     endpoint = None
+    initial_base_separation = None
     for index in range(stop + 1):
         relative = f"Outputs/NBody/NTM_#{index:03d}.npy"
         states = [np.load(run / relative).reshape(2, 6)
@@ -73,9 +113,13 @@ def compare_bodies(
         base, whole, half = states
         translated_whole = whole.copy()
         translated_whole[:, 0] -= whole_shift_code
-        maximum_body_difference = max(
-            maximum_body_difference,
-            float(np.max(np.abs(base - translated_whole))),
+        maximum_position_difference = max(
+            maximum_position_difference,
+            float(np.max(np.abs(base[:, :3] - translated_whole[:, :3]))),
+        )
+        maximum_velocity_difference = max(
+            maximum_velocity_difference,
+            float(np.max(np.abs(base[:, 3:] - translated_whole[:, 3:]))),
         )
         separations = [
             float(np.linalg.norm(state[1, :3] - state[0, :3]) * length_pc)
@@ -91,11 +135,21 @@ def compare_bodies(
         )
         if index == stop:
             endpoint = separations
-    if maximum_body_difference > 1e-10:
+        if index == 0:
+            initial_base_separation = separations[0]
+    if max(maximum_position_difference, maximum_velocity_difference) > 1e-10:
         raise ValueError("whole-cell SMBH trajectory violates translation gate")
-    assert endpoint is not None
+    assert endpoint is not None and initial_base_separation is not None
     return {
-        "maximum_whole_cell_body_difference_code": maximum_body_difference,
+        "maximum_whole_cell_position_difference_code": (
+            maximum_position_difference
+        ),
+        "maximum_whole_cell_velocity_difference_code": (
+            maximum_velocity_difference
+        ),
+        "maximum_whole_cell_body_difference_code": max(
+            maximum_position_difference, maximum_velocity_difference
+        ),
         "maximum_whole_cell_separation_difference_pc": (
             maximum_whole_separation_difference
         ),
@@ -106,7 +160,27 @@ def compare_bodies(
         "endpoint_whole_cell_separation_pc": endpoint[1],
         "endpoint_half_cell_separation_pc": endpoint[2],
         "endpoint_half_minus_base_separation_pc": endpoint[2] - endpoint[0],
+        "base_prefix_separation_change_pc": (
+            endpoint[0] - initial_base_separation
+        ),
     }
+
+
+def initial_energy_components(run: Path) -> dict[str, float]:
+    paths = {
+        "wave_kinetic": "ekandqlist.npy",
+        "wave_self_gravity": "egpsilist.npy",
+        "wave_compact_interaction": "egpcmlist.npy",
+        "total_hamiltonian": "total_hamiltonian.npy",
+        "wave_mass": "ULDMass.npy",
+    }
+    values = {}
+    for key, filename in paths.items():
+        source = np.load(run / "Outputs" / filename, mmap_mode="r")
+        if source.ndim != 1 or source.size < 2 or not np.isfinite(source[0]):
+            raise ValueError(f"invalid initial energy or mass series: {filename}")
+        values[key] = float(source[0])
+    return values
 
 
 def read_run(run: Path, *, factor: float, stop: int, saves: int) -> dict:
@@ -115,6 +189,7 @@ def read_run(run: Path, *, factor: float, stop: int, saves: int) -> dict:
     conservation_path = run / "conservation_summary.json"
     manifest_path = run / "torch_solver_provenance/manifest.json"
     metadata = json.loads(metadata_path.read_text())
+    config = json.loads((run / "config.uldm").read_text())
     summary = json.loads(summary_path.read_text())
     conservation = json.loads(conservation_path.read_text())
     manifest = json.loads(manifest_path.read_text())
@@ -138,8 +213,20 @@ def read_run(run: Path, *, factor: float, stop: int, saves: int) -> dict:
         != sha256(run / "config.uldm")
     ):
         raise ValueError(f"offset run is not a registered short prefix: {run}")
+    frozen_sources = {
+        row.get("path"): row.get("sha256")
+        for row in manifest.get("source_files", [])
+        if isinstance(row, dict)
+    }
+    if any(
+        frozen_sources.get(relative) != digest
+        or sha256(run / "torch_solver_provenance/source" / relative) != digest
+        for relative, digest in metadata["solver_source_sha256"].items()
+    ):
+        raise ValueError(f"offset frozen numerical source differs: {run}")
     return {
         "metadata": metadata,
+        "config": config,
         "summary": summary,
         "conservation": conservation,
         "hashes": {
@@ -195,10 +282,21 @@ def main() -> int:
         seed_records[label] = {
             "path": str(seed), "manifest_sha256": sha256(manifest_path),
             "shift_code": float(record["shift_code"]),
+            "parent_reference": record["parent_reference"],
+            "parent_sha256": record["parent_sha256"],
+            "derived_sha256": record["derived_sha256"],
         }
     if not np.isclose(seed_records["half_x"]["shift_code"] * 2.0,
                       seed_records["whole_x"]["shift_code"], rtol=0, atol=1e-20):
         raise ValueError("whole- and half-cell seed shifts disagree")
+    seed_tails = {
+        label: spectral_tail_fractions(np.load(path, mmap_mode="r"))
+        for label, path in (
+            ("base", Path(seed_records["whole_x"]["parent_reference"])
+             / "Outputs/3Wfn/P3D_#000.npy"),
+            ("half", seed_root / "half_x/Outputs/3Wfn/P3D_#000.npy"),
+        )
+    }
     results = []
     common_source = None
     for label, factor, stop, saves in LEVELS:
@@ -211,21 +309,71 @@ def main() -> int:
                                ("half", half))
         }
         reference = run_records["base"]["metadata"]
+        baseline_seed = Path(reference["reference_initial_state"]).resolve()
+        for seed_label in ("whole_x", "half_x"):
+            record = seed_records[seed_label]
+            if (
+                record["parent_reference"] != str(baseline_seed)
+                or any(
+                    sha256(baseline_seed / relative) != digest
+                    for relative, digest in record["parent_sha256"].items()
+                )
+                or record["parent_sha256"]["Outputs/3Wfn/P3D_#000.npy"]
+                != reference["reference_initial_wave_sha256"]
+                or record["parent_sha256"]["Outputs/NBody/NTM_#000.npy"]
+                != reference["reference_initial_particle_sha256"]
+            ):
+                raise ValueError("translated seeds are not bound to baseline parent")
         numerical_source = reference["solver_source_sha256"]
         if common_source is None:
             common_source = numerical_source
         for name, seed_label in (("whole", "whole_x"), ("half", "half_x")):
             metadata = run_records[name]["metadata"]
+            config = run_records[name]["config"]
+            base_config = run_records["base"]["config"]
             binding = metadata.get("periodic_offset_binding", {})
+            seed = seed_records[seed_label]
+            physical_keys = (
+                "box_size_pc", "particle_mass_ev", "plummer_radius_pc",
+                "pyul_length_unit_m", "pyul_mass_unit_kg", "pyul_time_unit_s",
+                "mass_ratio_q", "initial_eccentricity",
+                "initial_separation_pc", "semi_major_axis_pc",
+                "qe_design_binding",
+            )
             if (
                 metadata.get("solver_source_sha256") != numerical_source
                 or numerical_source != common_source
-                or metadata.get("reference_initial_state")
-                != seed_records[seed_label]["path"]
+                or metadata.get("reference_initial_state") != seed["path"]
+                or any(metadata.get(key) != reference.get(key)
+                       for key in physical_keys)
+                or metadata.get("reference_initial_wave_sha256")
+                != seed["derived_sha256"]["Outputs/3Wfn/P3D_#000.npy"]
+                or metadata.get("reference_initial_particle_sha256")
+                != seed["derived_sha256"]["Outputs/NBody/NTM_#000.npy"]
+                or metadata.get("reference_config_sha256")
+                != seed["derived_sha256"]["config.uldm"]
+                or metadata.get("reference_metadata_sha256")
+                != seed["derived_sha256"]["fdm_adapter_metadata.json"]
+                or sha256((whole if name == "whole" else half)
+                          / "reproducibility.uldm")
+                != seed["derived_sha256"]["reproducibility.uldm"]
+                or [item[0] for item in config["Matter Particles"]["Condition"]]
+                != [item[0] for item in base_config["Matter Particles"]["Condition"]]
+                or [item[2] for item in config["Matter Particles"]["Condition"]]
+                != [item[2] for item in base_config["Matter Particles"]["Condition"]]
+                or config["Matter Particles"]["Plummer Radius"]
+                != base_config["Matter Particles"]["Plummer Radius"]
+                or config["ULDM Solitons"]["Condition"][0][0]
+                != base_config["ULDM Solitons"]["Condition"][0][0]
+                or not np.allclose(
+                    np.asarray(config["ULDM Solitons"]["Condition"][0][1])
+                    - np.asarray(base_config["ULDM Solitons"]["Condition"][0][1]),
+                    [seed["shift_code"] * pyul_unit_system(reference).length_pc,
+                     0.0, 0.0], rtol=0, atol=1e-12,
+                )
                 or binding.get("shift_cells")
                 != (1.0 if name == "whole" else 0.5)
-                or binding.get("shift_code")
-                != seed_records[seed_label]["shift_code"]
+                or binding.get("shift_code") != seed["shift_code"]
             ):
                 raise ValueError(f"offset solver or seed identity differs: {name}")
         length_pc = pyul_unit_system(reference).length_pc
@@ -234,6 +382,11 @@ def main() -> int:
             whole_shift_code=seed_records["whole_x"]["shift_code"],
             length_pc=length_pc,
         )
+        initial_components = {
+            name: initial_energy_components(path)
+            for name, path in (("base", baseline), ("whole", whole),
+                               ("half", half))
+        }
         wave_max, wave_relative = max_rolled_wave_difference(
             baseline / "Checkpoints" / f"wave_{stop:06d}.npy",
             whole / "Checkpoints" / f"wave_{stop:06d}.npy",
@@ -263,6 +416,16 @@ def main() -> int:
             "whole_cell_wave_checkpoint_relative_difference": wave_relative,
             "max_energy_error_over_transfer": energy,
             "max_wave_mass_relative_error": mass,
+            "initial_energy_components_code": initial_components,
+            "initial_half_minus_base_total_hamiltonian_code": (
+                initial_components["half"]["total_hamiltonian"]
+                - initial_components["base"]["total_hamiltonian"]
+            ),
+            "endpoint_half_offset_over_base_prefix_change": (
+                abs(body["endpoint_half_minus_base_separation_pc"])
+                / max(abs(body["base_prefix_separation_change_pc"]),
+                      np.finfo(float).tiny)
+            ),
             "run_input_sha256": {
                 name: record["hashes"] for name, record in run_records.items()
             },
@@ -277,6 +440,7 @@ def main() -> int:
         "source_commit": args.source_commit,
         "source_sha256": source_hash,
         "seed_records": seed_records,
+        "initial_spectral_tail_fractions": seed_tails,
         "levels": results,
         "half_cell_offset_temporal_difference_pc": offset_change,
         "interpretation": (
