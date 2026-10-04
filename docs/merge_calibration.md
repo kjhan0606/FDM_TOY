@@ -563,6 +563,48 @@ release a calibration row; the project approval rule for heavy wave-response
 work remains in force. A failed common-bin, conservation, spatial-rate, or
 doubled-box gate leaves this plane uncalibrated/censored.
 
+The subsequent `n=256` Torch job 411964 completed its registered 0.10 Myr
+duration. On Lageunha, single-threaded, resumable wave-response analysis
+completed all 17 saved wave snapshots; conservation and orbit diagnostics
+were also completed. The response reports a resolved final half-density
+radius (15.24 cells) and offline energy relative error `3.76e-16`.
+The conservation diagnostic reports 37 initially resolved complete orbits,
+maximum total-energy drift over transferred energy `2.78e-4`, and minimum
+instantaneous separation 3.01 cells. These are single-resolution diagnostics,
+not convergence or a rate release. The same conservation summary records an
+early saved-prefix energy-error/transfer ratio above its `0.01` tolerance at
+`8.55e-5` Myr even though its final aggregate transfer-normalized flag passes.
+The prefix-versus-aggregate gate requires a separate audit before treating
+this run as conservation-accepted for any future calibration design.
+
+Only **five** of those 37 complete orbits lie in the prospectively registered
+`[0.430, 0.438] pc` bin, below the fixed eight-orbit minimum. The five orbit
+means have measured osculating eccentricity 0.27235–0.27494, not exactly the
+input label `e=0.3`. The code's contiguous initially resolved-orbit selector
+and an independent CSV count both give `5/8`. The registered 0.10 Myr coarse
+run is complete, so this fixed-duration, fixed-bin design cannot reach the
+eight-orbit requirement. A longer *new* run might sample the bin again because
+the orbital separation fluctuates; that would require a new prospective
+design, not retroactive acceptance of this triplet. The coarse member alone
+therefore makes this registered triplet ineligible for a calibration row.
+Jobs 411965 (`n=384`) and 411963 (`n=768`) were canceled on 2026-10-04 after
+this necessary gate failed, rather than spending more GPU time on a triplet
+that could not pass. Slurm recorded both as `CANCELLED by 10396`; their
+existing checkpoint files were retained, not deleted. Resuming them under a
+future design would require a new prospective bin/resource review and must
+not retroactively promote this failed fixed-bin assessment.
+
+The completed `n=256` source artifacts are under
+`/gpfs/kjhan/FDM_TOY_RESULTS/qe_followup_q030e030_a020_v1/torch/qe_q030_e030_a020_n256/`.
+Their SHA-256 values are `4b3b5d14cc9fedb65ac1bb0245ba9d35f0f7e6837acee552362740404818c2ae`
+for `conservation_summary.json`,
+`7ac19b4fa2673550ce0539dabb66b9ccb027c9eaa81fd0dd8cdb99800be4099b`
+for `orbit_averaged_exchange_summary.json`,
+`63ac5fd43bfdbd47ecf9ce9c868acea1af1908e144a9d38849089064c7071673`
+for `orbit_averaged_exchange.csv`, and
+`342961892b3f424cc3d56a32de982f035835bcb2698b2f7acfce7d12aa6ae764`
+for `wave_response_summary.json`.
+
 Use separate output roots for this registered follow-up. The default
 `qe_extension/pyul_initial/qe_q100_e000_a020_n256` and matching Torch
 directory already contain an older, unbound pilot; the design-bound planner
