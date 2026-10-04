@@ -268,11 +268,17 @@ def attributed_step(
         np.linalg.norm(p_wave_start) + np.linalg.norm(p_body_start)
         + np.linalg.norm(final_total)
     )
+    telescope_gap = float(np.linalg.norm(
+        component_sum - (final_total - (p_wave_start + p_body_start))
+    ))
     if not np.allclose(
         component_sum, final_total - (p_wave_start + p_body_start),
         rtol=0, atol=telescope_floor,
     ):
-        raise ValueError("attributed momentum ledger does not telescope")
+        raise ValueError(
+            "attributed momentum ledger does not telescope: "
+            f"gap={telescope_gap:.9g}, floor={telescope_floor:.9g}"
+        )
     return (wave, final_body, next_wave_potential,
             next_compact_potential, components)
 
