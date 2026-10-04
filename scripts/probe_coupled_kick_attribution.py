@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+from typing import Callable
 
 import numpy as np
 import torch
@@ -62,6 +63,42 @@ def body_momentum(body: np.ndarray, masses: np.ndarray) -> np.ndarray:
     return np.sum(mass[:, None] * state[:, 3:], axis=0)
 
 
+def spectral_wave_momentum_reordered_torch(
+    wave: torch.Tensor, box_length: float,
+) -> np.ndarray:
+    """Same spectral momentum, with weighted 3-D reduction before marginalization.
+
+    This changes floating-point summation order only; it is not a higher
+    precision estimator or a different physical observable.
+    """
+
+    if (
+        wave.ndim != 3 or len(set(wave.shape)) != 1
+        or wave.dtype != torch.complex128
+        or not np.isfinite(box_length) or box_length <= 0.0
+    ):
+        raise ValueError("reordered momentum requires a cubic complex128 wave")
+    resolution = wave.shape[0]
+    wave_number = 2.0 * torch.pi * torch.fft.fftfreq(
+        resolution, d=box_length / resolution,
+        dtype=torch.float64, device=wave.device,
+    )
+    if resolution % 2 == 0:
+        wave_number[resolution // 2] = 0.0
+    spectrum = torch.fft.fftn(wave)
+    power = spectrum.real.square()
+    power.addcmul_(spectrum.imag, spectrum.imag)
+    factor = (box_length / resolution) ** 3 / resolution**3
+    components = []
+    for axis in range(3):
+        shape = [1, 1, 1]
+        shape[axis] = resolution
+        components.append(float(torch.sum(
+            power * wave_number.reshape(shape)
+        )))
+    return factor * np.asarray(components, dtype=np.float64)
+
+
 def compact_field(
     body: np.ndarray, masses: np.ndarray, *, grid,
     box_length: float, device: torch.device,
@@ -84,6 +121,8 @@ def attributed_step(
     wave: torch.Tensor, body: np.ndarray, masses: np.ndarray,
     wave_potential: torch.Tensor, compact_potential: torch.Tensor, *,
     grid, box_length: float, plummer_radius: float, time_step: float,
+    momentum_estimator: Callable[[torch.Tensor, float], np.ndarray]
+    = spectral_wave_momentum_torch,
 ) -> tuple[torch.Tensor, np.ndarray, torch.Tensor, torch.Tensor, dict]:
     """Replay one symmetric step with two commuting phase factors measured."""
 
@@ -93,7 +132,7 @@ def attributed_step(
         resolution=resolution, plummer_radius=plummer_radius,
         time_step=time_step,
     )
-    p_wave_start = spectral_wave_momentum_torch(wave, box_length)
+    p_wave_start = momentum_estimator(wave, box_length)
     p_body_start = body_momentum(body, masses)
     first_phase = float(torch.max(torch.abs(
         0.5 * time_step * (wave_potential + compact_potential)
@@ -101,19 +140,19 @@ def attributed_step(
     alternate_wave = wave.clone()
 
     apply_potential_half_kick_in_place(wave, wave_potential, time_step)
-    p_after_self_first = spectral_wave_momentum_torch(wave, box_length)
+    p_after_self_first = momentum_estimator(wave, box_length)
     apply_potential_half_kick_in_place(wave, compact_potential, time_step)
-    p_after_compact_first = spectral_wave_momentum_torch(wave, box_length)
+    p_after_compact_first = momentum_estimator(wave, box_length)
     apply_potential_half_kick_in_place(
         alternate_wave, compact_potential, time_step
     )
-    p_after_alternate_compact_first = spectral_wave_momentum_torch(
+    p_after_alternate_compact_first = momentum_estimator(
         alternate_wave, box_length
     )
     apply_potential_half_kick_in_place(
         alternate_wave, wave_potential, time_step
     )
-    p_after_alternate_first = spectral_wave_momentum_torch(
+    p_after_alternate_first = momentum_estimator(
         alternate_wave, box_length
     )
     first_order_wave_difference = float(torch.max(torch.abs(
@@ -138,7 +177,7 @@ def attributed_step(
     apply_kinetic_phase_in_place(spectrum, grid.kinetic_axis_phase)
     wave = torch.fft.ifftn(spectrum)
     del spectrum
-    p_after_drift = spectral_wave_momentum_torch(wave, box_length)
+    p_after_drift = momentum_estimator(wave, box_length)
     drifted_body = drift_binary_tsc(
         state=kicked_body, box_length=box_length, time_step=time_step
     )
@@ -158,19 +197,19 @@ def attributed_step(
     )))
     alternate_wave = wave.clone()
     apply_potential_half_kick_in_place(wave, next_wave_potential, time_step)
-    p_after_self_second = spectral_wave_momentum_torch(wave, box_length)
+    p_after_self_second = momentum_estimator(wave, box_length)
     apply_potential_half_kick_in_place(wave, next_compact_potential, time_step)
-    p_after_compact_second = spectral_wave_momentum_torch(wave, box_length)
+    p_after_compact_second = momentum_estimator(wave, box_length)
     apply_potential_half_kick_in_place(
         alternate_wave, next_compact_potential, time_step
     )
-    p_after_alternate_compact_second = spectral_wave_momentum_torch(
+    p_after_alternate_compact_second = momentum_estimator(
         alternate_wave, box_length
     )
     apply_potential_half_kick_in_place(
         alternate_wave, next_wave_potential, time_step
     )
-    p_after_alternate_second = spectral_wave_momentum_torch(
+    p_after_alternate_second = momentum_estimator(
         alternate_wave, box_length
     )
     second_order_wave_difference = float(torch.max(torch.abs(
@@ -244,6 +283,10 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--device", default="cuda:0")
+    parser.add_argument(
+        "--momentum-estimator", choices=("marginal", "reordered"),
+        default="marginal",
+    )
     args = parser.parse_args()
     run = args.candidate_run.expanduser().resolve()
     output = args.output.expanduser().resolve()
@@ -340,6 +383,11 @@ def main() -> int:
         raise ValueError("n256 attribution requires an allocated CUDA GPU")
     torch.cuda.set_device(device)
     torch.cuda.reset_peak_memory_stats(device)
+    momentum_estimator = (
+        spectral_wave_momentum_torch
+        if args.momentum_estimator == "marginal"
+        else spectral_wave_momentum_reordered_torch
+    )
     seed = Path(metadata["reference_initial_state"]).resolve()
     wave_path = seed / "Outputs/3Wfn/P3D_#000.npy"
     body_path = seed / "Outputs/NBody/NTM_#000.npy"
@@ -398,7 +446,7 @@ def main() -> int:
         wave, body, wave_potential, compact_potential, changes = attributed_step(
             wave, body, masses, wave_potential, compact_potential,
             grid=grid, box_length=box_code, plummer_radius=plummer_code,
-            time_step=time_step,
+            time_step=time_step, momentum_estimator=momentum_estimator,
         )
         if (
             np.linalg.norm(changes["wave_momentum_start"] - previous_wave_momentum)
@@ -565,6 +613,7 @@ def main() -> int:
         "final_wave_sha256": _sha256(expected_wave_path),
         "final_body_sha256": _sha256(expected_body_path),
         "time_step_factor": factor,
+        "momentum_estimator": args.momentum_estimator,
         "wave_steps": stop,
         "wave_max_replay_difference": wave_max_difference,
         "body_max_replay_difference": body_max_difference,

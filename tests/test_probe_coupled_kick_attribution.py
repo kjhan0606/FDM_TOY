@@ -17,6 +17,7 @@ from fdm_smbh_delay.torch_wave import (
 )
 from scripts.probe_coupled_kick_attribution import (
     attributed_step, body_momentum, compact_field,
+    spectral_wave_momentum_reordered_torch,
 )
 from scripts.probe_wave_only_momentum_control import spectral_wave_momentum_torch
 
@@ -98,6 +99,17 @@ def test_factorized_step_matches_unsplit_and_ledger_telescopes() -> None:
         )), np.zeros(3)),
         after_total - before_total, rtol=0, atol=1e-12,
     )
+    reordered_wave, reordered_body, _, _, reordered_changes = attributed_step(
+        wave.clone(), body.copy(), masses, wave_potential, compact_potential,
+        grid=grid, box_length=box, plummer_radius=0.1, time_step=dt,
+        momentum_estimator=spectral_wave_momentum_reordered_torch,
+    )
+    torch.testing.assert_close(reordered_wave, actual_wave, rtol=0, atol=0)
+    np.testing.assert_array_equal(reordered_body, actual_body)
+    np.testing.assert_allclose(
+        reordered_changes["first_half_kick_defect"],
+        changes["first_half_kick_defect"], rtol=0, atol=2e-13,
+    )
 
 
 def test_large_phase_factorization_over_two_kicks() -> None:
@@ -132,3 +144,16 @@ def test_large_phase_factorization_over_two_kicks() -> None:
     ))) < 100.0
     assert float(torch.max(torch.abs(split - unsplit))) / scale < 1e-12
     assert float(torch.max(torch.abs(alternate - unsplit))) / scale < 1e-12
+
+
+def test_reordered_reduction_matches_spectral_momentum() -> None:
+    rng = np.random.default_rng(632)
+    wave = torch.as_tensor(
+        rng.normal(size=(8, 8, 8)) + 1j * rng.normal(size=(8, 8, 8)),
+        dtype=torch.complex128,
+    )
+    np.testing.assert_allclose(
+        spectral_wave_momentum_reordered_torch(wave, 4.0),
+        spectral_wave_momentum_torch(wave, 4.0),
+        rtol=0, atol=2e-13,
+    )
