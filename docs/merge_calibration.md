@@ -661,10 +661,12 @@ differs from the runtime interpolated periodic-Poisson force by 12.9% and
 4.64% for the two SMBHs. This establishes a discrete force/energy
 inconsistency for this state, not the cause of the first-step Hamiltonian
 excursion. With the initial velocities and force difference held fixed over
-one step, the corresponding linear-work estimate is only `+0.168` in the
-diagnostic physical energy units, versus the measured `-6.17e6`. That
-first-order estimate omits the evolving wave, split-step effects, and the
-change of force during the step. The CSV physical energy unit was verified
+one step, the corresponding linear-work estimate is `+0.168` in the
+diagnostic physical energy units, versus the measured `-6.17e6`. **The
+later RK4-path work audit supersedes the initial-velocity estimate.**
+SMBH acceleration changes the displacement during the step, and the initial
+velocity misses nearly all of the force-mismatch work. The CSV physical
+energy unit was verified
 against the raw solver energy logs and N-body states. The prior trace stored
 the seed path, but not a launch-time hash of its initial wave bytes, so the
 cross-run comparison remains provisional on exact wave identity. The audit
@@ -707,20 +709,68 @@ wave-mass changes are at most `2.7e-15` fractionally. Its one-interval
 energy-error/exchange ratios are `0.03747`, `0.01189`, and `0.00307`.
 The fixed-source wave energy drift shrinks markedly with the time step, while
 the coupled first-save drift minus that fixed-source result is approximately
-`+1.501e6`, `+1.502e6`, and `+1.502e6` in physical units. This subtraction
-compares two different dynamical experiments: it is **not** an exact partition
-of the coupled Hamiltonian residual and does not prove which force or time
-integration term is responsible. It does show that improving the fixed-source
-wave step alone cannot certify coupled energy conservation. The wave-only
+`+1.501e6`, `+1.502e6`, and `+1.502e6` in physical units. The subtraction
+compares different dynamical experiments and is not by itself an exact
+partition of the coupled Hamiltonian residual. The source-bound first-step
+ledger below identifies an exact particle-substep contribution for the
+factor-1 coupled calculation. Improving the fixed-source wave step alone
+cannot certify coupled energy conservation. The wave-only
 artifact SHA-256 is
 `177cecafc847fef597ef2971827957c8b64abad8bdae9764c92fe97f78f2d147`.
 An independent read-only evaluation confirmed the numerical comparison but
 rejected any stronger claim that temporal refinement fixes the full system.
-The next discriminating test must measure the work done by the force actually
-applied to each SMBH against the evolving grid interaction energy, without
-assigning the nearly constant first-save difference to a specific mechanism
-in advance. No result here licenses a q/e calibration row or a smaller-
-separation extrapolation.
+The launch-hashed factor-1 run now has a source-bound first-step force-work
+audit. A single-threaded CPU reconstruction on Lageunha reproduced the saved
+SMBH state and the wave energy components at the first step. The maximum
+SMBH-state reconstruction error is `5.33e-15` code units, versus `0.6031`
+code units for the change caused by omitting the wave force. The reconstructed
+wave--SMBH interaction differs from the GPU log by `7.63e-5` code units,
+`1.97e-7` of the fixed-density interaction change. The seed wave and SMBH
+bytes, numerical operators, configuration, time step, and source snapshot
+match the launch provenance.
+
+At the post-drift wave density, the first RK4 step changes the binary
+orbital energy by `+429.741354` code units and changes the gridded Plummer
+interaction energy at fixed density by `+388.152939` code units. Their sum is
+`+817.894293` code units, or `+1.502779e6 M_sun pc² Myr⁻²`. RK4-stage
+quadrature of the **applied** wave-force power gives `+429.741357` code
+units, leaving an orbital-energy integration defect of only `−2.63e-6` code
+units. The fixed-density mismatch therefore comes from the force paired with
+the gridded interaction energy, not from the measured RK4 integration defect.
+Removing the uniform-density part of the Plummer interaction changes the
+exchange residual to `+1.496874e6 M_sun pc² Myr⁻²`; a uniform background
+alone does not explain the mismatch. The subtraction does not construct a
+periodic interaction kernel, so the adjusted force is not a replacement
+for the runtime force. The runtime force derives from a periodic,
+mean-subtracted wave potential, whereas the gridded interaction uses a
+non-periodic Plummer potential. Kernel, softening, and interpolation
+differences remain candidate sources of the discrepancy.
+
+The first step admits an exact three-part Hamiltonian ledger, with the wave
+state held fixed only during SMBH RK4. The first wave half-kick and spectral
+drift contribute `−74,676.399582` code units. SMBH motion at the post-drift
+wave state contributes `+817.894287` code units. The final wave half-kick at
+the updated SMBH positions contributes `+70,498.786209` code units. The
+sum is `−3,359.719086` code units, or `−6,173,065.045 M_sun pc² Myr⁻²`.
+The difference from the CSV first-step change is `−0.045` in the same
+physical units. The fixed-wave particle term is algebraically identical
+to the orbital-plus-interaction change, with `5.7e-6` code units of
+floating-point cancellation in the computed values. The two wave substeps
+sum to a drift of
+`−4,177.613373` code units, or approximately `−7.676e6` physical energy
+units. The separately evolved fixed-SMBH wave calculation gives a nearby
+but non-identical drift, because the final compact potential follows the
+moving SMBHs in the coupled step. The particle-substep force/energy mismatch
+is therefore an exact contribution to the coupled first-step energy error,
+while the wave substeps supply the remaining contribution. The first-step
+finding does not establish convergence across the time-step ladder or
+identify a unique kernel or interpolation defect. The audit artifact is
+`startup_component_dt_v1/f100/first_step_force_work_audit_v5.json` with
+SHA-256 `c66bd76106c2a4be36492e7ee1cde50d8fc8da225ae4ea3b27afcf64f948fa51`.
+No result here licenses a q/e calibration row or a smaller-separation
+extrapolation. The next controlled test must pair an energy-conjugate SMBH
+force with a compatible periodic interaction convention and then repeat the
+same first-step and temporal-refinement conservation gates.
 
 Only **five** of those 37 complete orbits lie in the prospectively registered
 `[0.430, 0.438] pc` bin, below the fixed eight-orbit minimum. The five orbit
