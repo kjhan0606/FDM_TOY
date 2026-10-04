@@ -76,7 +76,10 @@ def isolated_plummer_kdk(
     return history
 
 
-def read_bound_run(run: Path, *, expected_steps: int, input_hashes: dict) -> tuple[dict, dict]:
+def read_bound_run(
+    run: Path, *, expected_steps: int, input_hashes: dict,
+    body_hashes: dict,
+) -> tuple[dict, dict]:
     metadata_path = run / "fdm_adapter_metadata.json"
     metadata = json.loads(metadata_path.read_text())
     config = json.loads((run / "config.uldm").read_text())
@@ -86,8 +89,17 @@ def read_bound_run(run: Path, *, expected_steps: int, input_hashes: dict) -> tup
         "conservation": run / "conservation_summary.json",
         "provenance": run / "torch_solver_provenance/manifest.json",
     }
+    manifest = json.loads(paths["provenance"].read_text())
     if (
         any(sha256(path) != input_hashes.get(key) for key, path in paths.items())
+        or sha256(run / "config.uldm")
+        != manifest.get("input_records", {}).get("config_sha256")
+        or set(body_hashes) != {str(index) for index in range(expected_steps + 1)}
+        or any(
+            sha256(run / f"Outputs/NBody/NTM_#{index:03d}.npy")
+            != body_hashes.get(str(index))
+            for index in range(expected_steps + 1)
+        )
         or metadata.get("wave_smbh_coupling") != "periodic_tsc_strang_momentum"
         or metadata.get("binary_integrator")
         != "joint_kick_drift_kick_spectral_momentum_v1"
@@ -153,6 +165,7 @@ def main() -> int:
             metadata, config = read_bound_run(
                 paths[label], expected_steps=steps,
                 input_hashes=parent["variants"][label]["run_input_sha256"],
+                body_hashes=parent["variants"][label]["body_state_sha256"],
             )
             units = pyul_unit_system(metadata)
             initial = np.load(
@@ -187,11 +200,6 @@ def main() -> int:
                 "time_step_code": metadata["wave_time_step_code"],
                 "masses_code": masses.tolist(),
                 "plummer_radius_code": radius_code,
-                "body_state_sha256": {
-                    str(index): sha256(
-                        paths[label] / f"Outputs/NBody/NTM_#{index:03d}.npy"
-                    ) for index in range(steps + 1)
-                },
             }
         reference = records["baseline"]
         if any(
@@ -217,7 +225,7 @@ def main() -> int:
                 "softening_isolated_minus_baseline_endpoint_pc": float(isolated_effect[-1]),
                 "softening_coupled_excess_endpoint_pc": float(excess[-1]),
                 "maximum_absolute_prefix_coupled_excess_pc": float(np.max(np.abs(excess))),
-                "body_state_sha256": records[label]["body_state_sha256"],
+                "body_state_sha256": parent["variants"][label]["body_state_sha256"],
             }
         result_levels.append({
             "label": level,
@@ -234,9 +242,10 @@ def main() -> int:
         "source_sha256": source_hash,
         "levels": result_levels,
         "interpretation": (
-            "Coupled-minus-isolated softening response includes the smooth "
-            "FDM field, live wave reaction, trajectory cross terms and "
-            "numerical coupling errors. It is not isolated FDM drag, a "
+            "This difference of differences removes the common smooth-field "
+            "contribution and retains trajectory-dependent live-wave response "
+            "and numerical coupling cross terms. Without a quantified error "
+            "floor it is not a resolved physical effect or isolated FDM drag, a "
             "spatial-convergence bound, or a calibration release."
         ),
     }

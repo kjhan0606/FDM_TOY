@@ -1,8 +1,12 @@
 import numpy as np
 import pytest
+import torch
 
 from scripts.analyze_direct_softening_coupled_excess import (
     isolated_plummer_kdk, plummer_acceleration,
+)
+from fdm_smbh_delay.periodic_mesh_coupling import (
+    drift_binary_tsc, kick_binary_tsc,
 )
 
 
@@ -53,3 +57,28 @@ def test_kdk_refinement_and_invalid_inputs():
         plummer_acceleration(state, masses, 0.0)
     with pytest.raises(ValueError, match="positive"):
         isolated_plummer_kdk(state, masses, 0.1, 0.0, 4)
+
+
+def test_isolated_kdk_matches_zero_wave_tsc_subflow():
+    state = np.array([
+        [-0.3, 0.02, 0.0, 0.0, 0.4, 0.0],
+        [0.8, -0.01, 0.0, 0.0, -1.2, 0.0],
+    ])
+    masses = np.array([3.0, 1.0])
+    step = 1e-3
+    zero_wave = torch.zeros((8, 8, 8), dtype=torch.float64)
+    expected = kick_binary_tsc(
+        state=state, masses=masses, wave_potential=zero_wave,
+        box_length=4.0, plummer_radius=0.15, time_step=step / 2,
+        force_scheme="spectral_momentum",
+    )
+    expected = drift_binary_tsc(
+        state=expected, box_length=4.0, time_step=step,
+    )
+    expected = kick_binary_tsc(
+        state=expected, masses=masses, wave_potential=zero_wave,
+        box_length=4.0, plummer_radius=0.15, time_step=step / 2,
+        force_scheme="spectral_momentum",
+    )
+    actual = isolated_plummer_kdk(state, masses, 0.15, step, 1)[-1]
+    np.testing.assert_allclose(actual, expected, rtol=0, atol=2e-18)

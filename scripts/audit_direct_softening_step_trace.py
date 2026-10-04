@@ -244,6 +244,11 @@ def main() -> int:
                 "max_wave_mass_relative_error": mass[label],
                 "initial_energy_components_code": initial_energy[label],
                 "run_input_sha256": records[label]["hashes"],
+                "body_state_sha256": {
+                    str(index): sha256(
+                        path / f"Outputs/NBody/NTM_#{index:03d}.npy"
+                    ) for index in range(stop + 1)
+                },
             }
         baseline_initial_energy = initial_energy["baseline"]
         baseline_phase_hash = sha256(
