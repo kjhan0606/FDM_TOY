@@ -164,6 +164,26 @@ the operator identity from the time-integrated result. Neither exact momentum
 conservation nor acceptable energy drift is assumed; both must be measured
 before this mode can contribute any FDM delay calibration.
 
+The matched n256 spectral-momentum run (Slurm 412175) now provides that
+short-prefix comparison. At wave-step factors 1, 1/2, 1/4, and 1/8, the
+endpoint total-momentum residual divided by exchanged momentum is
+1.58×10⁻⁵, 1.75×10⁻⁵, 1.79×10⁻⁵, and 1.80×10⁻⁵. Quadratic extrapolation from
+the two finest steps gives 1.80×10⁻⁵, compared with 2.33×10⁻² for the
+energy-gradient Strang force, an improvement by a factor of about 1,292 on
+this fixed grid and interval. Successive momentum differences have measured
+orders 1.98 and 2.03. The residual does not vanish with time-step refinement;
+the operator-level cancellation has not produced exact wave-plus-SMBH
+momentum conservation. The maximum prefix Hamiltonian error divided by
+component transfer is 0.01844, 0.00575, 0.00151, and 0.000381; the coarsest
+step still fails the registered 0.01 energy diagnostic. Peak allocated GPU
+memory was 1.68 GB, versus 1.15 GB for the earlier energy-gradient run.
+The source-bound comparison is
+`/gpfs/kjhan/FDM_TOY_RESULTS/qe_followup_q030e030_a020_v1/periodic_tsc_strang_momentum_step_trace_v1/momentum_candidate_comparison_v1.json`
+(SHA-256 `103eb11ab91efe1045cdd8a5d29ca7a51f463ef06e9a3561faebc3e5d128eda7`).
+This is evidence about a 17-year prefix, not an orbital-decay or coalescence
+time. Physical n256 spatial, offset, softening, and full-orbit gates remain
+open; no q/e/a calibration row is released.
+
 ## Double-counting prohibition
 
 Two calculations remain physically distinct.
