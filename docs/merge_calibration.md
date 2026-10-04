@@ -594,6 +594,37 @@ The comparison tests whether the initial conservation excursion responds to
 temporal refinement; it cannot establish a spatially converged rate or repair
 the registered five-orbit common-bin deficit.
 
+Slurm job 411999 completed this diagnostic on 2026-10-04 (syn01, one allocated
+A10 GPU, exit 0). The CUDA ordinal 0 was the sole NVML-visible device and
+Slurm identified its physical GPU as 4. All three outputs under
+`startup_dt_diagnostic_v1/` have `diagnostic_partial` solver and conservation
+statuses, two saved intervals, a checkpoint, and a source snapshot. Analysis
+was performed on Lageunha, single-threaded. At the identical first saved
+time `8.547e-5` Myr, the results were:
+
+| Time-step factor | Wave steps to first save | Peak energy error / exchange | First-prefix Hamiltonian change | Largest component exchange |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 50 | 0.0125858178 | 1.88053e9 | 1.49417e11 |
+| 0.5 | 99 | 0.0127302503 | 1.90244e9 | 1.49442e11 |
+| 0.25 | 198 | 0.0127692206 | 1.90834e9 | 1.49449e11 |
+
+The three peak ratios all exceed `0.01`. Halving the numerical time step
+twice did not remove the excess; the measured ratio instead approaches a
+nonzero value near `0.0128`. This disfavors insufficient time-step resolution
+as its dominant cause at this fixed grid and save time, but three points do
+not identify the cause or validate a changed conservation criterion. The
+metadata confirm live wave/SMBH coupling and no additional analytic FDM
+drag. The next discriminating check is a per-wave-step Hamiltonian-component
+and exchange-budget trace through the first saved interval, followed by a
+spatial/coupling consistency test if its residual remains unexplained. No
+diagnostic run is eligible for a q/e calibration row.
+
+The SHA-256 digests of `conservation_summary.json` for factors `1`, `0.5`,
+and `0.25` are respectively
+`d8fd885d6f8d9779c19b639d4794cae492ba31bcf7051f4878f436b0714333ee`,
+`6603343bdea2aca08f40d5c8bd140d453b2f01c77ed3b210bf7f16aa8143ee1c`,
+and `90186dce5dce5243509c666d6ae68733a2ef9abe557867493dffb70c61e55b01`.
+
 Only **five** of those 37 complete orbits lie in the prospectively registered
 `[0.430, 0.438] pc` bin, below the fixed eight-orbit minimum. The five orbit
 means have measured osculating eccentricity 0.27235–0.27494, not exactly the
