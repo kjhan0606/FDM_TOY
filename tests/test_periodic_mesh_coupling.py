@@ -333,12 +333,14 @@ def test_tsc_force_is_continuous_at_cell_edge_and_patch_exit_fails() -> None:
         _tsc_patched_wave_acceleration(outside, patches[0], starts[0], 4.0, 16)
 
 
-def _small_reference(reference) -> None:
+def _small_reference(reference, resolution: int = 16) -> None:
     (reference / "Outputs/3Wfn").mkdir(parents=True)
     (reference / "Outputs/NBody").mkdir()
-    axis = np.arange(16, dtype=float) * 4.0 / 16.0 - 2.0
+    axis = np.arange(resolution, dtype=float) * 4.0 / resolution - 2.0
     density = 1.0 + 0.1 * np.cos(2.0 * np.pi * axis[:, None, None] / 4.0)
-    wave = np.broadcast_to(np.sqrt(density), (16, 16, 16)).astype(np.complex128)
+    wave = np.broadcast_to(
+        np.sqrt(density), (resolution, resolution, resolution)
+    ).astype(np.complex128)
     state = np.array([
         [-0.5, 0.0, 0.0, 0.0, -0.08, 0.0],
         [0.5, 0.0, 0.0, 0.0, 0.08, 0.0],
@@ -347,7 +349,7 @@ def _small_reference(reference) -> None:
     np.save(reference / "Outputs/NBody/NTM_#000.npy", state)
     energy_j = PYUL_SOLAR_MASS_KG * (PYUL_PARSEC_M / PYUL_MYR_S) ** 2
     (reference / "fdm_adapter_metadata.json").write_text(json.dumps({
-        "adapter_revision": "test", "box_size_pc": 4.0, "resolution": 16,
+        "adapter_revision": "test", "box_size_pc": 4.0, "resolution": resolution,
         "case_id": "reciprocal_test", "pyul_length_unit_m": PYUL_PARSEC_M,
         "pyul_time_unit_s": PYUL_MYR_S,
         "pyul_mass_unit_kg": PYUL_SOLAR_MASS_KG,
@@ -643,4 +645,91 @@ def test_strang_integer_cell_translation_and_fractional_offset(
         "half_cell_offset_sensitivity_pc": offset_sensitivity,
         "base_separation_change_pc": base_signal,
         "base_16_minus_32_step_difference_pc": temporal_difference,
+    }, sort_keys=True))
+
+
+def test_strang_half_cell_offset_across_small_spatial_resolutions(
+    tmp_path, monkeypatch,
+) -> None:
+    results = {}
+    factors = {
+        16: {64: 0.0625, 128: 0.03125},
+        32: {64: 0.25, 128: 0.125},
+        64: {64: 0.95, 128: 0.475},
+    }
+    for resolution in (16, 32, 64):
+        cell = 4.0 / resolution
+        references = {}
+        for label, shift in (("base", 0.0), ("half", 0.5 * cell)):
+            reference = tmp_path / f"seed_n{resolution}_{label}"
+            _small_reference(reference, resolution)
+            axis = np.arange(resolution) * cell - 2.0
+            density = 1.0 + 0.1 * np.cos(
+                2.0 * np.pi * (axis - shift)[:, None, None] / 4.0
+            )
+            wave = np.broadcast_to(
+                np.sqrt(density), (resolution, resolution, resolution)
+            ).astype(np.complex128)
+            np.save(reference / "Outputs/3Wfn/P3D_#000.npy", wave)
+            particle_path = reference / "Outputs/NBody/NTM_#000.npy"
+            particle = np.load(particle_path)
+            particle[:, 0] += shift
+            np.save(particle_path, particle)
+            config_path = reference / "config.uldm"
+            config = json.loads(config_path.read_text())
+            for condition in config["Matter Particles"]["Condition"]:
+                condition[1][0] += shift
+            config_path.write_text(json.dumps(config))
+            references[label] = reference
+        for steps, factor in factors[resolution].items():
+            separation = {}
+            for label, reference in references.items():
+                output = tmp_path / f"run_n{resolution}_{steps}_{label}"
+                monkeypatch.setattr(sys, "argv", [
+                    "run_torch_wave_case.py", str(reference),
+                    "--output", str(output),
+                    "--duration-myr", "0.075", "--save-number", "1",
+                    "--save-3d-number", "0", "--movie-frame-number", "0",
+                    "--checkpoint-every-saves", "0", "--device", "cpu",
+                    "--wave-smbh-coupling", "periodic_tsc_strang",
+                    "--time-step-factor", str(factor),
+                ])
+                assert run_torch_wave_case.main() == 0
+                metadata = json.loads(
+                    (output / "fdm_adapter_metadata.json").read_text()
+                )
+                assert metadata["actual_wave_steps"] == steps
+                body = np.load(output / "Outputs/NBody/NTM_#001.npy").reshape(2, 6)
+                separation[label] = np.linalg.norm(body[1, :3] - body[0, :3])
+            results[resolution, steps] = {
+                "base_separation_pc": separation["base"],
+                "half_cell_minus_base_pc": separation["half"] - separation["base"],
+            }
+    assert all(
+        np.isfinite(item["half_cell_minus_base_pc"]) for item in results.values()
+    )
+    for steps in (64, 128):
+        offset = {
+            resolution: results[resolution, steps]["half_cell_minus_base_pc"]
+            for resolution in (16, 32, 64)
+        }
+        assert all(value < 0.0 for value in offset.values())
+        assert abs(offset[16] / offset[32]) > 2.0
+        assert abs(offset[32] / offset[64]) > 2.0
+    for resolution, neighbour in ((16, 32), (32, 64), (64, 32)):
+        temporal_change = abs(
+            results[resolution, 64]["half_cell_minus_base_pc"]
+            - results[resolution, 128]["half_cell_minus_base_pc"]
+        )
+        spatial_difference = abs(
+            results[resolution, 64]["half_cell_minus_base_pc"]
+            - results[neighbour, 64]["half_cell_minus_base_pc"]
+        )
+        assert temporal_change < 0.1 * spatial_difference
+    print(json.dumps({
+        "scope": "three small toy grids and common 64/128-step ladder; not calibration",
+        "results": {
+            f"n{resolution}_s{steps}": item
+            for (resolution, steps), item in results.items()
+        },
     }, sort_keys=True))

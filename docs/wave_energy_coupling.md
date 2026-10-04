@@ -112,18 +112,25 @@ convergence, cell-offset sensitivity, total-momentum drift, full-orbit and
 pericentre coverage, and the interaction-softening comparison remain open.
 No result from this mode may enter the FDM delay table until those gates pass.
 
-A 16³ toy translation check is a warning about the remaining spatial gate,
-not an error bar for n256. Shifting the whole initial condition by exactly
-one mesh cell reproduces the final wave and SMBH state to (2\times10^{-12})
-in code-state values. Shifting by half a cell changes the final SMBH
-separation by about (-6.30\times10^{-5}\) pc after 0.075 Myr. At the same
-resolution, reducing the wave step from 16 to 32 steps changes the unshifted
-separation by (1.99\times10^{-7}\) pc, while the half-cell difference changes
-by only (2.29\times10^{-8}\) pc. The unshifted separation itself decreases by
-(8.64\times10^{-3}\) pc in this toy interval. These are special offsets at one
-coarse resolution and one short interval; they do not establish a typical or
-maximum grid error. Several offsets, a spatial-resolution sequence, and a
-full-orbit study remain required before calibration.
+A toy translation check is a warning about the remaining spatial gate, not an
+error bar for n256. At 16³, shifting the whole initial condition by exactly
+one mesh cell reproduces the final wave and SMBH state to 2×10⁻¹² in
+code-state values. Shifting by half a cell changes the final SMBH separation
+by about −6.30×10⁻⁵ pc after 0.075 Myr. Reducing the wave step from 16 to 32
+steps changes the unshifted separation by 1.99×10⁻⁷ pc, while the half-cell
+difference changes by only 2.29×10⁻⁸ pc. The unshifted separation itself
+decreases by 8.64×10⁻³ pc in this toy interval.
+
+A common 64/128-step ladder at 16³, 32³, and 64³ gives half-cell-minus-node
+differences of −6.305×10⁻⁵, −1.783×10⁻⁵, and −5.349×10⁻⁶ pc at 128 steps.
+Their magnitudes fall by factors of 3.54 and 3.33 as the cell is halved.
+At 64³, doubling the step count changes this offset difference by
+3.66×10⁻⁸ pc, much less than the 32³-to-64³ offset difference. This verifies
+short-prefix node-to-midpoint sensitivity along this toy sequence only. It
+does not prove convergence of the separation itself, since TSC source
+smoothing changes with cell size. Intermediate offsets, a wave-induced-signal
+control, longer orbits, and physical n256 spatial checks remain required
+before calibration.
 
 ## Double-counting prohibition
 
