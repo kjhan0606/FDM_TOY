@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -58,6 +59,17 @@ def _require_resume_metadata(saved: dict, requested: dict) -> None:
             raise ValueError(f"restart request changes {key}")
     if saved.get("qe_design_binding") != requested.get("qe_design_binding"):
         raise ValueError("restart request changes q/e design binding")
+    for key in ("reference_initial_wave_sha256", "reference_initial_particle_sha256"):
+        if key in saved and saved[key] != requested[key]:
+            raise ValueError(f"restart reference initial content changed: {key}")
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def _initial_paths(reference: Path) -> tuple[Path, Path]:
@@ -279,6 +291,8 @@ def main() -> int:
     if args.resume and not output.is_dir():
         raise FileNotFoundError(f"restart output does not exist: {output}")
     initial_wave_path, initial_particle_path = _initial_paths(reference)
+    initial_wave_sha256 = _sha256(initial_wave_path)
+    initial_particle_sha256 = _sha256(initial_particle_path)
     reference_metadata = json.loads(
         (reference / "fdm_adapter_metadata.json").read_text(encoding="utf-8")
     )
@@ -363,6 +377,8 @@ def main() -> int:
         {
             "run_id": output.name,
             "reference_initial_state": str(reference),
+            "reference_initial_wave_sha256": initial_wave_sha256,
+            "reference_initial_particle_sha256": initial_particle_sha256,
             "backend": "pytorch_cuda" if device.type == "cuda" else "pytorch_cpu",
             "torch_version": torch.__version__,
             "cuda_version": torch.version.cuda,
@@ -427,6 +443,8 @@ def main() -> int:
         )
     else:
         initial_wave = np.load(initial_wave_path)
+        if _sha256(initial_wave_path) != initial_wave_sha256:
+            raise ValueError("initial wave changed between hashing and loading")
         if initial_wave.shape != (resolution, resolution, resolution):
             raise ValueError("reference wavefunction has an incompatible shape")
         wavefunction = torch.as_tensor(initial_wave, device=device)
@@ -434,6 +452,8 @@ def main() -> int:
             wavefunction = wavefunction.to(torch.complex128)
         del initial_wave
         state = np.load(initial_particle_path).astype(float)
+        if _sha256(initial_particle_path) != initial_particle_sha256:
+            raise ValueError("initial particles changed between hashing and loading")
         start_step = 0
         start_save_index = 0
     if wavefunction.shape != (resolution, resolution, resolution):

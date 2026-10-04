@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 import sys
 
@@ -82,6 +83,13 @@ def test_diagnostic_stop_writes_restartable_partial_not_completion(
     ])
     assert run_torch_wave_case.main() == 0
     summary = json.loads((output / "torch_run_summary.json").read_text())
+    metadata = json.loads((output / "fdm_adapter_metadata.json").read_text())
+    assert metadata["reference_initial_wave_sha256"] == hashlib.sha256(
+        (reference / "Outputs/3Wfn/P3D_#000.npy").read_bytes()
+    ).hexdigest()
+    assert metadata["reference_initial_particle_sha256"] == hashlib.sha256(
+        (reference / "Outputs/NBody/NTM_#000.npy").read_bytes()
+    ).hexdigest()
     assert summary["status"] == "diagnostic_partial"
     assert summary["saved_intervals"] == 1
     assert summary["actual_wave_steps"] < summary["planned_wave_steps"]
@@ -171,6 +179,23 @@ def test_remaining_time_uses_only_steps_completed_since_resume() -> None:
         step=600,
         total_steps=1200,
     ) is None
+
+
+def test_restart_rejects_changed_launch_hashed_seed() -> None:
+    requested = {key: 1 for key in run_torch_wave_case._RESTART_METADATA_KEYS}
+    requested.update({
+        "reference_initial_wave_sha256": "same-wave",
+        "reference_initial_particle_sha256": "same-particles",
+    })
+    saved = dict(requested)
+    run_torch_wave_case._require_resume_metadata(saved, requested)
+    legacy = dict(saved)
+    del legacy["reference_initial_wave_sha256"]
+    del legacy["reference_initial_particle_sha256"]
+    run_torch_wave_case._require_resume_metadata(legacy, requested)
+    saved["reference_initial_wave_sha256"] = "changed-wave"
+    with pytest.raises(ValueError, match="reference initial content changed"):
+        run_torch_wave_case._require_resume_metadata(saved, requested)
 
 
 @pytest.mark.parametrize(
