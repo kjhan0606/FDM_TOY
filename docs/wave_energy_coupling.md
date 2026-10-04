@@ -312,6 +312,35 @@ provenance and all saved SMBH states. The source-bound directional audit is
 The axis dependence does not define a statistical spatial-error bar: each
 direction has only one sub-cell phase on one fixed grid and a 17-year prefix.
 
+A matched *direct-binary* softening check now holds the initial wave and SMBH
+arrays and periodic TSC mass-assignment rule fixed while varying the
+Plummer length in the SMBH–SMBH kick from the baseline half-cell value
+(0.0515625 pc) to a quarter cell (0.02578125 pc) or one cell (0.103125 pc).
+The same radius also enters the direct-binary energy ledger and the orbital
+time-step validity check; later changes in SMBH positions can indirectly
+alter the TSC-sourced wave field. Four n256 prefixes at factors 1 and 1/8
+completed under Slurm 412350. At the finest level, quarter-cell softening
+changes the final separation by −1.811×10⁻⁶ pc and one-cell softening by
++6.979×10⁻⁶ pc relative to the baseline. These are 3.03% and 11.67% of the
+*total* baseline separation change on this prefix, not isolated FDM effects.
+The same differences at the coarse step agree to 5.6×10⁻¹² and 2.1×10⁻¹¹ pc,
+respectively. All three finest-level maximum Hamiltonian-error/transfer ratios
+are about 0.00038 and pass the 0.01 short-prefix diagnostic, while all three
+coarse cases are about 0.01844 and fail.
+
+The source-bound audit checks that the variant configurations differ only in
+the direct Plummer radius, that the initial wave, body, wave energy terms and
+compact-potential phase jump are identical, and that the initial total-energy
+changes match the analytic Plummer binary-energy changes to within
+2×10⁻⁶ code units (−2.297×10⁷ and +8.983×10⁷ code units). It also requires
+the spectral-momentum Strang/TSC mode and pc position units. The audit is
+`/gpfs/kjhan/FDM_TOY_RESULTS/qe_followup_q030e030_a020_v1/direct_softening_step_trace_v1/audit_v2.json`
+(SHA-256 `4052cc347bf4a0944774e3241ccbd83df0bd08ad4d6a2d365d70a3e1c3c6d3cb`).
+Independent Opus 5.5 code review prompted the explicit TSC, initial-component
+and analytic-ledger gates; it did not read the GPFS outputs. This test varies
+the direct SMBH–SMBH softening only. It neither changes nor converges the
+TSC mesh smoothing, and does not provide a full-orbit or FDM calibration row.
+
 ## Double-counting prohibition
 
 Two calculations remain physically distinct.
