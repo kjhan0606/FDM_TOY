@@ -568,14 +568,13 @@ duration. On Lageunha, single-threaded, resumable wave-response analysis
 completed all 17 saved wave snapshots; conservation and orbit diagnostics
 were also completed. The response reports a resolved final half-density
 radius (15.24 cells) and offline energy relative error `3.76e-16`.
-The conservation diagnostic reports 37 initially resolved complete orbits,
-maximum total-energy drift over transferred energy `2.78e-4`, and minimum
-instantaneous separation 3.01 cells. These are single-resolution diagnostics,
-not convergence or a rate release. The same conservation summary records an
-early saved-prefix energy-error/transfer ratio above its `0.01` tolerance at
-`8.55e-5` Myr even though its final aggregate transfer-normalized flag passes.
-The prefix-versus-aggregate gate requires a separate audit before treating
-this run as conservation-accepted for any future calibration design.
+The conservation diagnostic reports 37 initially resolved complete orbits
+and minimum instantaneous separation 3.01 cells. The peak saved-prefix
+Hamiltonian-error/transfer ratio over the initially resolved interval is
+`0.0125858` at `8.55e-5` Myr, above the registered `0.01` tolerance; its
+final ratio is only `2.77868e-4`. The audited peak-resolved gate therefore
+marks conservation **failed**. These are single-resolution diagnostics,
+not convergence or a rate release.
 
 Only **five** of those 37 complete orbits lie in the prospectively registered
 `[0.430, 0.438] pc` bin, below the fixed eight-orbit minimum. The five orbit
@@ -597,13 +596,21 @@ not retroactively promote this failed fixed-bin assessment.
 The completed `n=256` source artifacts are under
 `/gpfs/kjhan/FDM_TOY_RESULTS/qe_followup_q030e030_a020_v1/torch/qe_q030_e030_a020_n256/`.
 Their SHA-256 values are `4b3b5d14cc9fedb65ac1bb0245ba9d35f0f7e6837acee552362740404818c2ae`
+for the preserved pre-peak-gate `conservation_summary.json` in sibling
+`analysis_pre_peak_gate_20261004/`. The current peak-gated artifacts have
+SHA-256 `fc9172c18d2bf5f43fb1e23bcb0c89fc22d9ae0b2b45c99e83d710f64a2c20f8`
 for `conservation_summary.json`,
-`7ac19b4fa2673550ce0539dabb66b9ccb027c9eaa81fd0dd8cdb99800be4099b`
+`95e9a5fabb5d46f6869cf44c3fa4fc1155a330b0e8f0f02cb1e656ffc6c7b63f`
+for `conservation_timeseries.csv`,
+`fb34de02703fc897ece1588b68a7376644f685c398e934eb1ca6351cbdb1f08c`
 for `orbit_averaged_exchange_summary.json`,
 `63ac5fd43bfdbd47ecf9ce9c868acea1af1908e144a9d38849089064c7071673`
 for `orbit_averaged_exchange.csv`, and
 `342961892b3f424cc3d56a32de982f035835bcb2698b2f7acfce7d12aa6ae764`
 for `wave_response_summary.json`.
+The current conservation and orbit artifacts were regenerated on Lageunha
+with commit `0d1e6fd`; the convergence loader independently reproduced their
+resolved energy history and returned conservation pass = false.
 
 Use separate output roots for this registered follow-up. The default
 `qe_extension/pyul_initial/qe_q100_e000_a020_n256` and matching Torch
