@@ -23,6 +23,7 @@ from scripts.audit_spatial_resolution_step_trace import (
 
 SOURCE = "scripts/audit_spatial_temporal_refinement.py"
 DEPENDENCIES = (
+    "scripts/submit_qe_spatial_dt_half_step.slurm",
     "scripts/audit_spatial_resolution_step_trace.py",
     "scripts/analyze_direct_softening_coupled_excess.py",
     "scripts/audit_direct_softening_step_trace.py",
@@ -31,6 +32,13 @@ DEPENDENCIES = (
 LEVELS = (("n192", 192, 0.0625), ("n256", 256, 0.0625), ("n384", 384, 0.15))
 STEPS = 160
 SAVES = 936000
+REGISTERED_COARSE_AUDIT_SHA256 = (
+    "51f8828917f6c631fd6ff12496fed8175c3acdd9fa899034531a7fed6eaaedef"
+)
+REGISTERED_SEED_MANIFEST_SHA256 = {
+    "n192": "19f6cdac049fca98a6c48080a47bc7c7e8587cb3e0fd146b9680ed4ea8de8296",
+    "n384": "4e09f6cb5cd84b30baeb62f6cf9b826232a80df991ae866f1728bbfe1f34f2a3",
+}
 
 
 def checked_source(project: Path, commit: str) -> dict[str, str]:
@@ -122,7 +130,10 @@ def main() -> int:
     project = Path(__file__).resolve().parents[1]
     source_hashes = checked_source(project, args.source_commit)
     old_path = args.coarse_audit.expanduser().resolve()
-    if sha256(old_path) != args.coarse_audit_sha256:
+    if (
+        args.coarse_audit_sha256 != REGISTERED_COARSE_AUDIT_SHA256
+        or sha256(old_path) != REGISTERED_COARSE_AUDIT_SHA256
+    ):
         raise ValueError("coarse spatial audit digest changed")
     old = json.loads(old_path.read_text())
     if (
@@ -136,6 +147,21 @@ def main() -> int:
     half_root = args.half_run_root.expanduser().resolve()
     parent_seed = args.parent_seed.expanduser().resolve()
     seed_root = args.derived_seed_root.expanduser().resolve()
+    for label, digest in REGISTERED_SEED_MANIFEST_SHA256.items():
+        seed = seed_root / label
+        manifest_path = seed / "spatial_resolution_seed_manifest.json"
+        if sha256(manifest_path) != digest:
+            raise ValueError(f"registered spatial seed manifest changed: {label}")
+        manifest = json.loads(manifest_path.read_text())
+        if (
+            manifest.get("calibration_eligible") is not False
+            or manifest.get("parent_reference") != str(parent_seed)
+            or any(sha256(seed / relative) != expected
+                   for relative, expected in manifest["derived_sha256"].items())
+            or any(sha256(parent_seed / relative) != expected
+                   for relative, expected in manifest["parent_sha256"].items())
+        ):
+            raise ValueError(f"registered spatial seed changed: {label}")
     output = args.output.expanduser().resolve()
     if output.exists():
         raise FileExistsError(f"refusing to replace spatial temporal audit: {output}")
@@ -153,10 +179,11 @@ def main() -> int:
             steps=STEPS, saves=SAVES,
         )
         physical_keys = (
-            "box_size_pc", "cell_size_pc", "plummer_radius_pc",
+            "case_id", "box_size_pc", "cell_size_pc", "plummer_radius_pc",
             "particle_mass_ev", "pyul_length_unit_m", "pyul_mass_unit_kg",
             "pyul_time_unit_s", "mass_ratio_q", "initial_eccentricity",
             "initial_separation_pc", "semi_major_axis_pc",
+            "core_radius_reference_pc",
         )
         if (
             not config_matches_except_save_count(old_config, new_config)
@@ -199,11 +226,19 @@ def main() -> int:
         isolated_sep = np.linalg.norm(
             isolated[:, 1, :3] - isolated[:, 0, :3], axis=1,
         ) * units.length_pc
+        old_isolated = isolated_plummer_kdk(
+            initial, masses,
+            new_config["Matter Particles"]["Plummer Radius"] / units.length_pc,
+            old_metadata["wave_time_step_code"], STEPS // 2,
+        )
+        old_isolated_endpoint = float(np.linalg.norm(
+            old_isolated[-1, 1, :3] - old_isolated[-1, 0, :3]
+        ) * units.length_pc)
         temporal = compare_matched_series(old_sep, new_sep)
         energy = float(conservation["max_total_energy_drift_over_energy_transfer"])
         mass_error = float(conservation["max_wave_mass_relative_error"])
         if (
-            not np.isfinite(energy) or energy < 0.0
+            not np.isfinite(energy) or energy < 0.0 or energy > 0.01
             or not np.isfinite(mass_error) or mass_error > 1e-10
         ):
             raise ValueError(f"half-step conservation summary invalid: {label}")
@@ -222,6 +257,13 @@ def main() -> int:
             ],
             "half_endpoint_coupled_minus_isolated_pc": float(
                 new_sep[-1] - isolated_sep[-1]
+            ),
+            "half_minus_old_isolated_endpoint_separation_pc": float(
+                isolated_sep[-1] - old_isolated_endpoint
+            ),
+            "half_minus_old_coupled_minus_isolated_endpoint_pc": float(
+                temporal["endpoint_pc"]
+                - (isolated_sep[-1] - old_isolated_endpoint)
             ),
             "old_max_energy_error_over_transfer": previous[
                 "conservation"
