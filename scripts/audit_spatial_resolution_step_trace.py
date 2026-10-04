@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Audit a fixed-physics n192/n256/n384 short periodic-TSC mesh ladder."""
+"""Audit a fixed-input, variable-TSC-kernel n192/n256/n384 prefix ladder."""
 
 from __future__ import annotations
 
@@ -253,6 +253,7 @@ def main() -> int:
         wave_associated = coupled - isolated
         rows.append({
             "label": label,
+            "run_directory": str(paths[label][0]),
             "resolution": resolution,
             "cell_size_pc": row["metadata"]["cell_size_pc"],
             "time_step_factor": factor,
@@ -294,9 +295,14 @@ def main() -> int:
         "derived_run_root": str(derived_root),
         "levels": rows,
         "interpretation": (
-            "Same n256 continuum seed sampled onto three periodic grids, "
+            "Same n256 wave seed spectrally resampled onto three periodic grids, "
             "with a fixed physical direct Plummer radius and identical SMBH "
-            "initial state and time step. This is a 17-year mesh diagnostic; "
+            "initial state and actual time step. TSC kernel smoothing and "
+            "kinetic-phase sampling both change with grid spacing; the "
+            "time_step_factor arguments only control minimum-step padding. "
+            "The n384 archive retains an older _f0125 directory suffix "
+            "although its time_step_factor is 0.30. This is a 17-year "
+            "mesh/start-up diagnostic, not a pure spatial truncation error; "
             "coupled-minus-isolated displacement includes smooth FDM field, "
             "live response and numerical coupling, not isolated wake drag. "
             "No full-orbit or continuum calibration is established."
