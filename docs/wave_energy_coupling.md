@@ -397,6 +397,33 @@ orbital coverage remain required. The authoritative audit is
 Opus independently reviewed the implementation but could not read GPFS
 outputs; its source-equality objection was incorporated into this audit.
 
+The registered half-step follow-up (Slurm 412364) repeats the same 17.09-year
+prefix on all three grids at exactly half the actual wave step. The matched
+comparison uses every second save of the 160-step run against the original
+80-step run. Seed arrays, physical SMBH parameters, and frozen solver source
+are unchanged. Nominal factor and planned save count change to realize the
+half step; no physical input changes.
+
+| Grid | Half-step − original final separation (pc) | Isolated-Plummer part (pc) | Maximum Hamiltonian-error/transfer: original → half step |
+| --- | ---: | ---: | ---: |
+| n192 | −4.139×10⁻¹² | −3.686×10⁻¹² | 1.230×10⁻⁴ → 3.181×10⁻⁵ |
+| n256 | −4.290×10⁻¹² | −3.686×10⁻¹² | 3.806×10⁻⁴ → 9.239×10⁻⁵ |
+| n384 | −4.154×10⁻¹² | −3.686×10⁻¹² | 2.120×10⁻³ → 5.391×10⁻⁴ |
+
+After subtracting the common n256 result, the n192 and n384 mesh
+differences change by only +1.514×10⁻¹³ and +1.359×10⁻¹³ pc, respectively:
+1.6×10⁻⁵ and 2.0×10⁻⁵ of their original magnitudes. Energy-error ratios
+improve by factors 3.87–4.12. Thus this short-prefix mesh comparison is not
+materially limited by the tested time step. It remains a variable-TSC-kernel,
+non-equilibrium-initial-field diagnostic, not a continuum or full-orbit
+calibration. No repeat-GPU floor establishes that the 10⁻¹³ pc differences
+are resolved temporal effects. The fail-closed, source- and state-bound audit
+is `/gpfs/kjhan/FDM_TOY_RESULTS/qe_followup_q030e030_a020_v1/spatial_temporal_refinement_v1/audit_v2.json`
+(SHA-256 `e65d8be3e86120d4b18ad96f5b9e6e0de7fdce574ae22d1f89c1e54b77f5e7f3`).
+Opus reviewed the comparison code but could not access the GPFS outputs;
+its binding and direct-binary-time-step objections were addressed in this
+audit version.
+
 ## Double-counting prohibition
 
 Two calculations remain physically distinct.
