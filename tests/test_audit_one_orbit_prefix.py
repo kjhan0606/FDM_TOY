@@ -2,7 +2,8 @@ import numpy as np
 import pytest
 
 from scripts.audit_one_orbit_prefix import (
-    orbital_coverage, validate_completed_checkpoint,
+    orbital_coverage, recompute_conservation_metrics,
+    validate_completed_checkpoint,
 )
 
 
@@ -51,3 +52,23 @@ def test_completed_checkpoint_matches_final_saved_body(tmp_path):
         validate_completed_checkpoint(
             wave, state, final, resolution=4, step=24, save_index=3,
         )
+
+
+def test_raw_energy_recomputation_requires_component_closure():
+    states = np.zeros((19, 2, 6), dtype=np.float64)
+    exchange = np.linspace(0.0, 1.0, 19)
+    logs = {
+        "ekandqlist": np.full(19, 5.0),
+        "egpsilist": np.full(19, -6.0),
+        "egpcmlist": -3.0 + exchange,
+        "binary_hamiltonian": -10.0 - exchange,
+        "total_hamiltonian": np.full(19, -14.0),
+        "ULDMass": np.full(19, 2.0),
+    }
+    energy, mass = recompute_conservation_metrics(logs, states, np.ones(2))
+    assert energy == pytest.approx(0.0)
+    assert mass == pytest.approx(0.0)
+    logs["total_hamiltonian"] = logs["total_hamiltonian"].copy()
+    logs["total_hamiltonian"][-1] += 0.1
+    with pytest.raises(ValueError, match="do not close"):
+        recompute_conservation_metrics(logs, states, np.ones(2))

@@ -13,10 +13,12 @@ import subprocess
 import numpy as np
 
 from fdm_smbh_delay.pyul import pyul_unit_system
+from scripts.analyze_pyul_wave_run import _energy_error_over_transfer
 from scripts.audit_periodic_offset_step_trace import sha256
 
 
 SOURCE = "scripts/audit_one_orbit_prefix.py"
+ANALYZER_SOURCE = "scripts/analyze_pyul_wave_run.py"
 SEED_MANIFEST_SHA256 = (
     "7a51b8df7bb6f360244e8f83ab6684b0bf41ed431c3c24fd336c116b344416f8"
 )
@@ -33,6 +35,10 @@ EXPECTED_SOLVER_HASHES = {
 SAVES = 18
 STEPS = 16686
 DURATION_MYR = 0.0036
+ENERGY_LOGS = (
+    "ekandqlist", "egpsilist", "egpcmlist", "binary_hamiltonian",
+    "total_hamiltonian", "ULDMass",
+)
 
 
 def orbital_coverage(states: np.ndarray, length_pc: float) -> dict[str, float | int | bool]:
@@ -91,6 +97,43 @@ def validate_completed_checkpoint(
         raise ValueError("completed checkpoint state differs from final save")
 
 
+def recompute_conservation_metrics(
+    logs: dict[str, np.ndarray], states: np.ndarray,
+    masses_code: np.ndarray,
+) -> tuple[float, float]:
+    count = states.shape[0]
+    if (
+        states.shape != (SAVES + 1, 2, 6)
+        or masses_code.shape != (2,)
+        or np.any(masses_code <= 0.0)
+        or set(logs) != set(ENERGY_LOGS)
+        or any(np.asarray(logs[name]).shape != (count,) for name in ENERGY_LOGS)
+        or any(not np.all(np.isfinite(logs[name])) for name in ENERGY_LOGS)
+    ):
+        raise ValueError("raw one-orbit conservation inputs are invalid")
+    total_mass = float(np.sum(masses_code))
+    com_velocity = np.sum(
+        masses_code[None, :, None] * states[:, :, 3:], axis=1,
+    ) / total_mass
+    com_kinetic = 0.5 * total_mass * np.sum(com_velocity**2, axis=1)
+    orbital = logs["binary_hamiltonian"] - com_kinetic
+    intrinsic = logs["ekandqlist"] + logs["egpsilist"]
+    reconstructed = intrinsic + logs["egpcmlist"] + logs["binary_hamiltonian"]
+    if not np.allclose(
+        reconstructed, logs["total_hamiltonian"], rtol=1e-12, atol=1e-3,
+    ):
+        raise ValueError("raw one-orbit Hamiltonian components do not close")
+    mass = logs["ULDMass"]
+    if mass[0] <= 0.0:
+        raise ValueError("raw one-orbit wave mass is not positive")
+    energy_ratio = _energy_error_over_transfer(
+        logs["total_hamiltonian"],
+        (orbital, com_kinetic, intrinsic, logs["egpcmlist"]),
+    )
+    mass_error = float(np.max(np.abs(mass / mass[0] - 1.0)))
+    return energy_ratio, mass_error
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("run", type=Path)
@@ -102,12 +145,14 @@ def main() -> int:
         raise ValueError("source commit must be a full Git revision")
     project = Path(__file__).resolve().parents[1]
     source_hash = sha256(project / SOURCE)
-    committed = subprocess.run(
-        ["git", "show", f"{args.source_commit}:{SOURCE}"], cwd=project,
-        check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-    )
-    if hashlib.sha256(committed.stdout).hexdigest() != source_hash:
-        raise ValueError("one-orbit audit source differs from committed revision")
+    analyzer_hash = sha256(project / ANALYZER_SOURCE)
+    for relative, digest in ((SOURCE, source_hash), (ANALYZER_SOURCE, analyzer_hash)):
+        committed = subprocess.run(
+            ["git", "show", f"{args.source_commit}:{relative}"], cwd=project,
+            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        if hashlib.sha256(committed.stdout).hexdigest() != digest:
+            raise ValueError(f"one-orbit audit/analyzer source differs: {relative}")
     run = args.run.expanduser().resolve()
     seed = args.seed.expanduser().resolve()
     output = args.output.expanduser().resolve()
@@ -194,23 +239,40 @@ def main() -> int:
         np.load(run / f"Outputs/NBody/NTM_#{index:03d}.npy").reshape(2, 6)
         for index in range(SAVES + 1)
     ])
+    if sha256(run / "Outputs/NBody/NTM_#000.npy") != metadata[
+        "reference_initial_particle_sha256"
+    ]:
+        raise ValueError("one-orbit initial body state differs from seed")
     validate_completed_checkpoint(
         checkpoint_wave, checkpoint_state, states[-1],
         resolution=256, step=STEPS, save_index=SAVES,
     )
     coverage = orbital_coverage(states, units.length_pc)
+    logs = {
+        name: np.load(run / "Outputs" / f"{name}.npy")
+        for name in ENERGY_LOGS
+    }
+    masses_code = np.asarray([
+        row[0] for row in config["Matter Particles"]["Condition"]
+    ], dtype=float) / units.mass_msun
+    recomputed_energy, recomputed_mass = recompute_conservation_metrics(
+        logs, states, masses_code,
+    )
     energy = float(conservation["max_total_energy_drift_over_energy_transfer"])
     mass_error = float(conservation["max_wave_mass_relative_error"])
     if (
         not np.isfinite(energy) or energy < 0.0
         or not np.isfinite(mass_error) or mass_error > 1e-10
+        or not np.isclose(energy, recomputed_energy, rtol=1e-8, atol=1e-10)
+        or not np.isclose(mass_error, recomputed_mass, rtol=0, atol=1e-12)
     ):
-        raise ValueError("one-orbit conservation summary is invalid")
+        raise ValueError("one-orbit conservation summary differs from raw logs")
     payload = {
         "status": "source_bound_one_orbit_diagnostic_not_calibration",
         "calibration_eligible": False,
         "source_commit": args.source_commit,
         "source_sha256": source_hash,
+        "analyzer_source_sha256": analyzer_hash,
         "run": str(run),
         "seed": str(seed),
         "seed_manifest_sha256": SEED_MANIFEST_SHA256,
@@ -219,6 +281,10 @@ def main() -> int:
         "energy_error_over_transfer": energy,
         "short_orbit_energy_gate_passed": energy <= 0.01,
         "wave_mass_relative_error": mass_error,
+        "raw_energy_log_sha256": {
+            name: sha256(run / "Outputs" / f"{name}.npy")
+            for name in ENERGY_LOGS
+        },
         "body_state_sha256": {
             str(index): sha256(run / f"Outputs/NBody/NTM_#{index:03d}.npy")
             for index in range(SAVES + 1)
