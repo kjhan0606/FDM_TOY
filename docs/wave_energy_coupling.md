@@ -188,6 +188,22 @@ bound intermediate drift. The cause of the residual floor is not established.
 Physical n256 spatial, offset, softening, and full-orbit gates remain open;
 no q/e/a calibration row is released.
 
+An n256 wave-only null control (Slurm 412226) evolved the same initial wave
+over the same 17-year interval and four time-step levels, but omitted the SMBH
+potential. Its CPU-verified endpoint momentum changes are 2.85×10⁻⁸,
+6.16×10⁻⁸, 1.22×10⁻⁷, and 2.61×10⁻⁷ code units, each below the approximately
+1.14×10⁻⁶ code-unit spectral summation floor. The coupled residuals are about
+4.67–5.30×10⁻⁴ code units. Thus the *unperturbed* wave-only drift is not a
+resolved explanation for the coupled residual. The coupled wave acquires
+SMBH-induced phase structure, however, so the null is neither an upper nor a
+lower bound on its self-gravity error. The finest-level CPU audit is
+`/gpfs/kjhan/FDM_TOY_RESULTS/qe_followup_q030e030_a020_v1/wave_only_momentum_null_v1/f0125/cpu_audit_v1.json`
+(SHA-256 `5fe370bcd8614c5b355ea45e2f08f98bbccdbee6cc94dfb7c80f25ee6300d660`).
+The next attribution test must measure the self-gravity and compact-potential
+phase-kick contributions on the *coupled* wave state itself, including
+intermediate maxima, before assigning a physical origin to the remaining
+momentum floor.
+
 ## Double-counting prohibition
 
 Two calculations remain physically distinct.
