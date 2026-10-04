@@ -121,6 +121,10 @@ def test_complete_torch_calibration_contract_accepts_named_dt05_variant(
             "periodic_tsc_reciprocal", "experimental",
         ),
         (
+            "fdm_adapter_metadata.json", "wave_smbh_coupling",
+            "periodic_tsc_strang", "experimental",
+        ),
+        (
             "fdm_adapter_metadata.json",
             "experimental_coupling_not_a_calibration_release", True,
             "experimental",

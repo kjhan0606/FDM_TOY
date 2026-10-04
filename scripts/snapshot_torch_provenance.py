@@ -122,11 +122,23 @@ def _snapshot_run(project: Path, run: Path) -> dict[str, Any]:
     if metadata.get("backend") not in {"pytorch_cpu", "pytorch_cuda"}:
         raise ValueError(f"not a Torch live-wave calculation: {resolved}")
     coupling = metadata.get("wave_smbh_coupling", "legacy_plummer")
-    if coupling not in {"legacy_plummer", "periodic_tsc_reciprocal"}:
+    if coupling not in {
+        "legacy_plummer", "periodic_tsc_reciprocal", "periodic_tsc_strang"
+    }:
         raise ValueError(f"unknown wave--SMBH coupling mode: {coupling}")
     solver_paths = _UNCOMMITTED_SOLVER_PATHS + (
-        (_PERIODIC_TSC_PATH,) if coupling == "periodic_tsc_reciprocal" else ()
+        (_PERIODIC_TSC_PATH,) if coupling != "legacy_plummer" else ()
     )
+    if coupling == "periodic_tsc_strang":
+        expected_paths = {
+            path.as_posix() for path in solver_paths + _COMMITTED_DEPENDENCY_PATHS
+        }
+        source_hashes = metadata.get("solver_source_sha256")
+        if not isinstance(source_hashes, dict) or set(source_hashes) != expected_paths:
+            raise ValueError("Strang source hash inventory is incomplete")
+        for relative in solver_paths + _COMMITTED_DEPENDENCY_PATHS:
+            if _sha256((project / relative).read_bytes()) != source_hashes[relative.as_posix()]:
+                raise ValueError(f"Strang solver source changed after launch: {relative}")
     revision = str(metadata["adapter_revision"])
     metadata_mtime_ns = metadata_path.stat().st_mtime_ns
     destination = resolved / "torch_solver_provenance"

@@ -242,8 +242,9 @@ def test_source_snapshot_is_repeatable_and_immutable(
         _snapshot_run(PROJECT, run)
 
 
+@pytest.mark.parametrize("coupling", ["periodic_tsc_reciprocal", "periodic_tsc_strang"])
 def test_periodic_tsc_snapshot_includes_its_force_operator(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, coupling: str
 ) -> None:
     monkeypatch.setattr(
         snapshot_torch_provenance,
@@ -253,10 +254,29 @@ def test_periodic_tsc_snapshot_includes_its_force_operator(
     run = tmp_path / "tsc_run"
     run.mkdir()
     (run / "config.uldm").write_text("{}")
-    (run / "fdm_adapter_metadata.json").write_text(json.dumps({
+    metadata = {
         "backend": "pytorch_cpu", "adapter_revision": "test",
-        "wave_smbh_coupling": "periodic_tsc_reciprocal",
-    }))
+        "wave_smbh_coupling": coupling,
+    }
+    if coupling == "periodic_tsc_strang":
+        metadata["solver_source_sha256"] = {
+            relative.as_posix(): snapshot_torch_provenance._sha256(
+                (PROJECT / relative).read_bytes()
+            )
+            for relative in (
+                *snapshot_torch_provenance._UNCOMMITTED_SOLVER_PATHS,
+                snapshot_torch_provenance._PERIODIC_TSC_PATH,
+                *snapshot_torch_provenance._COMMITTED_DEPENDENCY_PATHS,
+            )
+        }
+    metadata_path = run / "fdm_adapter_metadata.json"
+    if coupling == "periodic_tsc_strang":
+        changed = json.loads(json.dumps(metadata))
+        changed["solver_source_sha256"]["scripts/run_torch_wave_case.py"] = "changed"
+        metadata_path.write_text(json.dumps(changed))
+        with pytest.raises(ValueError, match="source changed after launch"):
+            _snapshot_run(PROJECT, run)
+    metadata_path.write_text(json.dumps(metadata))
     manifest = _snapshot_run(PROJECT, run)
     paths = {row["path"] for row in manifest["source_files"]}
     assert len(paths) == 4

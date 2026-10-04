@@ -140,6 +140,98 @@ def tsc_interaction_and_force(
     return energy, force
 
 
+def kick_binary_tsc(
+    *, state: np.ndarray, masses: np.ndarray, wave_potential: torch.Tensor,
+    box_length: float, plummer_radius: float, time_step: float,
+) -> np.ndarray:
+    """Exact velocity subflow at fixed wave density and SMBH positions.
+
+    The wave force is the position gradient of the same TSC interaction
+    energy used by the compact source. A signed step permits a reversibility
+    check; production advances still use positive steps.
+    """
+
+    body = np.asarray(state, dtype=np.float64)
+    mass = np.asarray(masses, dtype=np.float64)
+    if (
+        body.shape != (2, 6) or mass.shape != (2,)
+        or not np.all(np.isfinite(body)) or not np.all(np.isfinite(mass))
+        or np.any(mass <= 0.0) or not np.isfinite(plummer_radius)
+        or plummer_radius <= 0.0 or not np.isfinite(time_step)
+    ):
+        raise ValueError("TSC kick requires a finite two-body state")
+    if np.any(np.abs(body[:, :3]) >= 0.5 * box_length):
+        raise ValueError("SMBH left the nonperiodic direct-binary force domain")
+    _, wave_force = tsc_interaction_and_force(
+        wave_potential=wave_potential, masses=mass,
+        positions=body[:, :3], box_length=box_length,
+    )
+    displacement = body[1, :3] - body[0, :3]
+    if np.linalg.norm(displacement) >= 0.5 * box_length:
+        raise ValueError("SMBH separation exceeds the direct-binary force domain")
+    inverse_cube = (np.dot(displacement, displacement) + plummer_radius**2) ** -1.5
+    accelerated = body.copy()
+    accelerated[:, 3:] += time_step * wave_force / mass[:, None]
+    accelerated[0, 3:] += time_step * mass[1] * displacement * inverse_cube
+    accelerated[1, 3:] -= time_step * mass[0] * displacement * inverse_cube
+    if not np.all(np.isfinite(accelerated)):
+        raise ValueError("TSC kick produced a non-finite state")
+    return accelerated
+
+
+def drift_binary_tsc(
+    *, state: np.ndarray, box_length: float, time_step: float,
+) -> np.ndarray:
+    """Exact SMBH kinetic subflow, with direct-binary boundary protection."""
+
+    body = np.asarray(state, dtype=np.float64)
+    if (
+        body.shape != (2, 6) or not np.all(np.isfinite(body))
+        or not np.isfinite(box_length) or box_length <= 0.0
+        or not np.isfinite(time_step)
+    ):
+        raise ValueError("TSC drift requires a finite two-body state")
+    advanced = body.copy()
+    advanced[:, :3] += time_step * body[:, 3:]
+    if not np.all(np.isfinite(advanced)) or np.any(
+        np.abs(advanced[:, :3]) >= 0.5 * box_length
+    ):
+        raise ValueError("SMBH left the nonperiodic direct-binary force domain")
+    if np.linalg.norm(advanced[1, :3] - advanced[0, :3]) >= 0.5 * box_length:
+        raise ValueError("SMBH separation exceeds the direct-binary force domain")
+    return advanced
+
+
+def validate_binary_tsc_timestep(
+    *, state: np.ndarray, masses: np.ndarray, box_length: float,
+    resolution: int,
+    plummer_radius: float, time_step: float,
+) -> None:
+    """Fail closed when one step undersamples an orbit or a TSC cell crossing."""
+
+    body = np.asarray(state, dtype=np.float64)
+    mass = np.asarray(masses, dtype=np.float64)
+    if (
+        body.shape != (2, 6) or mass.shape != (2,)
+        or not np.all(np.isfinite(body)) or not np.all(np.isfinite(mass))
+        or np.any(mass <= 0.0) or not np.isfinite(box_length)
+        or box_length <= 0.0 or type(resolution) is not int
+        or resolution < 4 or not np.isfinite(plummer_radius)
+        or plummer_radius <= 0.0 or not np.isfinite(time_step)
+        or time_step <= 0.0
+    ):
+        raise ValueError("TSC time-step gate requires finite positive inputs")
+    separation = np.linalg.norm(body[1, :3] - body[0, :3])
+    local_frequency = np.sqrt(
+        mass.sum() / (separation**2 + plummer_radius**2) ** 1.5
+    )
+    cell_size = box_length / resolution
+    if time_step * local_frequency > 0.1:
+        raise ValueError("SMBH orbit undersampled by TSC time step")
+    if np.max(np.abs(body[:, 3:])) * time_step / cell_size > 0.1:
+        raise ValueError("SMBH TSC cell crossing undersampled by time step")
+
+
 def periodic_tsc_patches(
     *, potential: torch.Tensor, positions: np.ndarray,
     box_length: float, width: int = 8,

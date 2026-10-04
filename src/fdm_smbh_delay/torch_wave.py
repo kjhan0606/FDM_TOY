@@ -119,7 +119,7 @@ def apply_potential_half_kick_in_place(
         or wavefunction.shape != potential.shape
         or wavefunction.device != potential.device
         or not np.isfinite(time_step)
-        or time_step <= 0.0
+        or time_step == 0.0
     ):
         raise ValueError("wave, potential, and time step are incompatible")
     phase = torch.empty_like(wavefunction)

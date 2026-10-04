@@ -53,8 +53,10 @@ def test_potential_half_kick_matches_complex_exponential_and_preserves_norm() ->
         torch.sum(measured.abs().square()), torch.sum(initial.abs().square()),
         rtol=2e-15, atol=2e-15,
     )
+    apply_potential_half_kick_in_place(measured, potential, -0.003)
+    torch.testing.assert_close(measured, initial, rtol=2e-15, atol=2e-15)
     with pytest.raises(ValueError, match="incompatible"):
-        apply_potential_half_kick_in_place(measured, potential, -0.003)
+        apply_potential_half_kick_in_place(measured, potential, 0.0)
 
 
 def test_separable_kinetic_phase_matches_cubic_reference_and_preserves_norm() -> None:

@@ -44,6 +44,7 @@ _RESTART_METADATA_KEYS = (
     "wave_time_step_code",
     "time_step_factor",
     "nbody_rk4_substeps_per_wave_step",
+    "binary_integrator",
     "kinetic_phase_layout",
     "wave_buffer_lifetime",
     "wave_density_layout",
@@ -56,9 +57,10 @@ _RESTART_METADATA_KEYS = (
 
 def _require_resume_metadata(saved: dict, requested: dict) -> None:
     for key in _RESTART_METADATA_KEYS:
-        value = saved.get(
-            key, "legacy_plummer" if key == "wave_smbh_coupling" else None
-        )
+        value = saved.get(key, {
+            "wave_smbh_coupling": "legacy_plummer",
+            "binary_integrator": "post_wave_drift_rk4_v1",
+        }.get(key))
         if value != requested[key]:
             raise ValueError(f"restart request changes {key}")
     if saved.get("qe_design_binding") != requested.get("qe_design_binding"):
@@ -66,6 +68,13 @@ def _require_resume_metadata(saved: dict, requested: dict) -> None:
     for key in ("reference_initial_wave_sha256", "reference_initial_particle_sha256"):
         if key in saved and saved[key] != requested[key]:
             raise ValueError(f"restart reference initial content changed: {key}")
+    if requested.get("wave_smbh_coupling") == "periodic_tsc_strang":
+        for key in (
+            "reference_config_sha256", "reference_metadata_sha256",
+            "solver_source_sha256",
+        ):
+            if saved.get(key) != requested.get(key):
+                raise ValueError(f"restart changes experimental input or source: {key}")
 
 
 def _sha256(path: Path) -> str:
@@ -236,9 +245,11 @@ def _load_checkpoint(
     return wavefunction, state, step, save_index
 
 
-def _load_energy_logs(run: Path, save_index: int) -> dict[str, list[float]]:
+def _load_energy_logs(
+    run: Path, save_index: int, *, coupled_hamiltonian: bool = False,
+) -> dict[str, list[float]]:
     logs = {}
-    for name in (
+    names = (
         "egylist",
         "egpcmlist",
         "egpsilist",
@@ -246,7 +257,8 @@ def _load_energy_logs(run: Path, save_index: int) -> dict[str, list[float]]:
         "masseslist",
         "egpcmMlist",
         "ULDMass",
-    ):
+    ) + (("binary_hamiltonian", "total_hamiltonian") if coupled_hamiltonian else ())
+    for name in names:
         values = np.load(run / "Outputs" / f"{name}.npy")
         if values.size < save_index + 1:
             raise ValueError(f"{name} does not reach checkpoint {save_index}")
@@ -266,7 +278,7 @@ def main() -> int:
     parser.add_argument("--time-step-factor", type=float, default=1.0)
     parser.add_argument(
         "--wave-smbh-coupling",
-        choices=("legacy_plummer", "periodic_tsc_reciprocal"),
+        choices=("legacy_plummer", "periodic_tsc_reciprocal", "periodic_tsc_strang"),
         default="legacy_plummer",
     )
     parser.add_argument("--device", default="cuda:0")
@@ -275,12 +287,15 @@ def main() -> int:
     parser.add_argument("--profile-memory-stages", action="store_true")
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
-    if args.wave_smbh_coupling == "periodic_tsc_reciprocal":
+    if args.wave_smbh_coupling in {"periodic_tsc_reciprocal", "periodic_tsc_strang"}:
         from fdm_smbh_delay.periodic_mesh_coupling import (
             advance_binary_rk4_tsc,
+            drift_binary_tsc,
+            kick_binary_tsc,
             periodic_tsc_patches,
             tsc_interaction_and_force,
             tsc_source_density,
+            validate_binary_tsc_timestep,
         )
     if args.duration_myr <= 0.0 or args.save_number < 1:
         raise ValueError("duration and save number must be positive")
@@ -404,7 +419,15 @@ def main() -> int:
             ),
             "duration_myr": duration_completed_myr,
             "time_step_factor": args.time_step_factor,
-            "nbody_rk4_substeps_per_wave_step": args.rk4_substeps,
+            "nbody_rk4_substeps_per_wave_step": (
+                0 if args.wave_smbh_coupling == "periodic_tsc_strang"
+                else args.rk4_substeps
+            ),
+            "binary_integrator": (
+                "joint_kick_drift_kick_v1"
+                if args.wave_smbh_coupling == "periodic_tsc_strang"
+                else "post_wave_drift_rk4_v1"
+            ),
             "save_number": save_number,
             "saved_movie_planes": len(movie_indices),
             "saved_3d_states": len(wave_indices),
@@ -416,7 +439,7 @@ def main() -> int:
             "wave_smbh_coupling": args.wave_smbh_coupling,
             "compact_potential_layout": (
                 "periodic_tsc_poisson_v1"
-                if args.wave_smbh_coupling == "periodic_tsc_reciprocal"
+                if args.wave_smbh_coupling != "legacy_plummer"
                 else "x_slab32_inplace_rsqrt_v1"
             ),
             "potential_phase_layout": "complex_real_imag_inplace_trig_v1",
@@ -428,22 +451,62 @@ def main() -> int:
             "wave_acceleration_during_particle_rk4": (
                 "position_gradient_of_periodic_tsc_interaction_at_each_rk4_stage"
                 if args.wave_smbh_coupling == "periodic_tsc_reciprocal"
-                else "interpolated_from_a_local_potential_patch_at_each_rk4_stage"
+                else (
+                    "position_gradient_of_periodic_tsc_interaction_at_both_kicks"
+                    if args.wave_smbh_coupling == "periodic_tsc_strang"
+                    else "interpolated_from_a_local_potential_patch_at_each_rk4_stage"
+                )
             ),
             "experimental_coupling_not_a_calibration_release": (
-                args.wave_smbh_coupling == "periodic_tsc_reciprocal"
+                args.wave_smbh_coupling != "legacy_plummer"
+            ),
+            "coupled_hamiltonian_ledger": (
+                args.wave_smbh_coupling == "periodic_tsc_strang"
+            ),
+            "binary_step_max_angular_advance": (
+                0.1 if args.wave_smbh_coupling == "periodic_tsc_strang" else None
+            ),
+            "binary_step_max_cell_crossing": (
+                0.1 if args.wave_smbh_coupling == "periodic_tsc_strang" else None
             ),
             "analytic_fdm_drag": False,
             "live_wave_force_on_smbhs": True,
             "smbh_force_on_live_wave": True,
         }
     )
+    if args.wave_smbh_coupling == "periodic_tsc_strang":
+        project = Path(__file__).resolve().parents[1]
+        metadata.update({
+            "reference_config_sha256": _sha256(reference / "config.uldm"),
+            "reference_metadata_sha256": _sha256(
+                reference / "fdm_adapter_metadata.json"
+            ),
+            "solver_source_sha256": {
+                str(relative): _sha256(project / relative)
+                for relative in (
+                    Path("scripts/run_torch_wave_case.py"),
+                    Path("src/fdm_smbh_delay/torch_wave.py"),
+                    Path("src/fdm_smbh_delay/periodic_mesh_coupling.py"),
+                    Path("src/fdm_smbh_delay/pyul.py"),
+                )
+            },
+        })
 
     if args.resume:
         saved_metadata = json.loads(
             (output / "fdm_adapter_metadata.json").read_text(encoding="utf-8")
         )
         _require_resume_metadata(saved_metadata, metadata)
+        summary_path = output / "torch_run_summary.json"
+        if summary_path.is_file():
+            previous_status = json.loads(
+                summary_path.read_text(encoding="utf-8")
+            ).get("status")
+            if previous_status in {
+                "stalled_spatial_domain", "stalled_timestep_resolution",
+                "stalled_numerical_state",
+            }:
+                raise ValueError(f"cannot resume terminal diagnostic: {previous_status}")
         diagnostic_run = (
             saved_metadata.get("diagnostic_stop_after_save") is not None
             or saved_metadata.get("experimental_coupling_not_a_calibration_release")
@@ -452,7 +515,7 @@ def main() -> int:
     else:
         diagnostic_run = (
             args.diagnostic_stop_after_save is not None
-            or args.wave_smbh_coupling == "periodic_tsc_reciprocal"
+            or args.wave_smbh_coupling != "legacy_plummer"
         )
         output.mkdir(parents=True)
         (output / "Outputs").mkdir()
@@ -512,7 +575,7 @@ def main() -> int:
     profile_stage("initial_poisson")
 
     def compact_field(positions: np.ndarray) -> torch.Tensor:
-        if args.wave_smbh_coupling == "periodic_tsc_reciprocal":
+        if args.wave_smbh_coupling != "legacy_plummer":
             source = tsc_source_density(
                 masses=masses_code, positions=positions, resolution=resolution,
                 box_length=box_code, device=device,
@@ -529,9 +592,24 @@ def main() -> int:
 
     compact_potential = compact_field(state.reshape(2, 6)[:, :3])
     profile_stage("initial_compact_potential")
+    if args.wave_smbh_coupling == "periodic_tsc_strang" and not args.resume:
+        phase_jump = max(
+            float((compact_potential - torch.roll(
+                compact_potential, shifts=1, dims=axis
+            )).abs().max()) * time_step / np.pi
+            for axis in range(3)
+        )
+        _atomic_json(output / "initial_compact_phase_jump.json", {
+            "max_neighbour_phase_difference_over_pi": phase_jump,
+            "wave_time_step_code": time_step,
+            "interpretation": "diagnostic only; no spatial-resolution acceptance inferred",
+        })
 
     if args.resume:
-        logs = _load_energy_logs(output, start_save_index)
+        logs = _load_energy_logs(
+            output, start_save_index,
+            coupled_hamiltonian=args.wave_smbh_coupling == "periodic_tsc_strang",
+        )
     else:
         logs: dict[str, list[float]] = {
             "egylist": [],
@@ -542,6 +620,9 @@ def main() -> int:
             "egpcmMlist": [],
             "ULDMass": [],
         }
+        if args.wave_smbh_coupling == "periodic_tsc_strang":
+            logs["binary_hamiltonian"] = []
+            logs["total_hamiltonian"] = []
 
     def save(index: int) -> None:
         nonlocal density
@@ -561,7 +642,7 @@ def main() -> int:
         profile_stage(f"save_{index:06d}_kinetic_energy")
         density = wave_density(wavefunction)
         profile_stage(f"save_{index:06d}_energy")
-        if args.wave_smbh_coupling == "periodic_tsc_reciprocal":
+        if args.wave_smbh_coupling != "legacy_plummer":
             point_interaction, _ = tsc_interaction_and_force(
                 wave_potential=wave_potential, masses=masses_code,
                 positions=state.reshape(2, 6)[:, :3], box_length=box_code,
@@ -584,6 +665,19 @@ def main() -> int:
         logs["masseslist"].append(wave_mass)
         logs["egpcmMlist"].append(point_interaction)
         logs["ULDMass"].append(wave_mass)
+        if args.wave_smbh_coupling == "periodic_tsc_strang":
+            body = state.reshape(2, 6)
+            displacement = body[1, :3] - body[0, :3]
+            binary_hamiltonian = float(
+                0.5 * np.sum(masses_code[:, None] * body[:, 3:] ** 2)
+                - np.prod(masses_code) / np.sqrt(
+                    displacement @ displacement + plummer_code**2
+                )
+            )
+            logs["binary_hamiltonian"].append(binary_hamiltonian)
+            logs["total_hamiltonian"].append(
+                kinetic + self_gravity + interaction + binary_hamiltonian
+            )
         _write_compatible_outputs(
             run=output,
             index=index,
@@ -607,10 +701,53 @@ def main() -> int:
                 save_index=0,
             )
     last_saved_index = start_save_index
+
+    def checked_strang(operator, step: int, **kwargs):
+        try:
+            return operator(**kwargs)
+        except ValueError as error:
+            status = (
+                "stalled_timestep_resolution"
+                if "undersampled" in str(error)
+                else "stalled_spatial_domain"
+                if "force domain" in str(error)
+                else "stalled_numerical_state"
+            )
+            _atomic_json(output / "torch_run_summary.json", {
+                    "status": status,
+                    "reason": str(error),
+                    "failed_wave_step": step,
+                    "saved_intervals": last_saved_index,
+                    "actual_wave_steps": last_saved_index * steps_per_save,
+                    "planned_wave_steps": actual_steps,
+                    "duration_myr": duration_completed_myr * last_saved_index / save_number,
+                    "elapsed_seconds": time.perf_counter() - start,
+                })
+            raise
+
     for step in range(start_step + 1, actual_steps + 1):
+        if args.wave_smbh_coupling == "periodic_tsc_strang":
+            checked_strang(
+                validate_binary_tsc_timestep, step,
+                state=state.reshape(2, 6), masses=masses_code,
+                box_length=box_code, resolution=resolution,
+                plummer_radius=plummer_code, time_step=time_step,
+            )
         total_potential = wave_potential + compact_potential
         profile_stage(f"step_{step:06d}_first_total_potential")
         apply_potential_half_kick_in_place(wavefunction, total_potential, time_step)
+        if args.wave_smbh_coupling == "periodic_tsc_strang":
+            state = checked_strang(kick_binary_tsc, step,
+                state=state.reshape(2, 6), masses=masses_code,
+                wave_potential=wave_potential, box_length=box_code,
+                plummer_radius=plummer_code, time_step=0.5 * time_step,
+            ).reshape(-1)
+            checked_strang(
+                validate_binary_tsc_timestep, step,
+                state=state.reshape(2, 6), masses=masses_code,
+                box_length=box_code, resolution=resolution,
+                plummer_radius=plummer_code, time_step=time_step,
+            )
         profile_stage(f"step_{step:06d}_first_kick")
         # None of the previous density/potential buffers enters the FFT drift.
         # Release them before allocating its complex work arrays, rather than
@@ -624,6 +761,11 @@ def main() -> int:
         wavefunction = torch.fft.ifftn(wavefunction_k)
         del wavefunction_k
         profile_stage(f"step_{step:06d}_inverse_fft")
+        if args.wave_smbh_coupling == "periodic_tsc_strang":
+            state = checked_strang(drift_binary_tsc, step,
+                state=state.reshape(2, 6), box_length=box_code,
+                time_step=time_step,
+            ).reshape(-1)
         density = wave_density(wavefunction)
         profile_stage(f"step_{step:06d}_density")
         wave_potential = periodic_poisson_torch(
@@ -641,7 +783,7 @@ def main() -> int:
                 resolution=resolution, plummer_radius=plummer_code,
                 time_step=time_step, substeps=args.rk4_substeps,
             )
-        else:
+        elif args.wave_smbh_coupling == "legacy_plummer":
             wave_patches, patch_starts = potential_patches(
                 potential=wave_potential,
                 positions=state.reshape(2, 6)[:, :3],
@@ -658,17 +800,27 @@ def main() -> int:
                 time_step=time_step,
                 substeps=args.rk4_substeps,
             )
-        del wave_patches, patch_starts
-        profile_stage(f"step_{step:06d}_particle_rk4")
+        if args.wave_smbh_coupling != "periodic_tsc_strang":
+            del wave_patches, patch_starts
+            profile_stage(f"step_{step:06d}_particle_rk4")
         compact_potential = compact_field(state.reshape(2, 6)[:, :3])
         profile_stage(f"step_{step:06d}_compact_potential")
         total_potential = wave_potential + compact_potential
         apply_potential_half_kick_in_place(wavefunction, total_potential, time_step)
+        if args.wave_smbh_coupling == "periodic_tsc_strang":
+            state = checked_strang(kick_binary_tsc, step,
+                state=state.reshape(2, 6), masses=masses_code,
+                wave_potential=wave_potential, box_length=box_code,
+                plummer_radius=plummer_code, time_step=0.5 * time_step,
+            ).reshape(-1)
         del total_potential
         profile_stage(f"step_{step:06d}_second_kick")
         if step % steps_per_save == 0:
             save_index = step // steps_per_save
-            save(save_index)
+            if args.wave_smbh_coupling == "periodic_tsc_strang":
+                checked_strang(save, step, index=save_index)
+            else:
+                save(save_index)
             last_saved_index = save_index
             if args.checkpoint_every_saves and (
                 save_index % args.checkpoint_every_saves == 0

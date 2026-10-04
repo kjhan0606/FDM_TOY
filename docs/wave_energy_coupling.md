@@ -88,6 +88,30 @@ the intrinsic energy change together with radial energy flux and the evolving
 wave modes. The controlled numerical audit and acceptance limits are recorded
 in [`merge_calibration.md`](merge_calibration.md).
 
+## Experimental time-centred periodic TSC diagnostic
+
+The `periodic_tsc_strang` mode deposits each SMBH on the periodic mesh with
+TSC weights and derives the force on that SMBH from the gradient of the same
+wave–SMBH interaction energy. Each step applies a joint half potential kick
+to the wave phase and SMBH velocities, a full spectral-wave and ballistic-SMBH
+drift, and a second joint half kick at the updated density and positions.
+This replaces the earlier diagnostic sequence in which SMBHs were advanced
+through an end-of-step wave field. The direct SMBH–SMBH force remains Plummer
+softened and nonperiodic; the mode stops if the pair leaves its stated spatial
+domain or a step undersamples an orbit or a TSC cell crossing.
+
+The runner records wave mass, the separate binary and wave energy terms, their
+combined Hamiltonian, and the initial SMBH-potential phase jump between
+neighbouring cells. It binds restarts to the reference configuration and
+solver-source hashes. The small-grid tests cover interaction reciprocity,
+forward/backward reversal, second-order refinement of a coupled short orbit,
+energy bookkeeping, and restart equivalence. These checks justify a short
+diagnostic prefix, not a calibrated orbital-decay row. The n256 run must still
+measure Hamiltonian drift and SMBH separation convergence. Spatial-resolution
+convergence, cell-offset sensitivity, total-momentum drift, full-orbit and
+pericentre coverage, and the interaction-softening comparison remain open.
+No result from this mode may enter the FDM delay table until those gates pass.
+
 ## Double-counting prohibition
 
 Two calculations remain physically distinct.

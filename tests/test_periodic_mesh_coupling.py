@@ -10,12 +10,21 @@ torch = pytest.importorskip("torch")
 from fdm_smbh_delay.periodic_mesh_coupling import (
     _tsc_patched_wave_acceleration,
     advance_binary_rk4_tsc,
+    drift_binary_tsc,
+    kick_binary_tsc,
     periodic_tsc_patches,
     tsc_interaction_and_force,
     tsc_source_density,
     tsc_stencil,
+    validate_binary_tsc_timestep,
 )
-from fdm_smbh_delay.torch_wave import periodic_poisson_torch, spectral_grid
+from fdm_smbh_delay.torch_wave import (
+    apply_kinetic_phase_in_place,
+    apply_potential_half_kick_in_place,
+    periodic_poisson_torch,
+    spectral_grid,
+    wave_density,
+)
 from fdm_smbh_delay.pyul import (
     PYUL_MYR_S, PYUL_PARSEC_M, PYUL_SOLAR_MASS_KG,
 )
@@ -167,6 +176,123 @@ def test_tsc_rk4_conserves_fixed_wave_interaction_with_refinement() -> None:
     assert errors[1] < errors[0] / 50.0
 
 
+def test_tsc_binary_kick_drift_is_reversible_and_second_order() -> None:
+    potential = torch.as_tensor(
+        np.random.default_rng(9905).normal(scale=0.01, size=(16, 16, 16)),
+        dtype=torch.float64,
+    )
+    masses = np.array([0.7, 1.3])
+    initial = np.array([
+        [-0.45, 0.01, 0.02, 0.01, -0.08, 0.0],
+        [0.45, -0.01, -0.02, -0.01, 0.06, 0.0],
+    ])
+
+    def step(state: np.ndarray, dt: float) -> np.ndarray:
+        first = kick_binary_tsc(
+            state=state, masses=masses, wave_potential=potential,
+            box_length=4.0, plummer_radius=0.1, time_step=0.5 * dt,
+        )
+        middle = drift_binary_tsc(
+            state=first, box_length=4.0, time_step=dt,
+        )
+        return kick_binary_tsc(
+            state=middle, masses=masses, wave_potential=potential,
+            box_length=4.0, plummer_radius=0.1, time_step=0.5 * dt,
+        )
+
+    forward = step(initial, 0.02)
+    np.testing.assert_allclose(step(forward, -0.02), initial, rtol=0, atol=1e-15)
+    reference = initial.copy()
+    for _ in range(64):
+        reference = step(reference, 0.00125)
+    errors = []
+    for count in (4, 8, 16):
+        state = initial.copy()
+        for _ in range(count):
+            state = step(state, 0.08 / count)
+        errors.append(np.max(np.abs(state - reference)))
+    assert errors[0] / errors[1] > 3.7
+    assert errors[1] / errors[2] > 3.5
+    with pytest.raises(ValueError, match="direct-binary force domain"):
+        drift_binary_tsc(
+            state=np.array([[1.99, 0, 0, 1, 0, 0], [0, 0, 0, 0, 0, 0]]),
+            box_length=4.0, time_step=0.02,
+        )
+    with pytest.raises(ValueError, match="separation exceeds"):
+        kick_binary_tsc(
+            state=np.array([[-1.2, 0, 0, 0, 0, 0], [1.2, 0, 0, 0, 0, 0]]),
+            masses=masses, wave_potential=potential, box_length=4.0,
+            plummer_radius=0.1, time_step=0.01,
+        )
+    with pytest.raises(ValueError, match="orbit undersampled"):
+        validate_binary_tsc_timestep(
+            state=initial, masses=masses, box_length=4.0,
+            resolution=16, plummer_radius=0.1, time_step=0.2,
+        )
+
+
+def test_full_wave_binary_strang_step_reverses() -> None:
+    axis = np.arange(8, dtype=float) * 0.5 - 2.0
+    density = 1.0 + 0.1 * np.cos(2.0 * np.pi * axis[:, None, None] / 4.0)
+    initial_wave = torch.as_tensor(
+        np.broadcast_to(np.sqrt(density), (8, 8, 8)).astype(np.complex128)
+    )
+    initial_body = np.array([
+        [-0.45, 0, 0, 0, -0.08, 0],
+        [0.45, 0, 0, 0, 0.06, 0],
+    ], dtype=float)
+    masses = np.array([0.7, 1.3])
+    grid = spectral_grid(
+        resolution=8, box_length=4.0, time_step=0.01,
+        device=torch.device("cpu"),
+    )
+
+    def fields(wave, body):
+        wave_potential = periodic_poisson_torch(
+            wave_density(wave), grid.poisson_inverse_wavenumber_squared
+        )
+        compact_density = tsc_source_density(
+            masses=masses, positions=body[:, :3], resolution=8,
+            box_length=4.0, device=torch.device("cpu"),
+        )
+        compact_potential = periodic_poisson_torch(
+            compact_density, grid.poisson_inverse_wavenumber_squared
+        )
+        return wave_potential, compact_potential
+
+    def step(wave, body, dt):
+        wave = wave.clone()
+        wave_potential, compact_potential = fields(wave, body)
+        apply_potential_half_kick_in_place(
+            wave, wave_potential + compact_potential, dt
+        )
+        body = kick_binary_tsc(
+            state=body, masses=masses, wave_potential=wave_potential,
+            box_length=4.0, plummer_radius=0.1, time_step=0.5 * dt,
+        )
+        spectrum = torch.fft.fftn(wave)
+        phase = grid.kinetic_axis_phase
+        apply_kinetic_phase_in_place(
+            spectrum, phase if dt > 0 else phase.conj()
+        )
+        wave = torch.fft.ifftn(spectrum)
+        body = drift_binary_tsc(state=body, box_length=4.0, time_step=dt)
+        wave_potential, compact_potential = fields(wave, body)
+        apply_potential_half_kick_in_place(
+            wave, wave_potential + compact_potential, dt
+        )
+        body = kick_binary_tsc(
+            state=body, masses=masses, wave_potential=wave_potential,
+            box_length=4.0, plummer_radius=0.1, time_step=0.5 * dt,
+        )
+        return wave, body
+
+    forward_wave, forward_body = step(initial_wave, initial_body, 0.01)
+    reversed_wave, reversed_body = step(forward_wave, forward_body, -0.01)
+    torch.testing.assert_close(reversed_wave, initial_wave, rtol=0, atol=1e-13)
+    np.testing.assert_allclose(reversed_body, initial_body, rtol=0, atol=1e-14)
+
+
 def test_tsc_rejects_invalid_inputs() -> None:
     with pytest.raises(ValueError, match="finite positions"):
         tsc_stencil(
@@ -207,10 +333,7 @@ def test_tsc_force_is_continuous_at_cell_edge_and_patch_exit_fails() -> None:
         _tsc_patched_wave_acceleration(outside, patches[0], starts[0], 4.0, 16)
 
 
-def test_experimental_tsc_runner_restarts_without_changing_coupling(
-    tmp_path, monkeypatch,
-) -> None:
-    reference = tmp_path / "seed"
+def _small_reference(reference) -> None:
     (reference / "Outputs/3Wfn").mkdir(parents=True)
     (reference / "Outputs/NBody").mkdir()
     axis = np.arange(16, dtype=float) * 4.0 / 16.0 - 2.0
@@ -241,6 +364,14 @@ def test_experimental_tsc_runner_restarts_without_changing_coupling(
     }))
     (reference / "reproducibility.uldm").write_text("test\n")
 
+
+@pytest.mark.parametrize("coupling", ["periodic_tsc_reciprocal", "periodic_tsc_strang"])
+def test_experimental_tsc_runner_restarts_without_changing_coupling(
+    tmp_path, monkeypatch, coupling,
+) -> None:
+    reference = tmp_path / "seed"
+    _small_reference(reference)
+
     def run(output, *extra):
         monkeypatch.setattr(sys, "argv", [
             "run_torch_wave_case.py", str(reference), "--output", str(output),
@@ -252,7 +383,7 @@ def test_experimental_tsc_runner_restarts_without_changing_coupling(
 
     full = tmp_path / "full"
     split = tmp_path / "split"
-    mode = ("--wave-smbh-coupling", "periodic_tsc_reciprocal")
+    mode = ("--wave-smbh-coupling", coupling)
     assert run(full, *mode) == 0
     assert run(split, *mode, "--diagnostic-stop-after-save", "2") == 0
     assert run(split, *mode, "--resume") == 0
@@ -265,6 +396,8 @@ def test_experimental_tsc_runner_restarts_without_changing_coupling(
         np.load(full / "Outputs/egpcmlist.npy"),
         np.load(full / "Outputs/egpcmMlist.npy"), rtol=1e-11, atol=1e-9,
     )
+    wave_mass = np.load(full / "Outputs/ULDMass.npy")
+    np.testing.assert_allclose(wave_mass, wave_mass[0], rtol=1e-12, atol=1e-12)
     np.testing.assert_allclose(
         np.load(full / "Outputs/NBody/NTM_#004.npy"),
         np.load(split / "Outputs/NBody/NTM_#004.npy"), rtol=0, atol=1e-12,
@@ -288,8 +421,110 @@ def test_experimental_tsc_runner_restarts_without_changing_coupling(
         )
     components = wave_components + [np.asarray(binary)]
     hamiltonian = sum(components)
+    if coupling == "periodic_tsc_strang":
+        phase_jump = json.loads(
+            (full / "initial_compact_phase_jump.json").read_text()
+        )["max_neighbour_phase_difference_over_pi"]
+        assert np.isfinite(phase_jump) and phase_jump > 0.0
+        np.testing.assert_allclose(
+            np.load(full / "Outputs/binary_hamiltonian.npy"), binary,
+            rtol=1e-13, atol=1e-13,
+        )
+        np.testing.assert_allclose(
+            np.load(full / "Outputs/total_hamiltonian.npy"), hamiltonian,
+            rtol=1e-13, atol=1e-13,
+        )
+        np.testing.assert_allclose(
+            np.load(full / "Outputs/total_hamiltonian.npy"),
+            np.load(split / "Outputs/total_hamiltonian.npy"),
+            rtol=0, atol=1e-12,
+        )
     transfer_scale = max(abs(series[-1] - series[0]) for series in components)
     assert transfer_scale > 0.0
     assert abs(hamiltonian[-1] - hamiltonian[0]) / transfer_scale < 0.01
     with pytest.raises(ValueError, match="wave_smbh_coupling"):
         run(split, "--resume")
+    if coupling == "periodic_tsc_strang":
+        config_path = reference / "config.uldm"
+        original_config = config_path.read_text()
+        config = json.loads(original_config)
+        config["Matter Particles"]["Plummer Radius"] = 0.2
+        config_path.write_text(json.dumps(config))
+        with pytest.raises(ValueError, match="reference_config_sha256"):
+            run(split, *mode, "--resume")
+        config_path.write_text(original_config)
+        metadata_path = split / "fdm_adapter_metadata.json"
+        saved = json.loads(metadata_path.read_text())
+        saved["solver_source_sha256"]["scripts/run_torch_wave_case.py"] = "changed"
+        metadata_path.write_text(json.dumps(saved))
+        with pytest.raises(ValueError, match="solver_source_sha256"):
+            run(split, *mode, "--resume")
+
+
+def test_strang_coupled_binary_separation_refines_quadratically(
+    tmp_path, monkeypatch,
+) -> None:
+    reference = tmp_path / "seed"
+    _small_reference(reference)
+    final_separation = []
+    steps = []
+    for factor in (1.0, 0.5, 0.25, 0.125):
+        output = tmp_path / f"factor_{factor}"
+        monkeypatch.setattr(sys, "argv", [
+            "run_torch_wave_case.py", str(reference), "--output", str(output),
+            "--duration-myr", "0.075", "--save-number", "1",
+            "--save-3d-number", "0", "--movie-frame-number", "0",
+            "--checkpoint-every-saves", "0", "--device", "cpu",
+            "--wave-smbh-coupling", "periodic_tsc_strang",
+            "--time-step-factor", str(factor),
+        ])
+        assert run_torch_wave_case.main() == 0
+        metadata = json.loads((output / "fdm_adapter_metadata.json").read_text())
+        assert metadata["binary_integrator"] == "joint_kick_drift_kick_v1"
+        steps.append(metadata["actual_wave_steps"])
+        body = np.load(output / "Outputs/NBody/NTM_#001.npy").reshape(2, 6)
+        final_separation.append(np.linalg.norm(body[1, :3] - body[0, :3]))
+    assert steps == [4, 8, 16, 32]
+    differences = np.abs(np.diff(final_separation))
+    assert differences[0] / differences[1] > 3.5
+    assert differences[1] / differences[2] > 3.5
+
+
+def test_strang_timestep_failure_records_terminal_status(tmp_path, monkeypatch) -> None:
+    reference = tmp_path / "seed"
+    _small_reference(reference)
+    initial_path = reference / "Outputs/NBody/NTM_#000.npy"
+    body = np.load(initial_path)
+    body[:, 3] = 100.0
+    np.save(initial_path, body)
+    output = tmp_path / "stalled"
+    arguments = [
+        "run_torch_wave_case.py", str(reference), "--output", str(output),
+        "--duration-myr", "0.01", "--save-number", "4",
+        "--save-3d-number", "0", "--movie-frame-number", "0",
+        "--checkpoint-every-saves", "1", "--device", "cpu",
+        "--wave-smbh-coupling", "periodic_tsc_strang",
+    ]
+    monkeypatch.setattr(sys, "argv", arguments)
+    with pytest.raises(ValueError, match="cell crossing undersampled"):
+        run_torch_wave_case.main()
+    summary = json.loads((output / "torch_run_summary.json").read_text())
+    assert summary["status"] == "stalled_timestep_resolution"
+    assert summary["failed_wave_step"] == 1
+    monkeypatch.setattr(sys, "argv", arguments + ["--resume"])
+    with pytest.raises(ValueError, match="cannot resume terminal diagnostic"):
+        run_torch_wave_case.main()
+    body[:, 3] = 0.0
+    body[0, 0] = -1.2
+    body[1, 0] = 1.2
+    np.save(initial_path, body)
+    spatial_output = tmp_path / "spatial"
+    spatial_arguments = arguments.copy()
+    spatial_arguments[spatial_arguments.index("--output") + 1] = str(spatial_output)
+    monkeypatch.setattr(sys, "argv", spatial_arguments)
+    with pytest.raises(ValueError, match="separation exceeds"):
+        run_torch_wave_case.main()
+    spatial_summary = json.loads(
+        (spatial_output / "torch_run_summary.json").read_text()
+    )
+    assert spatial_summary["status"] == "stalled_spatial_domain"
