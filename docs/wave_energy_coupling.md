@@ -199,10 +199,49 @@ SMBH-induced phase structure, however, so the null is neither an upper nor a
 lower bound on its self-gravity error. The finest-level CPU audit is
 `/gpfs/kjhan/FDM_TOY_RESULTS/qe_followup_q030e030_a020_v1/wave_only_momentum_null_v1/f0125/cpu_audit_v1.json`
 (SHA-256 `5fe370bcd8614c5b355ea45e2f08f98bbccdbee6cc94dfb7c80f25ee6300d660`).
-The next attribution test must measure the self-gravity and compact-potential
-phase-kick contributions on the *coupled* wave state itself, including
+A coupled-state attribution test was therefore required to measure the
+self-gravity and compact-potential phase-kick contributions, including
 intermediate maxima, before assigning a physical origin to the remaining
 momentum floor.
+
+The coupled-state factorized-kick replay is now complete for those four n256
+levels (Slurm 412276 and 412288). It reproduces each saved binary state and
+the final wave checkpoint; the maximum relative wave replay difference is
+6.1×10⁻¹⁵. A separate CPU endpoint audit agrees with the replay's total
+momentum change within 2.7×10⁻⁸ code units. The source-bound summary checks
+each half-kick's *interaction-only* wave-plus-SMBH impulse separately from
+the joint momentum change, verifies both phase-factor orderings, and refuses
+calibration release. It is
+`/gpfs/kjhan/FDM_TOY_RESULTS/qe_followup_q030e030_a020_v1/coupled_kick_attribution_v1/summary_v1.json`
+(SHA-256 `8073f6ed75be61cad81915a4e6cc578bd3f37de40eec4e9e2692c2f17f3f9c7c`).
+
+| Step factor | Endpoint residual norm, code | Largest interaction-only half-kick defect, code | Largest relative vector gap between either interaction ordering and endpoint |
+| --- | ---: | ---: | ---: |
+| 1 | 4.668×10⁻⁴ | 3.479×10⁻⁵ | 1.12×10⁻⁴ |
+| 1/2 | 5.151×10⁻⁴ | 1.791×10⁻⁵ | 1.93×10⁻⁴ |
+| 1/4 | 5.274×10⁻⁴ | 8.774×10⁻⁶ | 3.27×10⁻⁴ |
+| 1/8 | 5.304×10⁻⁴ | 4.321×10⁻⁶ | 5.89×10⁻⁴ |
+
+The residual-norm refinement-difference ratios are 3.94 and 4.12, consistent
+with a nonzero fixed-grid limit and a roughly second-order temporal correction
+on this short interval. The interaction kick pair accounts for nearly all of
+the measured endpoint residual in either factor order. This is an operator
+attribution, **not** a demonstrated physical origin for the residual. The
+individual summed self-kick and kinetic-drift contributions are at most
+2.76×10⁻⁷ code units and lie below the approximately 5.69×10⁻⁷
+single-evaluation spectral
+summation heuristic; their signs and nonzero magnitudes are unresolved. The
+older `maximum_half_kick_action_reaction_defect_code` fields in the four replay
+JSON files include the self-kick and should be read as *joint* half-kick
+momentum changes; the source-bound summary provides the interaction-only
+values above. Alternate phase-factor ordering changes the attribution at the
+1.5–3.3×10⁻⁸ code-unit level without changing this limited conclusion.
+Independent Opus 5.5 code review found no algebraic or replay falsifier but
+could not directly read the GPFS result files; its follow-up assessment used
+the supplied numerical values and likewise did not certify the tiny terms or
+full-orbit accuracy. A precision cross-check of stage momenta, physical n256
+spatial/offset/softening gates, and a full-orbit conservation gate remain
+required before any q/e/a calibration row can be released.
 
 ## Double-counting prohibition
 
