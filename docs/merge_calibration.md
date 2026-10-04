@@ -569,20 +569,20 @@ completed all 17 saved wave snapshots; conservation and orbit diagnostics
 were also completed. The response reports a resolved final half-density
 radius (15.24 cells) and offline energy relative error `3.76e-16`.
 The conservation diagnostic reports 37 initially resolved complete orbits
-and minimum instantaneous separation 3.01 cells. The peak saved-prefix
-Hamiltonian-error/transfer ratio over the initially resolved interval is
-`0.0125858` at `8.55e-5` Myr, above the registered `0.01` tolerance; its
+and minimum instantaneous separation 3.01 cells. The maximum over its saved
+prefixes of the Hamiltonian-error/transfer ratio in the initially resolved
+interval is `0.0125858` at `8.55e-5` Myr, above the registered `0.01` tolerance; its
 final ratio is only `2.77868e-4`. The audited peak-resolved gate therefore
 marks conservation **failed**. These are single-resolution diagnostics,
 not convergence or a rate release.
 Only the first nonzero saved prefix exceeds the tolerance (one of 1171 saved
 states); it occurs after `8.547e-5` Myr. Across that prefix, the Hamiltonian
 changes by approximately `1.88e9` in the diagnostic energy units while the
-largest component exchange is approximately `1.49e11`. Later prefixes fall
-below `0.01`, but that does not undo the failed registered peak gate. The
-single-frame concentration suggests a targeted time-step/startup study as
-the next *diagnostic*, not a retrospective exclusion of the first state or a
-relaxation of the tolerance. No numerical cause is established yet.
+largest component exchange is approximately `1.49e11`. Later saved prefixes fall
+below `0.01`, but that does not undo the failed registered gate. This
+sparse-cadence appearance motivated the time-step and per-step studies
+below. It did not justify excluding the first state or relaxing the
+tolerance; no numerical cause is established yet.
 The registered-seed startup diagnostic runs the same `n=256` initial state
 at time-step factors `1`, `0.5`, and `0.25`, stopping after two saved intervals
 at the original cadence. Its Slurm entry point is
@@ -602,28 +602,55 @@ statuses, two saved intervals, a checkpoint, and a source snapshot. Analysis
 was performed on Lageunha, single-threaded. At the identical first saved
 time `8.547e-5` Myr, the results were:
 
-| Time-step factor | Wave steps to first save | Peak energy error / exchange | First-prefix Hamiltonian change | Largest component exchange |
+| Time-step factor | Wave steps to first save | First saved-prefix error / exchange | First-prefix Hamiltonian change | Largest component exchange |
 | --- | ---: | ---: | ---: | ---: |
 | 1 | 50 | 0.0125858178 | 1.88053e9 | 1.49417e11 |
 | 0.5 | 99 | 0.0127302503 | 1.90244e9 | 1.49442e11 |
 | 0.25 | 198 | 0.0127692206 | 1.90834e9 | 1.49449e11 |
 
-The three peak ratios all exceed `0.01`. Halving the numerical time step
-twice did not remove the excess; the measured ratio instead approaches a
+The three first saved-prefix ratios all exceed `0.01`. Halving the numerical
+time step twice did not remove the excess; the measured ratio instead approaches a
 nonzero value near `0.0128`. This disfavors insufficient time-step resolution
 as its dominant cause at this fixed grid and save time, but three points do
 not identify the cause or validate a changed conservation criterion. The
 metadata confirm live wave/SMBH coupling and no additional analytic FDM
-drag. The next discriminating check is a per-wave-step Hamiltonian-component
-and exchange-budget trace through the first saved interval, followed by a
-spatial/coupling consistency test if its residual remains unexplained. No
-diagnostic run is eligible for a q/e calibration row.
+drag. A per-wave-step Hamiltonian-component trace through the first saved
+interval is reported below. No diagnostic run is eligible for a q/e
+calibration row.
 
 The SHA-256 digests of `conservation_summary.json` for factors `1`, `0.5`,
 and `0.25` are respectively
 `d8fd885d6f8d9779c19b639d4794cae492ba31bcf7051f4878f436b0714333ee`,
 `6603343bdea2aca08f40d5c8bd140d453b2f01c77ed3b210bf7f16aa8143ee1c`,
 and `90186dce5dce5243509c666d6ae68733a2ef9abe557867493dffb70c61e55b01`.
+
+Slurm job 412000 then completed an independent, guarded first-prefix trace
+on syn01 (exit 0), using the same seed, time-step factor `1`, and one energy
+save per wave step. The calculated step count was 58,500; the solver stopped
+after 50 steps, at exactly the first saved time of the preceding run.
+`scripts/submit_qe_startup_step_trace.slurm` preserved its output separately
+under `startup_step_trace_v1/n256_factor1_every_step/`. Its solver and
+conservation summaries both say `diagnostic_partial`, and it has a checkpoint
+and source snapshot. Lageunha analysis gives a maximum sampled-prefix ratio
+of `0.0318771` at step 1 (`1.7094e-6` Myr), rather than `0.0125858` from
+sampling only step 50. The final step-50 ratio matches the earlier factor-1
+run exactly. **44 of the first 50 nonzero prefixes exceed `0.01`.** The
+Hamiltonian change is `-6.17e6` at step 1 and `+1.88e9` at step 50 in the
+diagnostic energy units; the transfer scale grows from `1.94e8` to
+`1.49e11`. Thus the falling ratio is partly a growing denominator, not
+evidence of a restored energy budget. This trace establishes a cadence
+dependence of the *measured maximum* but does not identify the missing
+exchange or prove that the first-step ratio has a meaningful zero-step limit.
+Future calibration cannot label a sparsely sampled maximum as a continuous
+or per-step peak. The `0.01` limit remains unchanged; an explicitly
+preregistered per-step or bounded-cadence budget gate and a force/energy
+consistency audit are needed before considering any new production row.
+
+The trace SHA-256 digests are
+`7ff1aa86857c39a7973a2477b35c52195b332b092525090925144471d40f732a`
+for `conservation_summary.json` and
+`8ce5fe1668d782189310edfdb9fef48c7f36ac0a1de23349d9eced24da0500e3`
+for `conservation_timeseries.csv`.
 
 Only **five** of those 37 complete orbits lie in the prospectively registered
 `[0.430, 0.438] pc` bin, below the fixed eight-orbit minimum. The five orbit
