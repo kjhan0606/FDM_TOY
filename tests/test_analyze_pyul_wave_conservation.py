@@ -48,6 +48,25 @@ def test_interrupted_torch_diagnostic_without_summary_cannot_be_diagnosed(
     assert _diagnostic_status(tmp_path, allow_partial=False) == "diagnosed"
 
 
+def test_experimental_complete_remains_diagnostic_and_cannot_enter_normal_release(
+    tmp_path,
+) -> None:
+    metadata = tmp_path / "fdm_adapter_metadata.json"
+    summary = tmp_path / "torch_run_summary.json"
+    metadata.write_text(json.dumps({
+        "backend": "pytorch_cuda",
+        "diagnostic_stop_after_save": None,
+        "experimental_coupling_not_a_calibration_release": True,
+    }))
+    summary.write_text(json.dumps({"status": "diagnostic_complete"}))
+    assert _diagnostic_status(tmp_path, allow_partial=False) == "diagnostic_complete"
+    with pytest.raises(ValueError, match="requires diagnostic_partial"):
+        _diagnostic_status(tmp_path, allow_partial=True)
+    metadata.write_text(json.dumps({"backend": "pytorch_cuda"}))
+    with pytest.raises(ValueError, match="complete Torch evolution"):
+        _diagnostic_status(tmp_path, allow_partial=False)
+
+
 def _transient_history_inputs() -> tuple[np.ndarray, tuple[np.ndarray, ...]]:
     # Prefix Hamiltonian error is 0.012 after the first step. Increasing
     # physical transfer makes later ratios 0.004 and 0.0003.

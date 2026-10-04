@@ -31,6 +31,7 @@ def _first_below(time: np.ndarray, value: np.ndarray, threshold: float) -> float
 def _diagnostic_status(run: Path, *, allow_partial: bool) -> str:
     metadata = json.loads((run / "fdm_adapter_metadata.json").read_text(encoding="utf-8"))
     diagnostic_run = metadata.get("diagnostic_stop_after_save") is not None
+    experimental = metadata.get("experimental_coupling_not_a_calibration_release") is True
     torch_summary = run / "torch_run_summary.json"
     if not torch_summary.is_file():
         if allow_partial or diagnostic_run or str(metadata.get("backend", "")).startswith("pytorch"):
@@ -41,6 +42,8 @@ def _diagnostic_status(run: Path, *, allow_partial: bool) -> str:
         if not diagnostic_run or status != "diagnostic_partial":
             raise ValueError("partial diagnostic requires diagnostic_partial evolution")
         return "diagnostic_partial"
+    if experimental and status == "diagnostic_complete":
+        return "diagnostic_complete"
     if diagnostic_run or status != "complete":
         raise ValueError("complete Torch evolution is required for normal analysis")
     return "diagnosed"
