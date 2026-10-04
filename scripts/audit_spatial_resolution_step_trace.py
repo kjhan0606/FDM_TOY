@@ -121,8 +121,10 @@ def validate_fixed_physics(
         )
         or metadata.get("wave_time_step_code")
         != baseline_metadata.get("wave_time_step_code")
+        or metadata.get("solver_source_sha256")
+        != baseline_metadata.get("solver_source_sha256")
     ):
-        raise ValueError("spatial comparison changes physics or physical time step")
+        raise ValueError("spatial comparison changes physics, source or time step")
 
 
 def main() -> int:
@@ -200,16 +202,23 @@ def main() -> int:
         ) * units.length_pc
         energy = float(conservation["max_total_energy_drift_over_energy_transfer"])
         mass_error = float(conservation["max_wave_mass_relative_error"])
+        phase_path = run / "initial_compact_phase_jump.json"
+        phase = json.loads(phase_path.read_text())
+        phase_jump = float(phase["max_neighbour_phase_difference_over_pi"])
         if (
             not np.isfinite(energy) or energy < 0.0
             or not np.isfinite(mass_error) or mass_error > 1e-10
+            or phase.get("wave_time_step_code") != metadata["wave_time_step_code"]
+            or not np.isfinite(phase_jump) or not 0.0 <= phase_jump < 0.1
         ):
-            raise ValueError(f"spatial conservation summary invalid: {label}")
+            raise ValueError(f"spatial conservation/phase summary invalid: {label}")
         records[label] = {
             "metadata": metadata, "config": config, "initial": initial,
             "coupled_separation_pc": coupled_sep,
             "isolated_separation_pc": isolated_sep,
             "initial_energy_components_code": initial_energy_components(run),
+            "initial_compact_phase_jump_over_pi": phase_jump,
+            "initial_compact_phase_jump_sha256": sha256(phase_path),
             "body_state_sha256": body_hashes,
             "conservation": {
                 "max_energy_error_over_transfer": energy,
@@ -259,6 +268,16 @@ def main() -> int:
                 coupled - base["coupled_separation_pc"]
             ))),
             "initial_energy_components_code": row["initial_energy_components_code"],
+            "initial_wave_kinetic_minus_n256_code": float(
+                row["initial_energy_components_code"]["wave_kinetic"]
+                - base["initial_energy_components_code"]["wave_kinetic"]
+            ),
+            "initial_compact_phase_jump_over_pi": row[
+                "initial_compact_phase_jump_over_pi"
+            ],
+            "initial_compact_phase_jump_sha256": row[
+                "initial_compact_phase_jump_sha256"
+            ],
             "conservation": row["conservation"],
             "body_state_sha256": row["body_state_sha256"],
             "run_input_sha256": row["run_input_sha256"],
